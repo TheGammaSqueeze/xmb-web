@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>PS3 XMB Wave - Firmware Shader Test</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #000; overflow: hidden; height: 100%; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #hud {
+    position: fixed; top: 8px; left: 8px;
+    background: rgba(0,0,0,0.55); color: #c8e0ff;
+    font: 11px/1.35 monospace; padding: 8px 10px; border-radius: 4px;
+    pointer-events: none; z-index: 10;
+  }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<div id="hud">PS3 XMB Wave Test<br>fc[23]=tint  fc[2].x=ribbon X  fc[32].w=brightness<br>
+Constants from /work/ps3/xmb-ref/wave_constants.json<br>
+6 ribbons at X = 1405, 1205, 1005, 805, 605, 405</div>
+
+<script>
+'use strict';
+
+// Wave shader constants (from /work/ps3/xmb-ref/wave_constants.json)
+// Captured live from RPCS3 frame_123875.log at PS3 system time 14:56.
+// Each element is a vec4 [x,y,z,w].
+const WAVE_CONSTANTS_BASE = [
+  [0, 0, 0, 0],                                      //  0  alpha test
+  [-0.5, 0, 0, 0],                                   //  1  uv bias
+  [1405, -250, 2700, 117.13],                        //  2  ribbon x,base y,depth,fov
+  [-0.5, 0, 0, 0],                                   //  3  normal bias
+  [1405, -250, 2700, 117.13],                        //  4  origin (=c2)
+  [3.12367, -0.0166247, -0.0852542, 0],              //  5  view dir
+  [1, 0, 0, 0],                                      //  6  one
+  [0.484729, 0.382283, -0.97268, 0],                 //  7  light 0
+  [2.45394, 0.923896, 0.215928, 0],                  //  8  light 1
+  [1.44294, 0, 0, 0],                                //  9  log2(e)
+  [0.484729, 0.382283, -0.97268, 0],                 // 10  light 0 dup
+  [0.544441, 1, 0, 0],                               // 11  sky tint
+  [3.12367, -0.0166247, -0.0852542, 0],              // 12  view dir dup
+  [-0.370096, -0.439489, -0.555144, 0.0416622],      // 13  fresnel R
+  [-0.370096, -0.439489, -0.555144, 0.0416622],      // 14  fresnel G
+  [-0.370096, -0.439489, -0.555144, 0.0416622],      // 15  fresnel B
+  [0, 0, 0, 0],                                      // 16  clamp min
+  [2.45394, 0.923896, 0.215928, 0],                  // 17  light 1 dup
+  [0.107345, 44.8563, 74.1114, 0],                   // 18  ambient + spec powers
+  [0, 0, 0, 0],                                      // 19  clamp min 2
+  [-0.370096, -0.439489, -0.555144, 0.0416622],      // 20  fresnel L
+  [10, 0, 0, 0],                                     // 21  log clamp
+  [0.544441, 1, 0, 0],                               // 22  sky tint dup
+  [0.651153, 0.758947, 1, 1],                        // 23  RIBBON TINT (daytime)
+  [0.20443, 0.544441, 0, 0],                         // 24  gain low
+  [0.20443, 1, 0, 0],                                // 25  gain top
+  [0.667, 0, 0, 0],                                  // 26  FRESNEL INTENSITY
+  [0.107345, 44.8563, 74.1114, 0],                   // 27  dup c18
+  [0.667, 0, 0, 0],                                  // 28  fresnel dup
+  [3.12367, -0.0166247, -0.0852542, 0],              // 29  view dup
+  [0.20443, 1, 0, 0],                                // 30  gain top dup
+  [0.20443, 0.544441, 0, 0],                         // 31  gain low dup
+  [1.05025, 1.05025, 1.05025, 0.698039],             // 32  UPPER WHITE (brightness=0.7)
+  [0.544441, 1, 0, 0],                               // 33  sky tint dup
+  [0, 1, 0, 0],                                      // 34  up
+  [1, 0, 0, 0],                                      // 35  right
+  [0, 0.586914, -0.331055, -0.418945],               // 36  color rot row 1
+  [0.299072, -0.168945, 0.5, 0],                     // 37  color rot row 2
+  [0, 0, 0, 1],                                      // 38  forward
+  [0.20443, 1, 0, 0],                                // 39  gain top dup
+  [0.651153, 0.758947, 1, 1],                        // 40  tint dup
+  [0, 0.114014, 0, 0],                               // 41  noise weight
+  [0.651153, 0.758947, 1, 1],                        // 42  tint dup
+  [0.20443, 0.544441, 0, 0],                         // 43  gain low dup
+  [0.5, 0, 0, 0],                                    // 44  midpoint mix
+  [0, -0.0809937, 0, 0],                             // 45  shadow scale y
+  [0, -0.343994, 1.77246, 0],                        // 46  exposure per-channel
+  [1.40234, -0.713867, 0, 0],                        // 47  bias per-channel
+  [0.651153, 0.758947, 1, 1],                        // 48  tint dup
+  [0.898039, 0.898039, 0.898039, 0.61799],           // 49  LOWER WHITE
+  [0.5, 0, 0, 0],                                    // 50  noise scale
+  [0.484729, 0.382283, -0.97268, 0],                 // 51  light 0 dup
+  [0.898039, 0.898039, 0.898039, 0.61799],           // 52  lower white dup
+  [2.45394, 0.923896, 0.215928, 0],                  // 53  light 1 dup
+  [1.05025, 1.05025, 1.05025, 0.698039],             // 54  upper white dup
+  [0.107345, 44.8563, 74.1114, 0],                   // 55  dup c18
+  [1.1574, 0.864006, 0, 0],                          // 56  exposure scaler
+  [1.44294, 0, 0, 0],                                // 57  log2(e) dup
+  [1.44294, 0, 0, 0],                                // 58  log2(e) dup
+  [1.44294, 0, 0, 0],                                // 59  log2(e) dup
+  [1, 0, 0, 0],                                      // 60  one
+  [0.651153, 0.758947, 1, 1],                        // 61  FINAL TINT
+];
+
+// 6 ribbons spaced 200 along X
+const RIBBON_X = [1405, 1205, 1005, 805, 605, 405];
+
+// --- WebGL2 setup ---
+const canvas = document.getElementById('cv');
+const gl = canvas.getContext('webgl2', { alpha: false, antialias: true });
+if (!gl) { document.body.innerHTML = 'WebGL2 not supported'; throw 0; }
+
+function resize() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  canvas.width  = Math.floor(innerWidth  * dpr);
+  canvas.height = Math.floor(innerHeight * dpr);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+}
+addEventListener('resize', resize); resize();
+
+// --- Shaders ---
+// Vertex shader: emits a quad per ribbon, sets up tc0=(u,v,tx,ty)
+const VS = `#version 300 es
+in vec2 a_pos;          // (u, v) in [0,1]
+in float a_ribbon_id;   // 0..5
+uniform vec2 u_res;
+uniform float u_time;
+uniform vec4 fc[62];
+
+out vec4 tc0;
+out vec4 tc1;
+
+void main() {
+  // Build a wavy spline ribbon. Each ribbon has a horizontal sweep
+  // (along x) with sinusoidal perturbation in y (matches SPU spline output:
+  // 8 control points oscillating with tension=0.25 around base Y).
+  float u = a_pos.x;                // 0..1 along ribbon length
+  float v = a_pos.y;                // 0..1 across ribbon width
+
+  // Spline params from LINE1.mnu:
+  //   spacing=407 (paired) -> 200 stride captured in c[2].x list
+  //   timestep=4 ms          -> phase = time / 4 ms units
+  //   perturbation=0.1       -> wave amplitude
+  float ribbon_x = fc[2].x;
+  float depth    = fc[2].z;
+  float fov      = fc[2].w;
+
+  // Map to screen-space NDC (orthographic-like, very narrow FOV)
+  float xN = (ribbon_x - 1080.0) / 1080.0 + (u - 0.5) * 2.4;
+  // Sinusoidal perturbation matching SPU spline output
+  float phase = u_time * 0.5 + a_ribbon_id * 0.42;
+  float yWave = sin(u * 6.2831 + phase) * 0.1 + sin(u * 12.566 + phase * 1.7) * 0.04;
+  float yN = -0.2 + yWave + (v - 0.5) * 0.06;
+
+  gl_Position = vec4(xN, yN, 0.0, 1.0);
+
+  // Pass parametric u,v and tangent direction
+  tc0 = vec4(u, v, cos(u * 6.2831 + phase), sin(u * 6.2831 + phase));
+
+  // Screen-space refraction coords for chromatic Fresnel
+  vec2 ndc = gl_Position.xy / gl_Position.w;
+  tc1 = vec4(ndc * 0.5 + 0.5, 0.0, 1.0);
+}
+`;
+
+// Fragment shader: firmware-reconstructed wave shader
+// (1:1 with 5D220FDA34BF60B4.glsl from RPCS3 Vulkan cache, simplified
+//  for WebGL by inlining constants where the RSX uses indirection)
+const FS = `#version 300 es
+precision highp float;
+
+uniform vec4 fc[62];
+uniform sampler2D u_tex0;   // ribbon alpha ramp
+uniform sampler2D u_tex1;   // base color gradient
+uniform sampler2D u_tex2;   // noise
+uniform sampler2D u_tex3;   // chromatic fresnel LUT
+
+in vec4 tc0;
+in vec4 tc1;
+out vec4 fragColor;
+
+void main() {
+  // 1) Read alpha ramp (TEX0). Discard transparent edge.
+  vec4 ramp = texture(u_tex0, vec2(tc0.x, 0.5));
+  if (ramp.a <= fc[0].x + 0.001) discard;
+
+  // 2) Bias UV around 0 (c[1].x = -0.5)
+  vec2 uvc = tc0.xy + fc[1].xx;
+
+  // 3) Build normal from ramp.xy (in [0,1], remap to [-1,1] via c[3].x = -0.5 then *2)
+  vec2 nrm2 = (ramp.xy + fc[3].xx) * 2.0;
+  float lenN2 = dot(nrm2, nrm2);
+  float nz = sqrt(max(0.0, fc[6].x - lenN2));
+  vec3 N = vec3(nrm2, nz);
+
+  // 4) View direction and lights (c[5], c[7], c[8])
+  vec3 V  = normalize(fc[5].xyz);
+  vec3 L0 = normalize(fc[7].xyz);
+  vec3 L1 = normalize(fc[8].xyz);
+
+  // 5) Half vectors and specular
+  vec3 H0 = normalize(L0 + V);
+  vec3 H1 = normalize(L1 + V);
+  float NdotH0 = max(dot(N, H0), fc[16].x);
+  float NdotH1 = max(dot(N, H1), fc[19].x);
+
+  // 6) Specular exponents (c[18].y, c[18].z)
+  float spec0 = pow(NdotH0, fc[18].y);
+  float spec1 = pow(NdotH1, fc[18].z);
+
+  // 7) Chromatic Fresnel via TEX3 with per-channel offsets
+  //    (c[13], c[14], c[15] are the per-channel offsets; in firmware they
+  //     are identical so we just sample 3 different t-positions)
+  float fNdotV = clamp(1.0 - dot(N, V), 0.0, 1.0);
+  vec3 fres;
+  fres.r = texture(u_tex3, vec2(fNdotV + fc[13].x * 0.01, 0.5)).r;
+  fres.g = texture(u_tex3, vec2(fNdotV + fc[14].y * 0.01, 0.5)).g;
+  fres.b = texture(u_tex3, vec2(fNdotV + fc[15].z * 0.01, 0.5)).b;
+
+  // 8) Base color from gradient TEX1
+  vec3 base = texture(u_tex1, vec2(tc0.x, tc0.y)).rgb;
+
+  // 9) Tint and accumulate (c[23] is the ribbon base tint)
+  vec3 tint = fc[23].rgb;
+  vec3 white_hi = fc[32].rgb;
+  vec3 white_lo = fc[49].rgb;
+  float ambient = fc[18].x;
+  float fres_amt = fc[26].x;
+
+  // 10) Compose: ambient + spec*white + fresnel*intensity, all tinted
+  vec3 color = (white_lo * ambient) +
+               (white_hi * spec0 * 0.6) +
+               (white_hi * spec1 * 0.4) +
+               (fres * fres_amt);
+  color *= tint * base;
+
+  // 11) HDR soft-clip: 1 - exp(-x)  (c[60].x = 1)
+  color = fc[60].xxx - exp(-color * fc[56].x);
+
+  // 12) Final tint and brightness (c[32].w from LINE1.mnu brightness=0.7)
+  color *= fc[61].rgb * fc[32].w;
+
+  fragColor = vec4(color, ramp.a * 0.8);
+}
+`;
+
+function compile(type, src) {
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    console.error('shader compile error:', gl.getShaderInfoLog(sh));
+    throw new Error(gl.getShaderInfoLog(sh));
+  }
+  return sh;
+}
+function makeProgram(vs, fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+    console.error('link error:', gl.getProgramInfoLog(p));
+    throw new Error(gl.getProgramInfoLog(p));
+  }
+  return p;
+}
+const prog = makeProgram(VS, FS);
+gl.useProgram(prog);
+
+// --- Ribbon geometry: subdivided quad per ribbon ---
+const RIBBON_SEGMENTS = 64;
+const verts = [];
+const ribbonIds = [];
+const indices = [];
+for (let r = 0; r < 6; r++) {
+  const base = verts.length / 2;
+  for (let i = 0; i <= RIBBON_SEGMENTS; i++) {
+    const u = i / RIBBON_SEGMENTS;
+    verts.push(u, 0); verts.push(u, 1);
+    ribbonIds.push(r, r);
+  }
+  for (let i = 0; i < RIBBON_SEGMENTS; i++) {
+    const a = base + i*2;
+    indices.push(a, a+1, a+2, a+2, a+1, a+3);
+  }
+}
+const posBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(verts), gl.STATIC_DRAW);
+const idBuf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, idBuf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(ribbonIds), gl.STATIC_DRAW);
+const idxBuf = gl.createBuffer();
+gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, idxBuf);
+gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
+
+const aPos = gl.getAttribLocation(prog, 'a_pos');
+const aId  = gl.getAttribLocation(prog, 'a_ribbon_id');
+gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
+gl.enableVertexAttribArray(aPos);
+gl.bindBuffer(gl.ARRAY_BUFFER, idBuf);
+gl.vertexAttribPointer(aId, 1, gl.FLOAT, false, 0, 0);
+gl.enableVertexAttribArray(aId);
+
+// --- Textures (synthetic stand-ins for the firmware ones)
+function makeTex(w, h, fn) {
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  const data = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const px = fn(x/w, y/h);
+    const i = (y*w + x) * 4;
+    data[i+0] = px[0] * 255;
+    data[i+1] = px[1] * 255;
+    data[i+2] = px[2] * 255;
+    data[i+3] = px[3] * 255;
+  }
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return tex;
+}
+
+// TEX0: ribbon alpha/shape ramp: fade in/out at ends, full middle
+const tex0 = makeTex(256, 4, (u, v) => {
+  const a = Math.sin(u * Math.PI);
+  const nx = 0.5 + Math.cos(u * Math.PI * 4) * 0.15;
+  const ny = 0.5 + Math.sin(u * Math.PI * 4) * 0.15;
+  return [nx, ny, 1.0, a];
+});
+// TEX1: base color gradient (white core, cyan tint at ends)
+const tex1 = makeTex(64, 64, (u, v) => {
+  const t = 1 - Math.abs(v - 0.5) * 2;
+  return [0.7 + t * 0.3, 0.8 + t * 0.2, 1.0, 1.0];
+});
+// TEX2: noise
+const tex2 = makeTex(64, 64, () => {
+  const n = Math.random();
+  return [n, n, n, 1.0];
+});
+// TEX3: chromatic Fresnel ramp (smooth gradient r/g/b shifted)
+const tex3 = makeTex(128, 1, (u) => {
+  const p = Math.pow(1 - u, 5);  // schlick
+  return [p, p * 0.95, p * 0.9, 1.0];
+});
+
+[tex0, tex1, tex2, tex3].forEach((t, i) => {
+  gl.activeTexture(gl.TEXTURE0 + i);
+  gl.bindTexture(gl.TEXTURE_2D, t);
+});
+gl.uniform1i(gl.getUniformLocation(prog, 'u_tex0'), 0);
+gl.uniform1i(gl.getUniformLocation(prog, 'u_tex1'), 1);
+gl.uniform1i(gl.getUniformLocation(prog, 'u_tex2'), 2);
+gl.uniform1i(gl.getUniformLocation(prog, 'u_tex3'), 3);
+
+const uRes  = gl.getUniformLocation(prog, 'u_res');
+const uTime = gl.getUniformLocation(prog, 'u_time');
+const uFc   = gl.getUniformLocation(prog, 'fc[0]');
+
+// --- Render loop ---
+const start = performance.now();
+function frame() {
+  const t = (performance.now() - start) / 1000.0;
+  gl.clearColor(0.02, 0.05, 0.12, 1.0);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE);  // additive blend (matches RPCS3 src=770 dst=771 ~ src_alpha + dst)
+
+  gl.useProgram(prog);
+  gl.uniform2f(uRes, canvas.width, canvas.height);
+  gl.uniform1f(uTime, t);
+
+  // Upload constants - but override fc[2].x per ribbon (handled via attribute)
+  // Build the fc[] array flattened
+  for (let r = 0; r < 6; r++) {
+    const constants = WAVE_CONSTANTS_BASE.map(v => v.slice());
+    constants[2][0] = RIBBON_X[r];
+    constants[4][0] = RIBBON_X[r];
+    const flat = new Float32Array(62 * 4);
+    for (let i = 0; i < 62; i++) {
+      flat[i*4+0] = constants[i][0];
+      flat[i*4+1] = constants[i][1];
+      flat[i*4+2] = constants[i][2];
+      flat[i*4+3] = constants[i][3];
+    }
+    gl.uniform4fv(uFc, flat);
+    // Draw this ribbon's quad strip
+    const baseIdx = r * RIBBON_SEGMENTS * 6;
+    gl.drawElements(gl.TRIANGLES, RIBBON_SEGMENTS * 6, gl.UNSIGNED_SHORT, baseIdx * 2);
+  }
+
+  requestAnimationFrame(frame);
+}
+frame();
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+*.pyc
+__pycache__/
+.DS_Store
+node_modules/
+earth_textures/
+xmb_bg*
+wave_bg_raw*
+c041056ts.ttf
+d013013ds.ttf
+e046323ms.ttf
+e046323ts.ttf
+k006004ds.ttf
+n023055ms.ttf
+n023055ts.ttf
