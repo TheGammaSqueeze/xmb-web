@@ -1,0 +1,23 @@
+{
+  "magic": "WSQ1",
+  "frameCount": 53,
+  "keyframeCount": 53,
+  "gridN": 128,
+  "vertStride": 4,
+  "vertStrideDesc": "4 float16 per vertex = clip-space gl_Position xyzw (ATTR0 passthrough)",
+  "format": "float16_LE",
+  "headerBytes": 20,
+  "headerLayout": "magic[4]=WSQ1, u32 frameCount, u32 gridN=128, u32 vertStride=4, u32 format(1=f16)",
+  "frameBytes": 131072,
+  "vertOrder": "row-major by grid index (same ordering as wave_geo.bin); positions only",
+  "normalsUVsource": "static from wave_geo.bin (cols 4:7 normal, 7:9 uv); lighting unchanged across frames",
+  "sourceFrameCount": 157,
+  "keyframeStride": 3,
+  "sourceFps": 60,
+  "playbackFps": 60,
+  "playback": "interpolate linearly between consecutive keyframes; each keyframe spans 3 source frames (50ms at 60fps). Total forward span ~2.62s.",
+  "loop": "PING-PONG: play keyframes 0..N-1 forward then N-1..0 reverse. Source is a continuous organic swing (does not return to frame0), so ping-pong gives a seamless ~5.23s loop. Velocity is near-continuous; optional ease at turnaround.",
+  "interpVerificationMaxErr": 0.097,
+  "f16QuantMaxErr": 0.0039,
+  "coordExtent": 26.98
+}

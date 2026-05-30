@@ -4531,8 +4531,20 @@ void main(){
   gl_FragColor = vec4(uTint * a * uFade, 1.0);
 }`;
 let waveCapProgram = null;
-let waveCapVBO = null, waveCapIBO = null, waveCapIndexCount = 0, waveCapReady = false;
+let waveCapClipVBO = null, waveCapAttrVBO = null, waveCapIBO = null, waveCapIndexCount = 0, waveCapReady = false;
 const WAVE_GRID_N = 128;
+const WAVE_NV = WAVE_GRID_N * WAVE_GRID_N; // 16384
+// Animation sequence (wave_seq.bin): keyframes of the SPU-baked clip positions,
+// captured from RPCS3 (157 source frames -> 53 float16 keyframes, ping-pong loop).
+let waveSeqFrames = null, waveSeqCount = 0, waveSeqReady = false;
+let waveCapScratch = null, waveSeqStartT = 0;
+// half-float (f16) -> float32
+function f16tof32(h) {
+  const s = (h & 0x8000) >> 15, e = (h & 0x7c00) >> 10, f = h & 0x03ff;
+  if (e === 0) return (s ? -1 : 1) * Math.pow(2, -14) * (f / 1024);
+  if (e === 31) return f ? NaN : (s ? -1 : 1) * Infinity;
+  return (s ? -1 : 1) * Math.pow(2, e - 15) * (1 + f / 1024);
+}
 // Build the 128x128 zig-zag triangle-strip index buffer (firmware topology:
 // strips run down columns 0,128,1,129,... ) with degenerate joins for WebGL1.
 function buildWaveCapIndices() {
@@ -4544,35 +4556,80 @@ function buildWaveCapIndices() {
   return idx;
 }
 function loadWaveCapGeo() {
+  // Static geometry: normals + uv (lighting, unchanged per frame) + the index
+  // buffer + an initial clip buffer (frame 0 from wave_geo.bin).
   fetch('wave_geo.bin?cb=' + Date.now()).then(r => r.arrayBuffer()).then(buf => {
-    const data = new Float32Array(buf); // 16384 * 9
-    waveCapVBO = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, waveCapVBO);
-    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    const data = new Float32Array(buf); // 16384 * 9 (clip4, normal3, uv2)
+    const attr = new Float32Array(WAVE_NV * 5);   // normal3 + uv2
+    const clip0 = new Float32Array(WAVE_NV * 4);  // clip4 (initial)
+    for (let i = 0; i < WAVE_NV; i++) {
+      const b = i * 9;
+      clip0[i*4] = data[b]; clip0[i*4+1] = data[b+1]; clip0[i*4+2] = data[b+2]; clip0[i*4+3] = data[b+3];
+      attr[i*5] = data[b+4]; attr[i*5+1] = data[b+5]; attr[i*5+2] = data[b+6]; attr[i*5+3] = data[b+7]; attr[i*5+4] = data[b+8];
+    }
+    waveCapAttrVBO = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, waveCapAttrVBO); gl.bufferData(gl.ARRAY_BUFFER, attr, gl.STATIC_DRAW);
+    waveCapClipVBO = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, waveCapClipVBO); gl.bufferData(gl.ARRAY_BUFFER, clip0, gl.DYNAMIC_DRAW);
     const idx = buildWaveCapIndices();
     waveCapIBO = gl.createBuffer();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waveCapIBO);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(idx), gl.STATIC_DRAW);
     waveCapIndexCount = idx.length;
+    waveCapScratch = new Float32Array(WAVE_NV * 4);
     waveCapReady = true;
-    console.log('wave_geo.bin loaded:', data.length / 9, 'verts,', idx.length, 'indices');
+    console.log('wave_geo.bin loaded:', WAVE_NV, 'verts,', idx.length, 'indices');
   }).catch(e => console.warn('wave_geo.bin load failed', e));
+  // Animation keyframe sequence (wave_seq.bin): WSQ1 header (20B) + frameCount x
+  // WAVE_NV x 4 float16 clip positions. Decoded once into Float32 keyframes.
+  fetch('wave_seq.bin?cb=' + Date.now()).then(r => r.arrayBuffer()).then(buf => {
+    const dv = new DataView(buf);
+    const magic = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
+    if (magic !== 'WSQ1') { console.warn('wave_seq bad magic', magic); return; }
+    const frameCount = dv.getUint32(4, true), gridN = dv.getUint32(8, true), vstride = dv.getUint32(12, true);
+    const perFrame = gridN * gridN * vstride;
+    const u16 = new Uint16Array(buf, 20);
+    waveSeqFrames = new Array(frameCount);
+    for (let f = 0; f < frameCount; f++) {
+      const fr = new Float32Array(perFrame), off = f * perFrame;
+      for (let i = 0; i < perFrame; i++) fr[i] = f16tof32(u16[off + i]);
+      waveSeqFrames[f] = fr;
+    }
+    waveSeqCount = frameCount; waveSeqReady = true;
+    console.log('wave_seq.bin loaded:', frameCount, 'keyframes');
+  }).catch(e => console.warn('wave_seq.bin load failed', e));
 }
 // Draw the captured firmware wave additively into the currently-bound FBO.
+// Animated by interpolating the captured ATTR0 keyframe sequence (ping-pong).
 function drawCapturedWave(fade) {
   if (!waveCapReady || !waveCapProgram) return;
+  // ANIMATION: interpolate the keyframe sequence (ping-pong loop) and upload the
+  // current clip positions. Keyframes play at sourceFps/keyframeStride = 20/s.
+  if (waveSeqReady && waveSeqCount > 1 && waveCapScratch) {
+    const kfps = (window._waveSeqFps != null) ? window._waveSeqFps : 20.0;
+    if (!waveSeqStartT) waveSeqStartT = performance.now();
+    const tt = ((performance.now() - waveSeqStartT) / 1000) * kfps;
+    const period = 2 * (waveSeqCount - 1);
+    let p = tt % period; if (p < 0) p += period;
+    const phase = (p <= waveSeqCount - 1) ? p : (period - p); // triangle 0..count-1
+    const i0 = Math.floor(phase), i1 = Math.min(i0 + 1, waveSeqCount - 1), fr = phase - i0;
+    const A = waveSeqFrames[i0], B = waveSeqFrames[i1], S = waveCapScratch, n = S.length;
+    for (let i = 0; i < n; i++) S[i] = A[i] + (B[i] - A[i]) * fr;
+    gl.bindBuffer(gl.ARRAY_BUFFER, waveCapClipVBO);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, S);
+  }
   gl.useProgram(waveCapProgram);
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.ONE, gl.ONE);   // premultiplied additive
   gl.disable(gl.DEPTH_TEST);
-  gl.bindBuffer(gl.ARRAY_BUFFER, waveCapVBO);
-  const stride = 9 * 4;
   const aClip = gl.getAttribLocation(waveCapProgram, 'aClip');
   const aNormal = gl.getAttribLocation(waveCapProgram, 'aNormal');
   const aUV = gl.getAttribLocation(waveCapProgram, 'aUV');
-  gl.enableVertexAttribArray(aClip); gl.vertexAttribPointer(aClip, 4, gl.FLOAT, false, stride, 0);
-  if (aNormal >= 0) { gl.enableVertexAttribArray(aNormal); gl.vertexAttribPointer(aNormal, 3, gl.FLOAT, false, stride, 16); }
-  if (aUV >= 0) { gl.enableVertexAttribArray(aUV); gl.vertexAttribPointer(aUV, 2, gl.FLOAT, false, stride, 28); }
+  gl.bindBuffer(gl.ARRAY_BUFFER, waveCapClipVBO);
+  gl.enableVertexAttribArray(aClip); gl.vertexAttribPointer(aClip, 4, gl.FLOAT, false, 16, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, waveCapAttrVBO);
+  if (aNormal >= 0) { gl.enableVertexAttribArray(aNormal); gl.vertexAttribPointer(aNormal, 3, gl.FLOAT, false, 20, 0); }
+  if (aUV >= 0) { gl.enableVertexAttribArray(aUV); gl.vertexAttribPointer(aUV, 2, gl.FLOAT, false, 20, 12); }
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uYFlip'), (window._waveYFlip != null) ? window._waveYFlip : 1.0);
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uScaleY'), (window._waveScaleY != null) ? window._waveScaleY : 1.0);
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uFade'), fade);
@@ -5609,11 +5666,13 @@ function drawBGWebGL(dt) {
   // (emerges early, stays present); steady rides the normal waveAlpha fade.
   // When the firmware-exact captured wave (WAVE_CAP) is active, silence the
   // silkWave approximation baked into FS_BG so we don't double-draw.
-  // WAVE_CAP = firmware-exact captured-geometry wave. Currently OPT-IN
-  // (window.WAVE_CAP === true) while it is a single static captured frame; the
-  // animated silkWave stays the default live wave until the captured wave is
-  // driven by a multi-frame ATTR0 sequence (then this becomes the default).
-  var _waveCapOn = (window.WAVE_CAP === true) && waveCapReady;
+  // WAVE_CAP = firmware-EXACT captured-geometry wave (128x128 SPU cloth, animated
+  // by the captured ATTR0 keyframe sequence). Default ON for the settled XMB.
+  // During the BOOT intro (bootWaveActive) the wave has its own coldboot-streak /
+  // swell states that the captured settled sequence does not cover, so silkWave
+  // (with the boot uniforms) still drives the boot wave; the captured firmware
+  // wave takes over once settled. Set window.WAVE_CAP=false to force silkWave.
+  var _waveCapOn = (window.WAVE_CAP !== false) && waveCapReady && !bootWaveActive;
   var _silkFade = bootWaveActive ? bootWaveBrightness : waveAlpha;
   gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uWaveFade'),
                _waveCapOn ? 0.0 : _silkFade);
