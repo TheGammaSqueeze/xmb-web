@@ -313,6 +313,71 @@ const THEME_OPTIONS = [
 // color applies this plum hue via HSV hue-REPLACEMENT (NOT the month texture's
 // own hue). This is why May renders PURPLE even though May's texture is green.
 const PLUM_TINT = [0.82, 0.62, 0.90];
+
+// =====================================================
+// PER-MONTH "ORIGINAL" GRADIENT (EMPIRICAL GROUND TRUTH)
+// =====================================================
+// The real PS3 "Original" theme sweeps the background HUE by calendar month
+// (NOT a fixed plum). These values are the EMPIRICAL RENDERED per-month colors
+// measured from RPCS3 (lower-left sampling region) and tabulated in
+// /work/ps3/xmb-ref/boot/per_month_gradient.md. The raw month_bg_*.png textures
+// have DIFFERENT hues -- the back_colours shader processes them -- so we drive
+// the gradient directly from these measured hues to match the captures.
+//
+// Each entry: { h: hue deg, s: sat 0..1, v: day value 0..1, nv: night value 0..1 }
+// Day vs night changes BRIGHTNESS (value) only; hue/sat preserved. Night value
+// for months without a direct night capture is interpolated from the measured
+// day->night value ratio (~0.33 mean of Jan/Jun/Sep/Dec) applied to the day V.
+// Months 1..12 (index = month-1).
+const MONTH_GRADIENT = [
+  { h:  51.9, s: 0.293, v: 0.645, nv: 0.252 }, // Jan  gold/olive   (night measured)
+  { h:  68.0, s: 0.524, v: 0.572, nv: 0.200 }, // Feb  green
+  { h:  41.5, s: 0.286, v: 0.569, nv: 0.199 }, // Mar  tan
+  { h:  57.8, s: 0.194, v: 0.369, nv: 0.129 }, // Apr  olive-gray
+  { h: 164.3, s: 0.079, v: 0.293, nv: 0.148 }, // May  teal          (night measured, hue preserved)
+  { h: 195.9, s: 0.372, v: 0.446, nv: 0.169 }, // Jun  blue          (night measured)
+  { h: 194.7, s: 0.699, v: 0.309, nv: 0.108 }, // Jul  deep cyan-blue
+  { h: 272.0, s: 0.474, v: 0.420, nv: 0.147 }, // Aug  violet/indigo
+  { h:  13.1, s: 0.321, v: 0.633, nv: 0.210 }, // Sep  salmon        (night measured)
+  { h:  40.3, s: 0.610, v: 0.479, nv: 0.168 }, // Oct  amber
+  { h:  15.3, s: 0.536, v: 0.499, nv: 0.175 }, // Nov  rust
+  { h:   7.1, s: 0.247, v: 0.659, nv: 0.153 }  // Dec  warm pink-red  (night measured)
+];
+
+// HSV (h in deg, s/v in 0..1) -> linear-ish RGB 0..1.
+function hsvToRgb(h, s, v) {
+  h = ((h % 360) + 360) % 360;
+  var c = v * s;
+  var x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  var m = v - c;
+  var r = 0, g = 0, b = 0;
+  if (h < 60)      { r = c; g = x; b = 0; }
+  else if (h <120) { r = x; g = c; b = 0; }
+  else if (h <180) { r = 0; g = c; b = x; }
+  else if (h <240) { r = 0; g = x; b = c; }
+  else if (h <300) { r = x; g = 0; b = c; }
+  else             { r = c; g = 0; b = x; }
+  return [r + m, g + m, b + m];
+}
+
+// Returns the per-month "Original" base RGB for the given month (0..11) and a
+// night blend factor (0 = full day, 1 = full night). Hue/sat are constant;
+// value blends day->night. This feeds uMonthBaseColor; the shader then applies
+// the vertical vignette/structure on top. The value is normalized so the
+// shader's downstream tonemap lands near the empirical measured V.
+function monthBaseColor(month, nightBlend) {
+  var e = MONTH_GRADIENT[((month % 12) + 12) % 12];
+  var v = e.v * (1 - nightBlend) + e.nv * nightBlend;
+  // Compensate for the downstream Reinhard tonemap (c/(1+0.30c)) + 1.05 exposure
+  // applied to the steady gradient so the on-screen value matches the empirical
+  // measured V. Solve approx: pre = v / (1.05 - 0.30*v).
+  var pre = v / Math.max(0.2, (1.05 - 0.30 * v));
+  // The downstream vis envelope + structure vignette darken the sampled region
+  // ~1.3x below the empirical measured V; pre-lift to land on the measured value.
+  pre *= 1.32;
+  return hsvToRgb(e.h, e.s, pre);
+}
+
 const COLOR_OPTIONS = [
   {key:'original',     name:'Original',      tint:[0.82, 0.62, 0.90], swatch:'#B8BFCA'},  // PLUM hue (firmware default), shows label, no swatch when selected
   {key:'monochrome',   name:'Monochrome',    tint:[0.850, 0.850, 0.850], swatch:'#B8BFCA'},
@@ -2152,6 +2217,13 @@ uniform float uNightDayBlend;
 uniform float uTime;
 uniform vec2 uPerturb;
 uniform sampler2D uWaveProfile;
+// Per-month "Original" gradient base color (EMPIRICAL). uMonthBaseColor holds
+// the measured per-month hue/sat at the day/night-blended value (computed in JS
+// from MONTH_GRADIENT). When uUseMonthBase >= 0.5 the steady gradient is driven
+// from this color instead of the raw month_bg textures, so May reads teal, Aug
+// violet, Jan gold, etc., matching the empirical captures.
+uniform vec3 uMonthBaseColor;
+uniform float uUseMonthBase;
 // Theme system uniforms. uBgMode: 0=Original (monthly gradient),
 // 1=Theme (same as Original for this build), 2=Classic (solid PS3 blue).
 // uColorTint: c[23] tint vec3 - modulates monthly gradient toward the user's
@@ -2388,6 +2460,16 @@ void main() {
   vec3 gradColor = mix(dayColor, nightColor, uNightDayBlend);
   gradColor = mix(gradColor, gradColor * uNightBrightness, uNightDayBlend);
 
+  // EMPIRICAL per-month "Original" gradient. Override the raw-texture gradColor
+  // with the measured per-month hue/sat/value (day<->night already folded into
+  // uMonthBaseColor in JS). The vertical vignette structure (vis, corner
+  // vignette) is applied below for ALL paths; the texture-tuned value-shaping
+  // block is skipped for this path since the value is already correct.
+  bool useMonthBase = (uUseMonthBase >= 0.5);
+  if (useMonthBase) {
+    gradColor = uMonthBaseColor;
+  }
+
   float screenY = 1.0 - vUV.y;
   // Vertical brightness envelope. Flatter than before so the TOP of the screen
   // is not crushed dark: real.mp4 steady (t>=14s) measures top luma ~97,
@@ -2432,7 +2514,7 @@ void main() {
   // by the theme tint via HSV below. Since the hue is now ALWAYS theme-driven
   // (default = plum), this luminance-shaping block runs unconditionally -- it sets
   // up the V (luminance) that applyHSVRotation preserves while swapping the hue.
-  if (true) {
+  if (!useMonthBase) {
     // HDR enrichment: undo the downstream glare/tonemap wash so the per-month
     // hue reads RICH and SATURATED (May purple vivid, never washed grey),
     // matching the real PS3's HDR look (real steady gradient HSV S~0.47 vs the
@@ -2478,6 +2560,33 @@ void main() {
       // right corner slightly less dark than left (topR brighter than topL)
       float side = mix(1.0, 0.88, smoothstep(0.0, 0.5, dx));
       gradColor *= 1.0 - 0.45 * corner * side;
+    }
+  }
+
+  // MONTH-BASE structure: the empirical per-month color already carries the
+  // correct hue/sat/value, so we apply only the vignette STRUCTURE (corners
+  // ~1.0 top, ~0.847/0.925 bottom) without the texture-tuned value lifts. A
+  // gentle vertical envelope brightens the lower screen slightly and darkens
+  // the top corners, matching the measured corner ratios. Day/night value is
+  // already folded into uMonthBaseColor; night thus collapses brightness with
+  // hue preserved (top reads near-black at night because the base value is low).
+  if (useMonthBase) {
+    // Vertical envelope: top a touch brighter at center, gentle lower glow.
+    float vEnvM = mix(1.0, 1.05, screenY);
+    gradColor *= vEnvM;
+    // Bottom-corner darkening (BL 0.847, BR 0.925 relative to bottom-center).
+    {
+      float dxm = (vUV.x - 0.5);
+      float botEdge = clamp(screenY * (abs(dxm) * 2.0), 0.0, 1.0);
+      float sideM = mix(0.847, 0.925, smoothstep(-0.5, 0.5, dxm)); // left darker
+      gradColor *= mix(1.0, sideM, botEdge);
+    }
+    // Top-corner darkening toward ~1.0 (subtle), keeps the top from blooming.
+    {
+      float dxm = (vUV.x - 0.5);
+      float dyTopM = (1.0 - screenY);
+      float cornerM = clamp(pow(dyTopM, 1.4) * (abs(dxm) * 2.0), 0.0, 1.0);
+      gradColor *= 1.0 - 0.20 * cornerM;
     }
   }
 
@@ -2614,7 +2723,11 @@ void main() {
   // vec3 finalColor = waveColor * silk; // TEMP: black wallpaper
   // The monthly gradient is the firmware-correct backdrop the wave is drawn on top of.
   // Multiply by vis to keep top of screen darker, leaving room for the wave to read.
-  vec3 finalColor = gradColor * vis;
+  // For the month-base path the empirical value is already carried in gradColor
+  // (and shaped by the month-base structure block above), so apply only a gentle
+  // vis to leave the wave room without re-darkening the calibrated value.
+  float visEff = useMonthBase ? mix(0.92, 1.0, vis) : vis;
+  vec3 finalColor = gradColor * visEff;
 
   // Color theme tint: drive the gradient through the firmware HSV
   // rotation block (ported from back_colours0 538-instruction shader).
@@ -2631,7 +2744,7 @@ void main() {
   // the mix below ignores it at strength 0.
   if (uBgMode != 2) {
     vec3 rotated = applyHSVRotation(gradColor, uColorTint);
-    finalColor = mix(gradColor, rotated, uHSVStrength) * vis;
+    finalColor = mix(gradColor, rotated, uHSVStrength) * visEff;
   }
 
   // Classic background mode: solid PS3 blue gradient (firmware vaddr 0x271630
@@ -5157,30 +5270,33 @@ function drawBGWebGL(dt) {
   gl.uniform1i(gl.getUniformLocation(bgShaderProgram, 'uBgMode'), bgModeNum);
   gl.uniform3fv(gl.getUniformLocation(bgShaderProgram, 'uClassicBgColor'),
                 new Float32Array(CLASSIC_BG_COLOR));
-  // FIRMWARE HUE MODEL (gradient_firmware_logic.md S1c/S4):
-  //  - The gradient HUE comes from the THEME color via HSV hue-replacement, NOT
-  //    from the month texture. So EVERY color (including the default "Original" =
-  //    PLUM) runs the HSV rotation at full strength. The month texture drives
-  //    VALUE/STRUCTURE + day/night only.
-  //  - DURING BOOT the manual color is NOT applied: the boot is ALWAYS the default
-  //    PLUM gradient. The manual color only takes effect once the XMB settles
-  //    (bootLitScene -> 0). We crossfade the tint plum -> manual by bootLitScene
-  //    so the manual hue appears exactly at the settle, never during logo/warning.
+
+  // EMPIRICAL PER-MONTH "ORIGINAL" GRADIENT MODEL (per_month_gradient.md):
+  //  - The DEFAULT "Original" theme hue SWEEPS BY MONTH (NOT a fixed plum):
+  //    May teal, Aug violet, Jan gold, etc. We drive the gradient base color
+  //    directly from the measured per-month HSV table (MONTH_GRADIENT), with the
+  //    value blended day<->night by the live clock (hue preserved, night dark).
+  //  - uUseMonthBase enables this for all non-classic backgrounds.
+  var _mbMonth = (window._monthOverride != null) ? window._monthOverride : nowDate.getMonth();
+  var _monthBase = monthBaseColor(_mbMonth, nightDayBlend);
+  gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uUseMonthBase'),
+               bgModeNum === 2 ? 0.0 : 1.0);
+  gl.uniform3fv(gl.getUniformLocation(bgShaderProgram, 'uMonthBaseColor'),
+                new Float32Array(_monthBase));
+
+  // MANUAL COLOR theme: when the user picks a Color other than "Original", the
+  // chosen hue REPLACES the per-month hue (same value/structure) on the SETTLED
+  // XMB only. The HSV rotation strength is 0 for Original (per-month sweep shows
+  // through) and ramps to 1 for a manual color -- but gated by manualColorReveal
+  // so it is 0 through the ENTIRE boot+warning (boot = per-month Original) and
+  // only reaches full strength once the XMB settles. So boot shows the per-month
+  // hue; the manual color appears only at the settled XMB.
   var _manualTint = currentTintRGB();
-  // _rev = 0 through the ENTIRE boot+warning (force PLUM), ramping to 1 only at the
-  // XMB settle hand-off (after the warning). So manual color appears only on the
-  // settled XMB, never during logo/warning.
-  var _rev = (typeof manualColorReveal === 'number') ? Math.min(Math.max(manualColorReveal, 0.0), 1.0) : 1.0;
-  var _gradTint = [
-    PLUM_TINT[0] * (1.0 - _rev) + _manualTint[0] * _rev,
-    PLUM_TINT[1] * (1.0 - _rev) + _manualTint[1] * _rev,
-    PLUM_TINT[2] * (1.0 - _rev) + _manualTint[2] * _rev
-  ];
   gl.uniform3fv(gl.getUniformLocation(bgShaderProgram, 'uColorTint'),
-                new Float32Array(_gradTint));
-  // Hue replacement is ALWAYS on now (default Original = plum). The Classic solid
-  // background path ignores this; everything else takes the theme hue.
-  gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uHSVStrength'), 1.0);
+                new Float32Array(_manualTint));
+  var _rev = (typeof manualColorReveal === 'number') ? Math.min(Math.max(manualColorReveal, 0.0), 1.0) : 1.0;
+  var _isManualColor = (COLOR_OPTIONS[colorIdx].key !== 'original') ? 1.0 : 0.0;
+  gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uHSVStrength'), _isManualColor * _rev);
   // Boot intro gradient ramp (coldboot1->coldboot2). bootGradientBrightness
   // is 1.0 once the intro is done; during boot it ramps the gradient up from
   // near-black over the fade window (boot_spec.md section 1).
