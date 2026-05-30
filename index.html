@@ -6110,7 +6110,16 @@ function drawXMB(now) {
       // Apply per-icon scale (PSN/PS Store icons have higher fill ratio and
       // need a smaller draw size to visually match the rest of the set).
       const csz = sz * iconScale(DATA[i].icon);
+      // Drop shadow on the category icons (real XMB: the top-bar icons carry a
+      // soft dark shadow for legibility over the wave, like the clock).
+      ctx.shadowColor = 'rgba(0,0,0,0.40)';
+      ctx.shadowBlur = 4;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 2;
       drawIconAt(ctx, ic, DATA[i].icon, x - csz / 2, y - csz / 2 + revealRise, csz, csz);
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetY = 0;
     }
 
     // Category label - only on active category when NOT in submenu.
@@ -6566,6 +6575,27 @@ function drawClock(fadeMul) {
   const fh = V.CLOCK_FRAME_H;
   const fr = V.CLOCK_FRAME_CORNER;
   const xRight = fx + fw + 4;  // extend past screen edge so the frame is open on the right
+
+  // ---- Background dim behind the clock frame ----
+  // The real XMB darkens the area INSIDE the clock box so the white time/border
+  // reads cleanly over bright backgrounds. It is most visible on the blue PSN
+  // Sign Up screen (psn_signup_landing.png), where a faint translucent-dark
+  // rounded panel sits behind the clock. Fill the open-right rounded rect with a
+  // subtle dark wash, shadow disabled so the panel itself casts none.
+  ctx.save();
+  ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+  ctx.globalAlpha = 0.18 * fadeMul;
+  ctx.fillStyle = 'rgb(0,0,0)';
+  ctx.beginPath();
+  ctx.moveTo(xRight, fy);
+  ctx.lineTo(fx + fr, fy);
+  ctx.quadraticCurveTo(fx, fy, fx, fy + fr);
+  ctx.lineTo(fx, fy + fh - fr);
+  ctx.quadraticCurveTo(fx, fy + fh, fx + fr, fy + fh);
+  ctx.lineTo(xRight, fy + fh);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
 
   // Inner soft glow (extends from the U-line inward into the frame interior).
   // Drawn as a clipped, slightly inset stroke pass with reduced alpha. The clip
@@ -9286,6 +9316,12 @@ function drawBootIntro(now) {
     // text). The text stays SHARP on top of the blurred background.
     c.globalAlpha = 1.0;
     c.fillStyle = '#FFFFFF';
+    // Drop shadow on the warning text (matches the real epilepsy screen: the
+    // white text carries a soft dark shadow for legibility over the dim wave).
+    c.shadowColor = 'rgba(0,0,0,0.55)';
+    c.shadowBlur = 4 * sy;
+    c.shadowOffsetX = 0;
+    c.shadowOffsetY = 2 * sy;
     c.textAlign = 'left';
     c.textBaseline = 'alphabetic';
     // SCE-PS3 Rodin is the firmware UI font (already @font-face loaded). Fall
