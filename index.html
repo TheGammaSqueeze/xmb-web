@@ -6959,18 +6959,17 @@ function drawDialog(ctx2) {
     // The dialog layer only lays the darkening overlay on top of the (now
     // blurred) live backdrop.
 
-    // Translucent dim overlay (NOT opaque). Heaviest near the top so the
-    // header reads dark, lighter over the body so the blurred purple gradient
-    // shows through (matching the measured real body ~(56,44,63)..(81,56,88)).
-    const divY = 199 / 1080 * ch; // header divider in device px
-    const g = ctx2.createLinearGradient(0, 0, 0, ch);
-    g.addColorStop(0, 'rgba(0,0,0,0.93)');
-    g.addColorStop(Math.max(0, (divY - 4) / ch), 'rgba(0,0,0,0.82)');
-    g.addColorStop(Math.min(1, (divY + 80) / ch), 'rgba(0,0,0,0.42)');
-    g.addColorStop(0.9, 'rgba(0,0,0,0.34)');
-    g.addColorStop(1, 'rgba(0,0,0,0.30)');
+    // Translucent dim overlay (NOT opaque, and UNIFORM - no black top).
+    // The live XMB gradient (per-month Original color) is already blurred by
+    // the CSS filter on the #bg/#wave canvases behind us; here we only lay a
+    // single uniform translucent darkening so that the per-month color (e.g.
+    // May teal) stays clearly visible THROUGH the dim across the whole frame,
+    // including at the very top. Previously this was a near-opaque black at
+    // the top (0.93) which both produced a black band and washed the color
+    // out of the upper region; a flat ~0.4 wash dims for text legibility while
+    // preserving the gradient chroma everywhere.
     ctx2.globalAlpha = ap;
-    ctx2.fillStyle = g;
+    ctx2.fillStyle = 'rgba(0,0,0,0.40)';
     ctx2.fillRect(0, 0, cw, ch);
   } else if (waveCanvas && waveCanvas.width > 0 && waveCanvas.height > 0) {
     // Downsample wave into the small blur canvas (cheap copy).
@@ -9165,7 +9164,7 @@ function frame(now) {
     //   EXIT  : blur BACKDROP_BLUR_PX -> 0 as the dialog fades out (sharpens).
     // Outside any live-wave dialog the filter is forced back to '' so the
     // steady wave is always crisp.
-    const BACKDROP_BLUR_PX = 18;
+    const BACKDROP_BLUR_PX = 9;
     let blurProg = 0;
     if (dialogState && dialogState.template && dialogState.template.liveWave) {
       const a = dialogState.anim;
