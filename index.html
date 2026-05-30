@@ -4784,10 +4784,11 @@ function drawCapturedWave(fade) {
     // real XMB, so the nominal real-time rate played far too fast. 2 kf/s gives the
     // slow, gentle, hypnotic drift of the real XMB (full ~42s loop). CONSTANT (no
     // easing) -> perfectly uniform speed. Tunable via window._waveSeqFps.
-    const kfps = (window._waveSeqFps != null) ? window._waveSeqFps : 0.3;
+    const kfps = (window._waveSeqFps != null) ? window._waveSeqFps : 0.7;
     const count = waveSeqCount, S = waveCapScratch, n = S.length;
     const XF = 5;                       // crossfade keyframes at the loop seam
-    let p = (((performance.now() - waveSeqStartT) / 1000) * kfps) % count;
+    let p = (window._waveForcePhase != null) ? (window._waveForcePhase % count)
+            : ((((performance.now() - waveSeqStartT) / 1000) * kfps) % count);
     if (p < 0) p += count;
     const i0 = Math.floor(p) % count, i1 = (i0 + 1) % count, fr = p - Math.floor(p);
     // CATMULL-ROM (cubic) interpolation across 4 keyframes for C1-continuous
