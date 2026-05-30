@@ -4641,12 +4641,16 @@ function drawCapturedWave(fade) {
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, S);
     waveSeqStartT = 0; // reset the steady loop clock so it restarts cleanly at handoff
   } else if (waveSeqReady && waveSeqCount > 1 && waveCapScratch) {
-    const kfps = (window._waveSeqFps != null) ? window._waveSeqFps : 20.0;
+    // STEADY: oscillate slowly + GRACEFULLY through the captured keyframes using a
+    // COSINE ease (velocity is zero at both turnarounds, so the wave eases in/out
+    // of the reversal instead of snapping direction). Period is long so the silk
+    // drifts gently, matching the real XMB's slow hypnotic flow -- a fast linear
+    // ping-pong read as wild back-and-forth motion.
     if (!waveSeqStartT) waveSeqStartT = performance.now();
-    const tt = ((performance.now() - waveSeqStartT) / 1000) * kfps;
-    const period = 2 * (waveSeqCount - 1);
-    let p = tt % period; if (p < 0) p += period;
-    const phase = (p <= waveSeqCount - 1) ? p : (period - p); // triangle 0..count-1
+    const periodS = (window._waveSeqPeriod != null) ? window._waveSeqPeriod : 28.0; // full back-and-forth seconds (slow, graceful)
+    const u = ((performance.now() - waveSeqStartT) / 1000) / periodS;
+    const phase01 = 0.5 * (1.0 - Math.cos(2.0 * Math.PI * u)); // smooth 0..1..0
+    const phase = phase01 * (waveSeqCount - 1);
     const i0 = Math.floor(phase), i1 = Math.min(i0 + 1, waveSeqCount - 1), fr = phase - i0;
     const A = waveSeqFrames[i0], B = waveSeqFrames[i1], S = waveCapScratch, n = S.length;
     for (let i = 0; i < n; i++) S[i] = A[i] + (B[i] - A[i]) * fr;
