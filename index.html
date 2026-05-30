@@ -445,10 +445,21 @@ const COLOR_OPTIONS = [
   {key:'evening_red',  name:'Evening Red',   tint:[0.980, 0.520, 0.520], swatch:'#E68585'}
 ];
 
+// Background chooser options, verified by RPCS3 capture of the real EU firmware
+// Background chooser: a separated "Brightness" submenu item at the top (handled
+// via the template's topAction field), then the selectable backgrounds
+// Original / Classic / Wallpaper.
 const BACKGROUND_OPTIONS = [
-  {key:'original', name:'Original'},   // monthly gradient (current behaviour)
-  {key:'theme',    name:'Theme'},      // use theme-supplied background
-  {key:'classic',  name:'Classic'}     // classic XMB blue (vaddr 0x271630 = #143CAF)
+  {key:'original',  name:'Original'},   // monthly gradient (current behaviour)
+  {key:'classic',   name:'Classic'},    // classic XMB blue (vaddr 0x271630 = #143CAF)
+  {key:'wallpaper', name:'Wallpaper'}   // custom image (no image set -> falls back to Original gradient)
+];
+
+// Font chooser options, verified by RPCS3 capture (Original / Rounded / Pop).
+const FONT_OPTIONS = [
+  {key:'original', name:'Original'},
+  {key:'rounded',  name:'Rounded'},
+  {key:'pop',      name:'Pop'}
 ];
 
 // Classic XMB blue (verified firmware constant at vaddr 0x271630, #143CAF).
@@ -472,6 +483,7 @@ function _saveThemeState(key, idx) {
 let themeIdx = _loadThemeState('theme',  0, THEME_OPTIONS);       // 0 = Original
 let colorIdx = _loadThemeState('color',  0, COLOR_OPTIONS);       // 0 = Original
 let bgIdx    = _loadThemeState('bg',     0, BACKGROUND_OPTIONS);  // 0 = Original
+let fontIdx  = _loadThemeState('font',   0, FONT_OPTIONS);        // 0 = Original
 
 // Returns the c[23] tint vec3 for the currently selected Color.
 function currentTintRGB() {
@@ -486,8 +498,9 @@ function resolveItemValue(it) {
   if (!it) return null;
   switch (it.n) {
     case 'Theme':      return THEME_OPTIONS[themeIdx].name;
-    case 'Color':      return COLOR_OPTIONS[colorIdx].name;
+    case 'Colour':     return COLOR_OPTIONS[colorIdx].name;
     case 'Background': return BACKGROUND_OPTIONS[bgIdx].name;
+    case 'Font':       return FONT_OPTIONS[fontIdx].name;
   }
   return it.v || null;
 }
@@ -514,6 +527,10 @@ function applyThemeSelection(themeKey, selectedIdx) {
     case 'bg':
       bgIdx = selectedIdx;
       _saveThemeState('bg', bgIdx);
+      break;
+    case 'font':
+      fontIdx = selectedIdx;
+      _saveThemeState('font', fontIdx);
       break;
   }
 }
@@ -916,14 +933,15 @@ const DIALOG_TEMPLATES = {
     panel:true,                         // PS3 firmware: renders as side panel beside XMB, not fullscreen
     title:'Theme',
     body:'Select a theme.',
+    topAction:'Install',                // separated top action item (RPCS3-verified)
     options:THEME_OPTIONS.map(o => o.name),
     themeKey:'theme'
   },
-  'Color': {
+  'Colour': {
     type:'chooser',
     panel:true,                         // PS3 firmware: renders as side panel beside XMB
-    title:'Color',
-    body:'Sets the color of the background and options menu.',
+    title:'Colour',
+    body:'Sets the colour of the background and options menu.',
     options:COLOR_OPTIONS.map(o => o.name),
     swatches:COLOR_OPTIONS.map(o => o.swatch),  // 27x27 colour squares for non-selected items
     themeKey:'color'
@@ -933,8 +951,17 @@ const DIALOG_TEMPLATES = {
     panel:true,                         // PS3 firmware: renders as side panel beside XMB
     title:'Background',
     body:'Sets the background of the XMB\u2122 screen.',
+    topAction:'Brightness',             // separated top submenu item (RPCS3-verified)
     options:BACKGROUND_OPTIONS.map(o => o.name),
     themeKey:'bg'
+  },
+  'Font': {
+    type:'chooser',
+    panel:true,                         // PS3 firmware: renders as side panel beside XMB
+    title:'Font',
+    body:'Sets the font displayed on the XMB\u2122 screen.',
+    options:FONT_OPTIONS.map(o => o.name),
+    themeKey:'font'
   }
 };
 
@@ -1090,12 +1117,14 @@ const DATA = [
           {n:'System Information',i:'xmb_icon_022',action:'dialog'}
         ]},
       {n:'Theme Settings',i:'xmb_icon_023',d:'Adjusts settings related to the appearance of the XMB\u2122 screen.',ch:[
-          // Three items match firmware page_theme_config_{theme,color,background}
-          // strings in sysconf_plugin.rco. Values are runtime-bound via the
-          // theme state (themeIdx/colorIdx/bgIdx) and resolved in resolveItemValue().
-          {n:'Theme',i:'xmb_icon_022',action:'dialog',d:'Sets for use of a preset combination of elements such as color, background or icons.'},
-          {n:'Color',i:'xmb_icon_022',action:'dialog',d:'Sets the color of the background and options menu.'},
-          {n:'Background',i:'xmb_icon_022',action:'dialog',d:'Sets the background of the XMB\u2122 screen.'}
+          // FOUR items, verified by RPCS3 capture of the real EU firmware Theme
+          // Settings (Theme / Colour / Background / Font). Descriptions and
+          // British spelling ("Colour", "colour") match the captured strings.
+          // Values are runtime-bound via theme state and resolved in resolveItemValue().
+          {n:'Theme',i:'xmb_icon_022',action:'dialog',d:'Sets for use of a preset combination of elements such as colour, background or icons.'},
+          {n:'Colour',i:'xmb_icon_022',action:'dialog',d:'Sets the colour of the background and options menu.'},
+          {n:'Background',i:'xmb_icon_022',action:'dialog',d:'Sets the background of the XMB\u2122 screen.'},
+          {n:'Font',i:'xmb_icon_022',action:'dialog',d:'Sets the font displayed on the XMB\u2122 screen.'}
         ]},
       {n:'Date and Time Settings',i:'xmb_icon_014',d:'Adjusts date and time settings.',ch:[
           {n:'Date and Time',i:'xmb_icon_022',action:'dialog',d:'Sets the date and time for this system.'},
@@ -8149,6 +8178,27 @@ function drawSidePanel(ctx2, ds, ap) {
   ctx2.textBaseline = 'middle';
   ctx2.textAlign = 'left';
 
+  // Separated top-action item (Install for Theme, Brightness for Background).
+  // RPCS3-verified: it sits well above the option list with a gap and a small
+  // right-pointing submenu arrow. Display-only (not part of the selectable
+  // option list). Measured y: Install ~270, Brightness ~390 -> a fixed offset
+  // above the list top reproduces the look.
+  if (t.topAction) {
+    const tay = SP_LIST_TOP_Y - 120;
+    ctx2.font = SP_FONT_REG;
+    ctx2.shadowColor = 'rgba(0,0,0,' + (0.35 * ap) + ')';
+    ctx2.shadowBlur = 1.5; ctx2.shadowOffsetY = 1;
+    ctx2.fillStyle = 'rgba(255,255,255,' + (0.90 * ap) + ')';
+    ctx2.fillText(t.topAction, SP_TEXT_X + xShift, tay);
+    // Right-pointing arrow (submenu indicator), a small filled triangle.
+    const aw = ctx2.measureText(t.topAction).width;
+    const axr = SP_TEXT_X + xShift + aw + 14;
+    ctx2.beginPath();
+    ctx2.moveTo(axr, tay - 6); ctx2.lineTo(axr + 8, tay); ctx2.lineTo(axr, tay + 6);
+    ctx2.closePath(); ctx2.fill();
+    ctx2.shadowColor = 'rgba(0,0,0,0)'; ctx2.shadowBlur = 0; ctx2.shadowOffsetY = 0;
+  }
+
   for (let i = firstVisible; i <= lastVisible; i++) {
     const isSel = (i === ds.sel);
     const visIdx = i - firstVisible;
@@ -8666,6 +8716,7 @@ function enter() {
     if (tpl.themeKey === 'theme')      initialSel = themeIdx;
     else if (tpl.themeKey === 'color') initialSel = colorIdx;
     else if (tpl.themeKey === 'bg')    initialSel = bgIdx;
+    else if (tpl.themeKey === 'font')  initialSel = fontIdx;
     dialogState = {
       item: it,
       iconId: it.i,                         // PS3 dialogs show the item icon top-left
