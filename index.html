@@ -427,9 +427,12 @@ function monthBaseColorBot(month, nightBlend) {
   return hsvToRgb(e.h, e.s, v * MONTH_VALUE_PRECOMP);
 }
 
+// EXACTLY 12 colours, verified by scrolling the full real EU firmware Colour
+// chooser in RPCS3 (the list ends at Red -- no Sky Blue / Evening Red, and no
+// separate Monochrome; the silver swatch is Original's own). Order + swatch
+// hues map 1:1 to the captured palette.
 const COLOR_OPTIONS = [
-  {key:'original',     name:'Original',      tint:[0.82, 0.62, 0.90], swatch:'#B8BFCA'},  // PLUM hue (firmware default), shows label, no swatch when selected
-  {key:'monochrome',   name:'Monochrome',    tint:[0.850, 0.850, 0.850], swatch:'#B8BFCA'},
+  {key:'original',     name:'Original',      tint:[0.82, 0.62, 0.90], swatch:'#B8BFCA'},  // PLUM hue (firmware default), shows label when selected
   {key:'yellow',       name:'Yellow',        tint:[1.000, 0.880, 0.200], swatch:'#CCB81C'},
   {key:'green',        name:'Green',         tint:[0.650, 0.870, 0.300], swatch:'#73A928'},
   {key:'pink',         name:'Pink',          tint:[1.000, 0.640, 0.720], swatch:'#DE6E81'},
@@ -440,9 +443,7 @@ const COLOR_OPTIONS = [
   {key:'magenta',      name:'Magenta',       tint:[0.700, 0.300, 0.800], swatch:'#8D359B'},
   {key:'orange',       name:'Orange',        tint:[1.000, 0.700, 0.150], swatch:'#C39011'},
   {key:'brown',        name:'Brown',         tint:[0.620, 0.430, 0.180], swatch:'#9F6E2E'},
-  {key:'red',          name:'Red',           tint:[0.900, 0.220, 0.220], swatch:'#E63838'},
-  {key:'sky_blue',     name:'Sky Blue',      tint:[0.500, 0.770, 0.980], swatch:'#7FB8E0'},
-  {key:'evening_red',  name:'Evening Red',   tint:[0.980, 0.520, 0.520], swatch:'#E68585'}
+  {key:'red',          name:'Red',           tint:[0.900, 0.220, 0.220], swatch:'#E63838'}
 ];
 
 // Background chooser options, verified by RPCS3 capture of the real EU firmware
