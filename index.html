@@ -308,8 +308,13 @@ const THEME_OPTIONS = [
 // Down-arrow visible at panel bottom: more options exist beyond the visible
 // window (PS3 firmware Color chooser has 15 entries total). The remaining
 // 4 are the warm/red tints documented below.
+// Firmware default gradient HUE = PLUM (back_colours2 theme tint, see
+// gradient_firmware_logic.md S1c: plum (0.82,0.62,0.90)). The DEFAULT "Original"
+// color applies this plum hue via HSV hue-REPLACEMENT (NOT the month texture's
+// own hue). This is why May renders PURPLE even though May's texture is green.
+const PLUM_TINT = [0.82, 0.62, 0.90];
 const COLOR_OPTIONS = [
-  {key:'original',     name:'Original',      tint:[0.651, 0.759, 1.000], swatch:'#B8BFCA'},  // shows label, no swatch when selected
+  {key:'original',     name:'Original',      tint:[0.82, 0.62, 0.90], swatch:'#B8BFCA'},  // PLUM hue (firmware default), shows label, no swatch when selected
   {key:'monochrome',   name:'Monochrome',    tint:[0.850, 0.850, 0.850], swatch:'#B8BFCA'},
   {key:'yellow',       name:'Yellow',        tint:[1.000, 0.880, 0.200], swatch:'#CCB81C'},
   {key:'green',        name:'Green',         tint:[0.650, 0.870, 0.300], swatch:'#73A928'},
@@ -1341,8 +1346,12 @@ function loadMonthBg() {
   const now = new Date();
   // Discrete current-month gradient (no cross-month fade -- blending two
   // opposite-hue months desaturates to grey). Day vs night chosen by hour.
+  // Firmware month index is 1-based (01..12). Use the ACTUAL current month -- NO
+  // off-by-one swap. The month texture drives VALUE/STRUCTURE + day/night ONLY;
+  // the displayed plum HUE comes from the theme tint via HSV, not from picking a
+  // neighbouring month's texture (gradient_firmware_logic.md S1c/S2).
   const month = (window._monthOverride != null) ? window._monthOverride : now.getMonth(); // 0-11
-  const texMonth = (month + 1) % 12; // firmware month index (1-indexed): May -> 05 (purple)
+  const texMonth = month + 1; // 1..12, current month
   const hour = now.getHours();
   const isNight = (hour < 6 || hour >= 18);
   const idx = (isNight ? texMonth + 12 : texMonth).toString().padStart(2, '0');
@@ -2418,10 +2427,12 @@ void main() {
   // that is gone, so the steady Original gradient is the saturated per-month
   // gradient again (replacing commit 8292979's hardcoded purple override).
   //
-  // Only condition the Original path (uHSVStrength < 0.5). The named Color
-  // themes (Plum, Aqua, ...) run the HSV-rotation block below, which already
-  // targets the correct luma, so we must NOT lift them here.
-  if (uHSVStrength < 0.5) {
+  // FIRMWARE MODEL: the gradient VALUE/STRUCTURE (enrichHDR + vertical envelope +
+  // top-corner vignette) is shaped here for ALL colors, then the HUE is replaced
+  // by the theme tint via HSV below. Since the hue is now ALWAYS theme-driven
+  // (default = plum), this luminance-shaping block runs unconditionally -- it sets
+  // up the V (luminance) that applyHSVRotation preserves while swapping the hue.
+  if (true) {
     // HDR enrichment: undo the downstream glare/tonemap wash so the per-month
     // hue reads RICH and SATURATED (May purple vivid, never washed grey),
     // matching the real PS3's HDR look (real steady gradient HSV S~0.47 vs the
@@ -2435,14 +2446,39 @@ void main() {
     // and the day/night dimming carried in gradColor. Boot is unaffected:
     // uBootBgActive fades this same lifted color up from black, so it stays the
     // correct fade target with no hand-off pop.
-    // Bottom-led brightness lift. The real PS3 steady gradient (day AND night)
-    // has a near-BLACK upper screen with the month hue blooming up only from the
-    // bottom (see verify_gradient/may_day_14h.png: top ~black, strong green only
-    // in the lower third). So crush the TOP hard and lift the BOTTOM: screenY=0
-    // top -> 0.30, screenY=1 bottom -> 1.45, with a smooth curve (screenY^1.6) so
-    // the green stays low across the upper-middle and ramps in late. This restores
-    // the dark-top -> bright-bottom structure the old mix(1.95,1.50) blasted flat.
-    gradColor *= mix(0.30, 1.45, pow(screenY, 1.6));
+    // Vertical brightness envelope. MEASURED on the real RPCS3 dump (boot
+    // pre-warning f120-225 AND steady): the gradient is a SOFT purple vignette,
+    // NOT a near-black top with a hard bottom bloom. Normalizing to the
+    // lower-center luminance, real sits at: top-center ~0.90, mid ~0.72,
+    // low-center 1.00 (a gentle dip through the middle that lifts back at the
+    // very top and the bottom). The old mix(0.30,1.45,screenY^1.6) crushed the
+    // top to near-black (web top L~1 vs real ~64-80) and was far too steep.
+    // Replace with a gentle profile (top 0.86, mid ~0.74, bottom 1.18) that the
+    // downstream 'vis' envelope + tonemap land on real's measured ratio while
+    // keeping a mild lower-screen glow. screenY=0 top, screenY=1 bottom.
+    float vEnv = mix(0.86, 1.18, screenY);
+    // Slight mid dip so the brightest band stays low (real mid ~0.72 of low).
+    vEnv *= 1.0 - 0.10 * (1.0 - abs(screenY - 0.42) * 2.0) * step(abs(screenY - 0.42), 0.5);
+    gradColor *= vEnv;
+    // DAYTIME brightness lift: the real day steady gradient (real.mp4) sits at
+    // V ~0.62-0.68 (top..bottom), brighter than the raw web composite (~0.40).
+    // Lift the DAY end only (weighted by 1-uNightDayBlend) so NIGHT -- which
+    // already matches the darker real-night band -- is untouched. Hue/structure
+    // preserved; this is a pure value lift toward the measured real luminance.
+    gradColor *= mix(1.0, 1.55, 1.0 - uNightDayBlend);
+    // TOP-CORNER VIGNETTE. Real darkens the top corners to ~0.57x of the
+    // top-center (topL/topC ~0.57, topR/topC ~0.65). Model a radial darkening
+    // anchored at the top center that bites only near the top edge and the L/R
+    // edges, leaving the lower-center bright.
+    {
+      float dx = (vUV.x - 0.5);                 // -0.5..0.5 horizontal
+      float dyTop = (1.0 - screenY);            // 0 bottom .. 1 top
+      // distance into the top corners: strong when both near top AND near edge
+      float corner = clamp(pow(dyTop, 1.4) * (abs(dx) * 2.0), 0.0, 1.0);
+      // right corner slightly less dark than left (topR brighter than topL)
+      float side = mix(1.0, 0.88, smoothstep(0.0, 0.5, dx));
+      gradColor *= 1.0 - 0.45 * corner * side;
+    }
   }
 
   // NIGHT TOP: the base night gradient top is already near-black (~10,10,13),
@@ -4336,14 +4372,13 @@ function loadMonthGradientTextures() {
   // then resolves to the single saturated current-month gradient regardless
   // of monthTime. Day<->night is blended separately (same month, same hue
   // family) so it never desaturates.
-  // Firmware indexes the 24 monthly DDS textures by CALENDAR MONTH (1-12),
-  // not by the JS 0-based getMonth(). The texture array is 1-indexed: slot 0
-  // is the default/unused grey, slot N is calendar month N. So May
-  // (getMonth()==4 -> month 5) selects month_bg_05 = purple, matching the real
-  // PS3 (verified against latest.mp4: hue ~282 purple). Wrap so December
-  // (month 12) maps back to slot 0.
+  // Firmware indexes the 24 monthly DDS textures by CALENDAR MONTH (1-12). The
+  // texture supplies VALUE/STRUCTURE + day/night ONLY -- the displayed HUE comes
+  // from the theme tint via HSV hue-replacement (default = PLUM), NOT from the
+  // month texture's own colour. So we use the ACTUAL current month (no off-by-one
+  // swap to fake plum). gradient_firmware_logic.md S1c/S2.
   const month = (window._monthOverride != null) ? window._monthOverride : now.getMonth(); // 0-11
-  const texMonth = (month + 1) % 12; // firmware month index 0..11
+  const texMonth = month + 1; // 1..12, current calendar month
   const dayIdx = texMonth.toString().padStart(2, '0');
   const nightIdx = (texMonth + 12).toString().padStart(2, '0');
 
@@ -5122,10 +5157,30 @@ function drawBGWebGL(dt) {
   gl.uniform1i(gl.getUniformLocation(bgShaderProgram, 'uBgMode'), bgModeNum);
   gl.uniform3fv(gl.getUniformLocation(bgShaderProgram, 'uClassicBgColor'),
                 new Float32Array(CLASSIC_BG_COLOR));
+  // FIRMWARE HUE MODEL (gradient_firmware_logic.md S1c/S4):
+  //  - The gradient HUE comes from the THEME color via HSV hue-replacement, NOT
+  //    from the month texture. So EVERY color (including the default "Original" =
+  //    PLUM) runs the HSV rotation at full strength. The month texture drives
+  //    VALUE/STRUCTURE + day/night only.
+  //  - DURING BOOT the manual color is NOT applied: the boot is ALWAYS the default
+  //    PLUM gradient. The manual color only takes effect once the XMB settles
+  //    (bootLitScene -> 0). We crossfade the tint plum -> manual by bootLitScene
+  //    so the manual hue appears exactly at the settle, never during logo/warning.
+  var _manualTint = currentTintRGB();
+  // _rev = 0 through the ENTIRE boot+warning (force PLUM), ramping to 1 only at the
+  // XMB settle hand-off (after the warning). So manual color appears only on the
+  // settled XMB, never during logo/warning.
+  var _rev = (typeof manualColorReveal === 'number') ? Math.min(Math.max(manualColorReveal, 0.0), 1.0) : 1.0;
+  var _gradTint = [
+    PLUM_TINT[0] * (1.0 - _rev) + _manualTint[0] * _rev,
+    PLUM_TINT[1] * (1.0 - _rev) + _manualTint[1] * _rev,
+    PLUM_TINT[2] * (1.0 - _rev) + _manualTint[2] * _rev
+  ];
   gl.uniform3fv(gl.getUniformLocation(bgShaderProgram, 'uColorTint'),
-                new Float32Array(currentTintRGB()));
-  gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uHSVStrength'),
-               (colorIdx === 0) ? 0.0 : 1.0);
+                new Float32Array(_gradTint));
+  // Hue replacement is ALWAYS on now (default Original = plum). The Classic solid
+  // background path ignores this; everything else takes the theme hue.
+  gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uHSVStrength'), 1.0);
   // Boot intro gradient ramp (coldboot1->coldboot2). bootGradientBrightness
   // is 1.0 once the intro is done; during boot it ramps the gradient up from
   // near-black over the fade window (boot_spec.md section 1).
@@ -8250,6 +8305,13 @@ let bootBgExposure = 0.0;
 //   0.0 over the settle hand-off so the exposure normalizes into the steady
 //   primary-color gradient (manual color if chosen, else time-of-day/monthly).
 let bootLitScene = 0.0;
+//   manualColorReveal : 0 during the ENTIRE boot+warning (gradient hue forced to
+//   the default PLUM), ramping to 1.0 only at the XMB settle hand-off (after the
+//   warning ends). The user's MANUALLY chosen Color theme blends in over this
+//   factor, so it appears ONLY on the settled XMB and NEVER during the logo or
+//   warning (gradient_firmware_logic.md S4; validated vs real-blue.mp4 where blue
+//   appears ~12s, after the warning, not during boot). Default = 1.0 (steady).
+let manualColorReveal = 1.0;
 // bootBgExposureBottom: BOTTOM fade factor (>= bootBgExposure during the
 // reveal). The gradient reveals bottom-first on real.mp4 (~1.3x top).
 let bootBgExposureBottom = 0.0;
@@ -8544,6 +8606,7 @@ function drawBootIntro(now) {
     bootBgActive = false;   // release the dark-gradient override to steady XMB
     bootBgExposure = 0.0;
     bootLitScene = 0.0;     // lit coldboot scene fully handed off to time-of-day
+    manualColorReveal = 1.0; // manual Color theme fully applied on the settled XMB
     bootSweep = 1.0;        // whole frame lit; sweep is a no-op in steady state
     bootWaveGain = 0.0;
     bootWhiteout = 0.0;
@@ -8669,6 +8732,14 @@ function drawBootIntro(now) {
   const LIT_HANDOFF_START = 5500;            // begin lit->stable cross-fade pre-warning
   const LIT_HANDOFF_END   = 8300;            // fully on the steady gradient (during warning)
   bootLitScene = 1.0 - smooth(bootRamp(elapsed, LIT_HANDOFF_START, LIT_HANDOFF_END));
+
+  // MANUAL COLOR REVEAL: the user's chosen Color theme must NOT appear during the
+  // logo or the warning -- the entire boot is the DEFAULT PLUM gradient. The manual
+  // hue blends in ONLY at the XMB settle hand-off, after the warning is dismissed
+  // (real-blue.mp4: plum through logo+warning, blue appears ~12s once XMB settles).
+  // Ramp 0 -> 1 over [warning-out, XMB UI-in] so the hue switch lands as the XMB
+  // takes over, well after the warning. Before that it is 0 (forced plum).
+  manualColorReveal = smooth(bootRamp(elapsed, BOOT_WARN_OUT_MS, BOOT_UI_IN_MS));
 
   // LEFT-FIRST SWEEP phase. The coldboot background+wave come alive from the
   // LEFT edge and sweep to the RIGHT, giving real.mp4 its L->R reveal feel
