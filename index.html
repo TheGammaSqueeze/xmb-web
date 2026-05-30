@@ -4620,13 +4620,17 @@ function loadMonthGradientTextures() {
 // Compute day/night blend factor from firmware DAY2NIGHT values
 // BEGIN: 18.498 hours, END: 24.0 hours (from firmware analysis)
 function computeNightDayBlend(hour) {
-  var DAY2NIGHT_BEGIN = 18.498;
-  var DAY2NIGHT_END = 24.0;
-  var NIGHT2DAY_BEGIN = 4.0;
+  // Calibrated to the /work/realxmb videos' measured TOP-value-vs-hour curve
+  // (xmb-ref/realxmb_ground_truth.md): top is fully bright h7-h16, dims from
+  // ~h16.5 and reaches full dark by ~h20; dawn rises h4.5 -> full day h7.
+  var DAY2NIGHT_BEGIN = 16.5;
+  var DAY2NIGHT_END = 20.5;
+  var NIGHT2DAY_BEGIN = 4.5;
   var NIGHT2DAY_END = 7.0;
   if (hour >= DAY2NIGHT_BEGIN && hour <= DAY2NIGHT_END) {
     return (hour - DAY2NIGHT_BEGIN) / (DAY2NIGHT_END - DAY2NIGHT_BEGIN);
-  } else if (hour >= 0.0 && hour < NIGHT2DAY_BEGIN) {
+  } else if (hour > DAY2NIGHT_END || hour < NIGHT2DAY_BEGIN) {
+    // Full night spans the evening end through the pre-dawn (20.5 -> 24 -> 4.5).
     return 1.0;
   } else if (hour >= NIGHT2DAY_BEGIN && hour <= NIGHT2DAY_END) {
     return 1.0 - (hour - NIGHT2DAY_BEGIN) / (NIGHT2DAY_END - NIGHT2DAY_BEGIN);
