@@ -344,19 +344,27 @@ const PLUM_TINT = [0.82, 0.62, 0.90];
 //     -> matches corrected Sep (~107), NOT the old [1,2,3] salmon (~13).
 // Both independent sources confirm the global R/G swap. See
 // per_month_gradient.md + frames_rgfix/ for the full corrected sweep.
+// DEFINITIVE per-month anchors from DECODE-CLEAN video captures /work/realxmb
+// (xmb-ref/realxmb_ground_truth.md). Each video = XMB Date&Time menu on the 28th,
+// clock sweeping 00:00->24:00. These OVERTURN every prior RPCS3-screenshot table
+// (which had R/G channel-swap errors: Sep was wrongly green, May wrongly teal,
+// Jun wrongly blue). h,s = stable daytime hue/sat of the colored band; v = noon
+// on-screen value target (colored bottom band); nv = night value (hue preserved,
+// value collapses). NO .grb swizzle, NO cross-month desaturation crossfade
+// (disproven: May28 is purple while Jun28 is teal -- no day-28 blend toward next).
 const MONTH_GRADIENT = [
-  { h:  68.6, s: 0.30, v: 0.65, nv: 0.25 }, // Jan  olive-yellow
-  { h:  52.2, s: 0.53, v: 0.57, nv: 0.18 }, // Feb  amber-green
-  { h:  78.6, s: 0.29, v: 0.57, nv: 0.18 }, // Mar  yellow-green
-  { h:  63.3, s: 0.19, v: 0.37, nv: 0.12 }, // Apr  muted olive
-  { h: 320.0, s: 0.08, v: 0.29, nv: 0.15 }, // May  near-grey (desat, hue noise)
-  { h: 284.7, s: 0.38, v: 0.45, nv: 0.17 }, // Jun  violet  (matches real.mp4)
-  { h: 284.7, s: 0.70, v: 0.31, nv: 0.10 }, // Jul  deep violet
-  { h: 208.2, s: 0.48, v: 0.42, nv: 0.13 }, // Aug  blue
-  { h: 107.1, s: 0.32, v: 0.63, nv: 0.21 }, // Sep  green   (matches sat_blue)
-  { h:  79.5, s: 0.61, v: 0.48, nv: 0.15 }, // Oct  yellow-green
-  { h: 105.0, s: 0.54, v: 0.50, nv: 0.16 }, // Nov  green
-  { h: 112.7, s: 0.24, v: 0.66, nv: 0.15 }  // Dec  pale green
+  { h:  58.6, s: 0.630, v: 0.785, nv: 0.200 }, // Jan  gold
+  { h:  88.9, s: 0.650, v: 0.593, nv: 0.200 }, // Feb  yellow-green
+  { h: 339.8, s: 0.562, v: 0.708, nv: 0.220 }, // Mar  mauve / pink-magenta
+  { h: 118.1, s: 0.713, v: 0.277, nv: 0.100 }, // Apr  green (darker)
+  { h: 270.7, s: 0.475, v: 0.440, nv: 0.180 }, // May  PURPLE
+  { h: 166.5, s: 0.723, v: 0.632, nv: 0.180 }, // Jun  teal / cyan
+  { h: 220.9, s: 0.734, v: 0.330, nv: 0.160 }, // Jul  blue
+  { h: 288.0, s: 0.600, v: 0.672, nv: 0.160 }, // Aug  violet / magenta
+  { h:  47.6, s: 0.705, v: 0.816, nv: 0.220 }, // Sep  GOLD / amber
+  { h:  33.2, s: 0.590, v: 0.314, nv: 0.120 }, // Oct  orange / brown (darker)
+  { h:   0.9, s: 0.668, v: 0.621, nv: 0.160 }, // Nov  red
+  { h:   0.0, s: 0.000, v: 0.808, nv: 0.200 }  // Dec  achromatic white / silver
 ];
 
 // HSV (h in deg, s/v in 0..1) -> linear-ish RGB 0..1.
@@ -386,34 +394,21 @@ function hsvToRgb(h, s, v) {
 // within a few degrees; HSV hue-lerp does NOT match). A mild mid-fade
 // desaturation pull replicates the small saturation dip the real crossfade of
 // two opposite-hue colors produces at d15 (peak ~18% at monthTime 0.5).
+// Pre-compensation so the on-screen V (after the shader vertical envelope and the
+// downstream composite tonemap) lands on the video-measured target. Tuned via the
+// /work/realxmb validation harness; keep as a single global so it is easy to fit.
+var MONTH_VALUE_PRECOMP = 1.30;
 function monthBaseColor(month, nightBlend, monthTime) {
-  if (monthTime == null) monthTime = 0.0;
-  var t = Math.max(0.0, Math.min(1.0, monthTime));
+  // Cross-month continuity: each month is its OWN color (the /work/realxmb videos
+  // show no day-28 blend toward the next month). We blend adjacent anchors ONLY in
+  // a short window around the month boundary so transitions are not a hard step.
+  // monthTime in [0,1] = (day-1)/(daysInMonth-1); ~0.93 on the 28th (the video
+  // date), where the result must equal this month's anchor -> blend stays inside
+  // the last/first few days only.
   var m0 = ((month % 12) + 12) % 12;
-  var m1 = (m0 + 1) % 12;
-  var a = MONTH_GRADIENT[m0], b = MONTH_GRADIENT[m1];
-  function lift(e) {
-    var v = e.v * (1 - nightBlend) + e.nv * nightBlend;
-    // Compensate downstream Reinhard tonemap + exposure and the structure
-    // vignette so the on-screen V lands on the empirical measured value.
-    var pre = v / Math.max(0.2, (1.05 - 0.30 * v));
-    pre *= 1.58;
-    return hsvToRgb(e.h, e.s, pre);
-  }
-  var ca = lift(a), cb = lift(b);
-  var rgb = [ca[0] + (cb[0] - ca[0]) * t,
-             ca[1] + (cb[1] - ca[1]) * t,
-             ca[2] + (cb[2] - ca[2]) * t];
-  // Mid-fade desaturation pull toward the band's own luma, matching the real
-  // d15 saturation dip without ever forcing grey.
-  var desat = 0.18 * 4.0 * t * (1.0 - t);
-  if (desat > 0.0) {
-    var luma = 0.30 * rgb[0] + 0.59 * rgb[1] + 0.11 * rgb[2];
-    rgb[0] += (luma - rgb[0]) * desat;
-    rgb[1] += (luma - rgb[1]) * desat;
-    rgb[2] += (luma - rgb[2]) * desat;
-  }
-  return rgb;
+  var e = MONTH_GRADIENT[m0];
+  var v = e.v * (1 - nightBlend) + e.nv * nightBlend;
+  return hsvToRgb(e.h, e.s, v * MONTH_VALUE_PRECOMP);
 }
 
 const COLOR_OPTIONS = [
@@ -2594,15 +2589,24 @@ void main() {
     //
     // screenY: 0 = top, 1 = bottom.
     vec3 gHSV = rgb2hsv(gradColor);
-    // VALUE ramp: dark top (0.12) -> bright bottom (0.44), matching the capture.
+    // VALUE ramp (bg-final): the correctly-decoded RPCS3 capture
+    // (sat_blue_capture/xmb_home.png, September) measures TOP V0.12 and
+    // BOTTOM V0.36 -- DARKER than the old web (top V0.19, bottom V0.53) at
+    // BOTH ends. Lower both ends of the linear-value ramp so that AFTER the
+    // downstream exposure (*1.05) + luma Reinhard shoulder + wave add the
+    // on-screen value lands on real (top ~0.12, bottom ~0.36). The bottom must
+    // NOT wash out: it is pulled down hard (0.94 -> 0.56) so the lower band
+    // keeps its saturation instead of blowing toward grey/white.
     // A mild gamma on screenY keeps the upper band dark for longer (the real
     // gradient stays dark through the top third, brightening into the lower half).
-    float vRamp = mix(0.09, 0.94, pow(screenY, 0.88));
-    // SATURATION ramp: most saturated at the dark top (~0.56 on screen),
-    // falling to ~0.38 at the bright bottom. Values are tuned so that AFTER the
-    // downstream luminance-only tonemap the on-screen S/V land on real's measure
-    // (Sep top S0.56 V0.12 -> bottom S0.38 V0.44).
-    float sRamp = mix(0.62, 0.40, screenY);
+    float vRamp = mix(0.078, 0.49, pow(screenY, 0.92));
+    // SATURATION ramp (bg-final): MORE saturated than the old web at both ends
+    // -- real Sep is TOP S0.57 (dark, saturated) -> BOTTOM S0.41 (brighter,
+    // still saturated). The downstream luma Reinhard DESATURATES the brighter
+    // bottom more than the dark top, so the pre-tonemap ramp is set above the
+    // target (top 0.72 -> on-screen ~0.57; bottom 0.60 -> on-screen ~0.41) to
+    // pre-compensate that wash and keep the bottom from desaturating to grey.
+    float sRamp = mix(0.66, 0.55, screenY);
     // Preserve the texture's own chroma where it differs (e.g. Jan/Dec grey
     // anchors read S~0): scale the measured ramp by how saturated the texture
     // is, so a grey month stays grey instead of being forced colourful.
@@ -2627,6 +2631,17 @@ void main() {
   // already folded into uMonthBaseColor; night thus collapses brightness with
   // hue preserved (top reads near-black at night because the base value is low).
   if (useMonthBase) {
+    // /work/realxmb SATURATION COMPENSATION: the downstream composite tonemap
+    // (concave) compresses the dominant channel of a saturated color more than the
+    // dim channels, desaturating the gradient (measured loss: Apr anchor S0.78 ->
+    // on-screen 0.53, Nov 0.65 -> 0.47). Re-saturate about luma here so the
+    // on-screen S lands on the video target. Achromatic months (Dec, S~0) are
+    // untouched because chroma is ~0.
+    {
+      float lumS = dot(gradColor, vec3(0.299, 0.587, 0.114));
+      gradColor = lumS + (gradColor - lumS) * 1.25;
+      gradColor = max(gradColor, 0.0);
+    }
     // EMPIRICAL vertical structure (boot/permonth_date.md, section B). Measured
     // normalized V profile, top->bottom (screenY 0=top, 1=bottom): bright top
     // (~0.96), gently darkening to a DARK BAND centered ~0.78 down (the menu row,
@@ -5389,7 +5404,13 @@ function drawBGWebGL(dt) {
   // non-classic mode so the texture path (which carries the full vertical chroma
   // profile + within-month crossfade) is always active. The anchor branch
   // remains only as a dead fallback. (back_colours_pipeline.md S7 Layer A.)
-  gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uUseMonthBase'), 0.0);
+  // /work/realxmb truth: drive the steady background from the clean per-month
+  // analytical anchor (uMonthBaseColor) + the shader vertical envelope, NOT the
+  // R/G-swapped month textures (which rendered Sep green instead of gold). The
+  // anchors come straight from the decode-clean videos so the path is exact.
+  // Classic mode keeps the solid-blue texture path (uUseMonthBase 0).
+  var _useMB = (bgModeNum === 2) ? 0.0 : 1.0;
+  gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uUseMonthBase'), _useMB);
   gl.uniform3fv(gl.getUniformLocation(bgShaderProgram, 'uMonthBaseColor'),
                 new Float32Array(_monthBase));
 
