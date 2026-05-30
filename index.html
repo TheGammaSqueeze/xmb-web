@@ -4790,15 +4790,24 @@ function drawCapturedWave(fade) {
     let p = (((performance.now() - waveSeqStartT) / 1000) * kfps) % count;
     if (p < 0) p += count;
     const i0 = Math.floor(p) % count, i1 = (i0 + 1) % count, fr = p - Math.floor(p);
-    const A = waveSeqFrames[i0], B = waveSeqFrames[i1];
+    // CATMULL-ROM (cubic) interpolation across 4 keyframes for C1-continuous
+    // motion. Linear interp is only C0: the velocity jumps at every keyframe
+    // boundary (every 1/kfps s), which reads as a subtle periodic jerk. Cubic
+    // keeps velocity continuous -> silky-smooth drift, including through boot
+    // (which plays this same loop). Control points wrap mod count (the seam
+    // crossfade below hides the wrap discontinuity).
+    const im1 = (i0 - 1 + count) % count, i2 = (i1 + 1) % count;
+    const P0 = waveSeqFrames[im1], A = waveSeqFrames[i0], B = waveSeqFrames[i1], P3 = waveSeqFrames[i2];
+    const t = fr, t2 = t * t, t3 = t2 * t;
     // The SPU cloth never exactly recurs, so blend the last XF keyframes back into
     // keyframe 0 to hide the loop seam (a gentle ~0.4s crossfade, not a hard snap).
     const w = (p > count - XF) ? (p - (count - XF)) / XF : 0.0;
-    if (w > 0.0001) {
-      const C = waveSeqFrames[0];
-      for (let i = 0; i < n; i++) { const main = A[i] + (B[i] - A[i]) * fr; S[i] = main * (1.0 - w) + C[i] * w; }
-    } else {
-      for (let i = 0; i < n; i++) S[i] = A[i] + (B[i] - A[i]) * fr;
+    const C = waveSeqFrames[0];
+    for (let i = 0; i < n; i++) {
+      const p0 = P0[i], a = A[i], b = B[i], p3 = P3[i];
+      // Catmull-Rom basis
+      const main = 0.5 * ((2*a) + (-p0 + b)*t + (2*p0 - 5*a + 4*b - p3)*t2 + (-p0 + 3*a - 3*b + p3)*t3);
+      S[i] = (w > 0.0001) ? (main * (1.0 - w) + C[i] * w) : main;
     }
     // Boot->steady hand-in: blend OUT of the boot's last settled frame into the
     // steady loop over ~0.9s so the geometry doesn't snap at the handoff (the boot
@@ -4870,7 +4879,7 @@ function drawCapturedWave(fade) {
     // Filled sheet is far denser than the line strands, so it needs a much
     // lower per-fragment alpha to land at the same brightness.
     gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uAlpha'),
-      (window._waveAlpha2 != null) ? window._waveAlpha2 : 0.10);
+      (window._waveAlpha2 != null) ? window._waveAlpha2 : 0.15);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waveCapIBO);
     gl.drawElements(waveCapPrim || gl.TRIANGLES, waveCapIndexCount, gl.UNSIGNED_INT, 0);
   }
@@ -5730,7 +5739,7 @@ function drawBGWebGL(dt) {
   // to the backbuffer. This anti-aliases the wave's high-frequency specular silk
   // (which otherwise aliases into hard diagonal striations / a "low-res" look)
   // into smooth silk. Clamped so HiDPI canvases do not blow up the buffer.
-  const SS = (window._waveSS != null) ? window._waveSS : 2.0;
+  const SS = (window._waveSS != null) ? window._waveSS : 1.5;
   let ssW = Math.round(cw * SS), ssH = Math.round(ch * SS);
   const SS_CAP = 3840;
   if (ssW > SS_CAP) { const k = SS_CAP / ssW; ssW = Math.round(ssW * k); ssH = Math.round(ssH * k); }
