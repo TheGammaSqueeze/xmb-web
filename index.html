@@ -4524,6 +4524,8 @@ uniform float uFade;
 uniform vec3 uTint;
 uniform float uAlpha;     // per-fragment additive weight (overlap builds brightness)
 uniform float uSilk;      // silk lighting gain (0 = flat, 1 = full firmware sheen)
+uniform float uSpecW;     // specular weight
+uniform float uSpecExp;   // specular exponent (lower = broader, lower-freq, AA-friendly)
 void main(){
   // === SILK SHEEN (smooth Fresnel rim on a per-fragment derivative normal) ===
   // Key technique: recover the surface normal from the SCREEN-SPACE DERIVATIVES
@@ -4545,8 +4547,8 @@ void main(){
   vec3 V  = normalize(vec3(3.12367, -0.0166247, -0.0852542));
   vec3 L0 = normalize(vec3(0.484729, 0.382283, -0.97268));
   vec3 H0 = normalize(L0 + V);
-  float spec0 = pow(max(dot(N, H0), 0.0), 44.8563);   // c[18].y
-  float silk = F * 0.667 * 1.7 + spec0 * 0.30;
+  float spec0 = pow(max(dot(N, H0), 0.0), uSpecExp);   // c[18].y
+  float silk = F * 0.667 * 1.7 + spec0 * uSpecW;
   silk = clamp(silk, 0.0, 0.95);
   // ambient floor (c[18].x) keeps the unlit sheet faintly visible so the ribbon
   // reads as continuous, but the rim/glint dominates.
@@ -4611,10 +4613,40 @@ function loadWaveCapGeo() {
     const data = new Float32Array(buf); // 16384 * 9 (clip4, normal3, uv2)
     const attr = new Float32Array(WAVE_NV * 5);   // normal3 + uv2
     const clip0 = new Float32Array(WAVE_NV * 4);  // clip4 (initial)
+    // Pull the captured normals into a 128x128 grid and SMOOTH them. The raw
+    // SPU normals are high-frequency/noisy (std ~0.58); a tight high-exponent
+    // specular on them aliases into hard diagonal striations where the grid
+    // foreshortens. The real XMB silk is smooth, so we box-blur the normal
+    // field a few passes (separable, wrap-free) and renormalize. Positions and
+    // motion stay firmware-exact; only the shading normals are smoothed.
+    const N = WAVE_GRID_N;
+    let nx = new Float32Array(WAVE_NV), ny = new Float32Array(WAVE_NV), nz = new Float32Array(WAVE_NV);
+    for (let i = 0; i < WAVE_NV; i++) { const b = i*9; nx[i]=data[b+4]; ny[i]=data[b+5]; nz[i]=data[b+6]; }
+    const passes = (window._waveNrmSmooth != null) ? window._waveNrmSmooth : 3;
+    const blur1D = (src, horiz) => {
+      const out = new Float32Array(WAVE_NV);
+      for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+        let s = 0, w = 0;
+        for (let k = -1; k <= 1; k++) {
+          const rr = horiz ? r : Math.min(N-1, Math.max(0, r+k));
+          const cc = horiz ? Math.min(N-1, Math.max(0, c+k)) : c;
+          s += src[rr*N+cc]; w++;
+        }
+        out[r*N+c] = s / w;
+      }
+      return out;
+    };
+    for (let p = 0; p < passes; p++) {
+      nx = blur1D(blur1D(nx, true), false);
+      ny = blur1D(blur1D(ny, true), false);
+      nz = blur1D(blur1D(nz, true), false);
+    }
     for (let i = 0; i < WAVE_NV; i++) {
       const b = i * 9;
       clip0[i*4] = data[b]; clip0[i*4+1] = data[b+1]; clip0[i*4+2] = data[b+2]; clip0[i*4+3] = data[b+3];
-      attr[i*5] = data[b+4]; attr[i*5+1] = data[b+5]; attr[i*5+2] = data[b+6]; attr[i*5+3] = data[b+7]; attr[i*5+4] = data[b+8];
+      const l = Math.hypot(nx[i], ny[i], nz[i]) || 1;
+      attr[i*5] = nx[i]/l; attr[i*5+1] = ny[i]/l; attr[i*5+2] = nz[i]/l;
+      attr[i*5+3] = data[b+7]; attr[i*5+4] = data[b+8];
     }
     waveCapAttrVBO = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, waveCapAttrVBO); gl.bufferData(gl.ARRAY_BUFFER, attr, gl.STATIC_DRAW);
@@ -4777,8 +4809,12 @@ function drawCapturedWave(fade) {
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uAlpha'), (window._waveAlpha2 != null) ? window._waveAlpha2 : 0.18);
   gl.uniform3fv(gl.getUniformLocation(waveCapProgram, 'uTint'), new Float32Array((window._waveTint) || [0.96, 0.97, 1.00]));
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uSilk'), (window._waveSilk != null) ? window._waveSilk : 1.0);
+  gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uSpecW'),
+    (window._waveSpecW != null) ? window._waveSpecW : 0.30);
+  gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uSpecExp'),
+    (window._waveSpecExp != null) ? window._waveSpecExp : 44.8563);
   const offLoc = gl.getUniformLocation(waveCapProgram, 'uOffset');
-  if (window._waveLines !== false && waveCapLineIBO) {
+  if (window._waveLines === true && waveCapLineIBO) {
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waveCapLineIBO);
     // Multi-pass strand thickening: 1px GL_LINES get sparse/wireframe at high
     // resolution (the rows spread apart). Redraw the strands a few times nudged
@@ -4799,6 +4835,10 @@ function drawCapturedWave(fade) {
     }
   } else {
     if (offLoc) gl.uniform2f(offLoc, 0.0, 0.0);
+    // Filled sheet is far denser than the line strands, so it needs a much
+    // lower per-fragment alpha to land at the same brightness.
+    gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uAlpha'),
+      (window._waveAlpha2 != null) ? window._waveAlpha2 : 0.10);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waveCapIBO);
     gl.drawElements(gl.TRIANGLE_STRIP, waveCapIndexCount, gl.UNSIGNED_INT, 0);
   }
@@ -5653,7 +5693,16 @@ function drawBGWebGL(dt) {
   // and swell under the fade, not pop in via the normal 500ms fade-in.
   if (bootWaveActive) waveAlpha = 1;
 
-  ensureFBOs(cw, ch);
+  // Supersample the scene FBO: render the HDR scene (gradient + wave + particles)
+  // at SS x resolution and let the final composite's linear sample downsample it
+  // to the backbuffer. This anti-aliases the wave's high-frequency specular silk
+  // (which otherwise aliases into hard diagonal striations / a "low-res" look)
+  // into smooth silk. Clamped so HiDPI canvases do not blow up the buffer.
+  const SS = (window._waveSS != null) ? window._waveSS : 2.0;
+  let ssW = Math.round(cw * SS), ssH = Math.round(ch * SS);
+  const SS_CAP = 3840;
+  if (ssW > SS_CAP) { const k = SS_CAP / ssW; ssW = Math.round(ssW * k); ssH = Math.round(ssH * k); }
+  ensureFBOs(ssW, ssH);
 
   // Upload month BG texture if ready
   if (monthBgLoaded && !window._monthTexUploaded) {
@@ -5668,9 +5717,9 @@ function drawBGWebGL(dt) {
 
   updateParticles(dt);
 
-  // === PASS 1: Render scene to FBO ===
+  // === PASS 1: Render scene to FBO (at supersampled resolution) ===
   gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFBO.fb);
-  gl.viewport(0, 0, cw, ch);
+  gl.viewport(0, 0, ssW, ssH);
   gl.clearColor(0, 0, 0.012, 1);
   gl.clear(gl.COLOR_BUFFER_BIT);
 
@@ -6060,7 +6109,7 @@ function drawBGWebGL(dt) {
       console.warn('XMB HDR float-blend draw errored; falling back to 8-bit LDR path.');
       hdrFloatAvailable = false;
       fboW = 0; fboH = 0;            // force ensureFBOs to rebuild as LDR
-      ensureFBOs(cw, ch);
+      ensureFBOs(ssW, ssH);
       drawBGWebGL(dt);              // re-render this frame on the LDR path
       return;
     }
