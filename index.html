@@ -4521,12 +4521,35 @@ varying vec2 vUV;
 uniform float uFade;
 uniform vec3 uTint;
 uniform float uAlpha;     // per-fragment additive weight (overlap builds brightness)
+uniform float uSilk;      // silk lighting gain (0 = flat, 1 = full firmware sheen)
 void main(){
+  // === FIRMWARE SILK LIGHTING (ported from FS_WAVE / wave_constants.json) ===
+  // The real XMB sheen is per-fragment Blinn-Phong (2 specular lobes at the
+  // firmware exponents) + a Fresnel rim, evaluated against the captured
+  // object-space normal. Without this the exact geometry renders flat (plain
+  // translucent lines); with it the filaments that turn toward the light glint
+  // silver while the rest stays faint -- the signature silk.
+  vec3 N  = normalize(vNrm);
+  // Daytime light rig (firmware constants: view c[5], key c[7], rim c[8]).
+  vec3 V  = normalize(vec3(3.12367, -0.0166247, -0.0852542));
+  vec3 L0 = normalize(vec3(0.484729, 0.382283, -0.97268));
+  vec3 L1 = normalize(vec3(2.45394, 0.923896, 0.215928));
+  vec3 H0 = normalize(L0 + V);
+  vec3 H1 = normalize(L1 + V);
+  float spec0 = pow(max(dot(N, H0), 0.0), 44.8563);   // c[18].y
+  float spec1 = pow(max(dot(N, H1), 0.0), 74.1114);   // c[18].z
+  // Fresnel rim: 0.5*(1+dot(forward,N))^4, weighted by c[26].x = 0.667.
+  float F = 0.5 * pow(max(1.0 + dot(vec3(0.0, 0.0, -1.0), N), 0.0), 4.0);
+  float silk = F * 0.667 * 2.2 + spec0 * 0.55 + spec1 * 0.45;
+  silk = clamp(silk, 0.0, 1.4);
+  // ambient floor (c[18].x) keeps the unlit filaments faintly visible so the
+  // ribbon still reads as a continuous sheet, but the glints dominate.
+  float lit = mix(1.0, 0.107345 + silk, uSilk);
   // Cross-ribbon soft profile: fade toward the U edges of the grid so each strip
   // is a soft filament rather than a hard band; the additive overlap of the many
   // warped strips produces the silk + the bright bunched knot.
   float edge = smoothstep(0.0, 0.06, vUV.x) * smoothstep(0.0, 0.06, 1.0 - vUV.x);
-  float a = uAlpha * edge;
+  float a = uAlpha * edge * lit;
   // Premultiplied additive (blendFunc ONE, ONE): accumulate tint*a.
   gl_FragColor = vec4(uTint * a * uFade, 1.0);
 }`;
@@ -4728,8 +4751,9 @@ function drawCapturedWave(fade) {
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uYFlip'), (window._waveYFlip != null) ? window._waveYFlip : 1.0);
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uScaleY'), (window._waveScaleY != null) ? window._waveScaleY : 1.0);
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uFade'), fade);
-  gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uAlpha'), (window._waveAlpha2 != null) ? window._waveAlpha2 : 0.05);
+  gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uAlpha'), (window._waveAlpha2 != null) ? window._waveAlpha2 : 0.08);
   gl.uniform3fv(gl.getUniformLocation(waveCapProgram, 'uTint'), new Float32Array((window._waveTint) || [0.96, 0.97, 1.00]));
+  gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uSilk'), (window._waveSilk != null) ? window._waveSilk : 1.0);
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waveCapIBO);
   gl.drawElements(gl.TRIANGLE_STRIP, waveCapIndexCount, gl.UNSIGNED_INT, 0);
 }
