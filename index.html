@@ -4629,31 +4629,55 @@ function drawCapturedWave(fade) {
   // keyframes. BOOT uses the boot keyframes driven by the calibrated
   // bootWaveBrightness (streak->swell->settled); STEADY plays the looping
   // sequence (ping-pong, keyframes at sourceFps/3 = 20/s).
-  const _inBootWave = (typeof bootWaveActive !== 'undefined' && bootWaveActive) &&
-                      waveBootReady && waveBootCount > 1 && waveCapScratch;
-  if (_inBootWave) {
-    const prog = Math.max(0, Math.min(1, (typeof bootWaveBrightness !== 'undefined') ? bootWaveBrightness : 1));
+  // BOOT geometry: while the boot wave is still swelling (bootWaveGeom < 1) play
+  // the captured boot keyframes driven by the SLOW bootWaveGeom. Once it settles
+  // (~6.8s) we FALL THROUGH to the steady loop below -- which then flows on
+  // continuously through the warning and into the XMB (no freeze, no snap; the
+  // boot's settled keyframe ~= the steady loop's start, so the hand-in is
+  // seamless). The steady clock is started at that moment so it picks up smoothly.
+  const _bootGeomActive = (typeof bootWaveActive !== 'undefined' && bootWaveActive) &&
+                          waveBootReady && waveBootCount > 1 && waveCapScratch &&
+                          (typeof bootWaveGeom !== 'undefined') && bootWaveGeom < 0.999;
+  if (_bootGeomActive) {
+    const prog = Math.max(0, Math.min(1, bootWaveGeom));
     const phase = prog * (waveBootCount - 1);
     const i0 = Math.floor(phase), i1 = Math.min(i0 + 1, waveBootCount - 1), fr = phase - i0;
     const A = waveBootFrames[i0], B = waveBootFrames[i1], S = waveCapScratch, n = S.length;
     for (let i = 0; i < n; i++) S[i] = A[i] + (B[i] - A[i]) * fr;
     gl.bindBuffer(gl.ARRAY_BUFFER, waveCapClipVBO);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, S);
-    waveSeqStartT = 0; // reset the steady loop clock so it restarts cleanly at handoff
+    waveSeqStartT = 0; // hold the steady clock until the boot geometry has settled
   } else if (waveSeqReady && waveSeqCount > 1 && waveCapScratch) {
-    // STEADY: oscillate slowly + GRACEFULLY through the captured keyframes using a
-    // COSINE ease (velocity is zero at both turnarounds, so the wave eases in/out
-    // of the reversal instead of snapping direction). Period is long so the silk
-    // drifts gently, matching the real XMB's slow hypnotic flow -- a fast linear
-    // ping-pong read as wild back-and-forth motion.
+    // STEADY: play the captured keyframes FORWARD at a slow constant rate (gentle
+    // one-directional silk flow, like the real XMB) and CROSSFADE the loop seam
+    // (the capture's end and start don't bit-match) back into the start over the
+    // last few keyframes -- so the motion is continuous with NO snap and NO
+    // zero-velocity freeze (a cosine ping-pong froze right at the boot hand-in,
+    // because it starts at a turnaround; a fast linear ping-pong snapped). The
+    // wave starts at keyframe 0 moving -- which ~= the boot's settled keyframe, so
+    // the hand-in from the boot wave is seamless.
     if (!waveSeqStartT) waveSeqStartT = performance.now();
-    const periodS = (window._waveSeqPeriod != null) ? window._waveSeqPeriod : 28.0; // full back-and-forth seconds (slow, graceful)
-    const u = ((performance.now() - waveSeqStartT) / 1000) / periodS;
-    const phase01 = 0.5 * (1.0 - Math.cos(2.0 * Math.PI * u)); // smooth 0..1..0
-    const phase = phase01 * (waveSeqCount - 1);
-    const i0 = Math.floor(phase), i1 = Math.min(i0 + 1, waveSeqCount - 1), fr = phase - i0;
-    const A = waveSeqFrames[i0], B = waveSeqFrames[i1], S = waveCapScratch, n = S.length;
-    for (let i = 0; i < n; i++) S[i] = A[i] + (B[i] - A[i]) * fr;
+    const kfps = (window._waveSeqFps != null) ? window._waveSeqFps : 5.0; // keyframes/sec (slow)
+    const count = waveSeqCount, S = waveCapScratch, n = S.length;
+    const XF = 8;                       // crossfade length (keyframes) at the seam
+    const span = count - 1;             // playhead range [0, span)
+    let p = (((performance.now() - waveSeqStartT) / 1000) * kfps) % span;
+    if (p < 0) p += span;
+    const i0 = Math.floor(p), i1 = Math.min(i0 + 1, span), fr = p - i0;
+    const A = waveSeqFrames[i0], B = waveSeqFrames[i1];
+    const w = (p > span - XF) ? (p - (span - XF)) / XF : 0.0; // 0..1 near loop end
+    if (w > 0.0001) {
+      // blend the forward sample toward the START frame to hide the loop seam
+      const C0 = waveSeqFrames[0], C1 = waveSeqFrames[1];
+      const sfr = w * (XF / span) * 0.0; // start essentially at frame 0
+      for (let i = 0; i < n; i++) {
+        const main = A[i] + (B[i] - A[i]) * fr;
+        const start = C0[i] + (C1[i] - C0[i]) * sfr;
+        S[i] = main * (1.0 - w) + start * w;
+      }
+    } else {
+      for (let i = 0; i < n; i++) S[i] = A[i] + (B[i] - A[i]) * fr;
+    }
     gl.bindBuffer(gl.ARRAY_BUFFER, waveCapClipVBO);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, S);
   }
@@ -5714,16 +5738,22 @@ function drawBGWebGL(dt) {
   // Captured firmware wave drives BOTH the settled XMB and the BOOT intro (when the
   // boot keyframes wave_boot.bin are loaded). Falls back to silkWave only if the
   // boot keyframes aren't ready yet.
-  var _waveCapOn = (window.WAVE_CAP !== false) && waveCapReady &&
-                   (!bootWaveActive || waveBootReady);
+  var _capEnabled = (window.WAVE_CAP !== false) && waveCapReady;
+  // The captured firmware wave renders when its data is ready: steady needs the
+  // loop (always ready with wave_geo), boot needs the boot keyframes.
+  var _capRenders = _capEnabled && (!bootWaveActive || waveBootReady);
+  // silkWave is ONLY a fallback for the STEADY XMB when the captured wave is
+  // unavailable -- it must NEVER show during the boot intro (the legacy ribbon was
+  // flashing on early boot frames before the captured assets finished loading).
+  var _silkOn = !_capEnabled && !bootWaveActive;
   var _silkFade = bootWaveActive ? bootWaveBrightness : waveAlpha;
   gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uWaveFade'),
-               _waveCapOn ? 0.0 : _silkFade);
+               _silkOn ? _silkFade : 0.0);
 
   drawQuad(bgShaderProgram);
 
   // === PASS 1a: firmware-exact captured wave (additive) into sceneFBO ===
-  if (_waveCapOn) drawCapturedWave(_silkFade);
+  if (_capRenders) drawCapturedWave(_silkFade);
 
   // === PASS 1b: Wave silk surface drawn into sceneFBO ===
   // 3D MESH approach matching PlayStation-3-XMB reference:
@@ -8860,6 +8890,10 @@ let bootGradientBrightness = 1.0;
 let bootWaveActive = false;
 let bootWaveBrightness = 1.0;
 let bootWavePerturb = 1.0;
+// Boot wave GEOMETRY progress (0..1): drives the captured boot keyframes
+// (streak->swell->settled) SLOWLY across the logo phase. Separate from
+// bootWaveBrightness (which settles at 2600ms -- too fast for the geometry).
+let bootWaveGeom = 1.0;
 //   bootWaveYOffset        : NDC vertical shift of the whole wave. Negative
 //                            pushes the crest DOWN (low coldboot1 position);
 //                            0 = steady high XMB crest. Raised over the
@@ -9173,6 +9207,7 @@ function drawBootIntro(now) {
     bootWaveActive = false;
     bootWaveBrightness = 1.0;
     bootWavePerturb = 1.0;
+    bootWaveGeom = 1.0;
     bootWaveYOffset = 0.0;
     bootRadial = 0.0;   // clear the boot center-out exposure boost at hand-off
     bootBgActive = false;   // release the dark-gradient override to steady XMB
@@ -9337,6 +9372,11 @@ function drawBootIntro(now) {
   // WAVE alpha (uFade gate). The thin silvery ribbon emerges early on the black
   // scene and stays present throughout. It is the same steady mesh ribbon.
   bootWaveBrightness = smooth(bootRamp(elapsed, BOOT_WAVE_EMERGE_MS, 2600));
+  // GEOMETRY progress: evolve the captured boot keyframes (streak->swell->settled)
+  // SLOWLY across the logo phase (emerge ~800ms -> settled ~6800ms) to match
+  // real.mp4's gentle swell -- the brightness ramp above settles far too fast for
+  // the geometry. Once settled the steady wave loop flows on continuously.
+  bootWaveGeom = smooth(bootRamp(elapsed, BOOT_WAVE_EMERGE_MS, 6800));
 
   // Perturbation: flat/calm AND blurred during the warning (coldboot1: flat,
   // no ripple, dim), then the wave SWELLS/sharpens to the full rippling steady
