@@ -6358,7 +6358,12 @@ function drawXMB(now) {
   }
 
   // === DRAW ITEMS with submenu slide animation ===
-  const SLIDE_DIST = 400; // pixels for slide left/right
+  // The parent list travels EXACTLY from the item-icon column to the collapsed
+  // parent column (ITEM_ICON_X 566 -> PARENT_COL_X 316 = 250px), so the slide
+  // LANDS on the settled parent-column position with no snap-back. The old fixed
+  // 400px overshot past the settled position then snapped, which read as a jerky,
+  // non-1:1 motion. Children fade in at the item column over the same distance.
+  const SLIDE_DIST = V.ITEM_ICON_X - V.PARENT_COL_X; // = 250px (exact parent travel)
 
   if (submenuAnim && slideProgress !== null) {
     const p = slideProgress;
