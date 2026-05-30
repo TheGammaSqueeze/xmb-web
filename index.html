@@ -4501,12 +4501,14 @@ attribute vec3 aNormal;   // object-space normal (lighting)
 attribute vec2 aUV;       // [0,1]^2 over the grid
 uniform float uYFlip;     // PS3 clip-space -> WebGL clip-space Y sign
 uniform float uScaleY;    // small vertical fit factor if needed (1.0 default)
+uniform vec2 uOffset;     // clip-space nudge (px-scaled) for multi-pass strand thickening
 varying vec3 vNdc;
 varying vec3 vNrm;
 varying vec2 vUV;
 void main(){
   vec4 p = aClip;
   p.y *= uYFlip * uScaleY;
+  p.xy += uOffset * p.w;   // multiply by w so the nudge is constant in screen px
   gl_Position = p;
   vNdc = p.xyz / p.w;
   vNrm = aNormal;
@@ -4559,6 +4561,7 @@ void main(){
 }`;
 let waveCapProgram = null;
 let waveCapClipVBO = null, waveCapAttrVBO = null, waveCapIBO = null, waveCapIndexCount = 0, waveCapReady = false;
+let waveCapLineIBO = null, waveCapLineCount = 0;
 const WAVE_GRID_N = 128;
 const WAVE_NV = WAVE_GRID_N * WAVE_GRID_N; // 16384
 // Animation sequence (wave_seq.bin): keyframes of the SPU-baked clip positions,
@@ -4590,6 +4593,17 @@ function buildWaveCapIndices() {
   }
   return idx;
 }
+// Firmware "lines" topology: each grid ROW (fixed r, c sweeps) is one horizontal
+// flowing silk strand across the screen (columns map to screen X). Drawing the
+// rows as GL_LINES gives the real wave's many overlapping smooth strands instead
+// of a filled triangle sheet that facets into teeth where it foreshortens.
+function buildWaveCapLineIndices() {
+  const N = WAVE_GRID_N, idx = [];
+  for (let r = 0; r < N; r++) {
+    for (let c = 0; c < N - 1; c++) { idx.push(r * N + c); idx.push(r * N + c + 1); }
+  }
+  return idx;
+}
 function loadWaveCapGeo() {
   // Static geometry: normals + uv (lighting, unchanged per frame) + the index
   // buffer + an initial clip buffer (frame 0 from wave_geo.bin).
@@ -4611,6 +4625,11 @@ function loadWaveCapGeo() {
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waveCapIBO);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(idx), gl.STATIC_DRAW);
     waveCapIndexCount = idx.length;
+    const lidx = buildWaveCapLineIndices();
+    waveCapLineIBO = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waveCapLineIBO);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(lidx), gl.STATIC_DRAW);
+    waveCapLineCount = lidx.length;
     waveCapScratch = new Float32Array(WAVE_NV * 4);
     waveCapReady = true;
     console.log('wave_geo.bin loaded:', WAVE_NV, 'verts,', idx.length, 'indices');
@@ -4755,11 +4774,34 @@ function drawCapturedWave(fade) {
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uYFlip'), (window._waveYFlip != null) ? window._waveYFlip : 1.0);
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uScaleY'), (window._waveScaleY != null) ? window._waveScaleY : 1.0);
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uFade'), fade);
-  gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uAlpha'), (window._waveAlpha2 != null) ? window._waveAlpha2 : 0.10);
+  gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uAlpha'), (window._waveAlpha2 != null) ? window._waveAlpha2 : 0.18);
   gl.uniform3fv(gl.getUniformLocation(waveCapProgram, 'uTint'), new Float32Array((window._waveTint) || [0.96, 0.97, 1.00]));
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uSilk'), (window._waveSilk != null) ? window._waveSilk : 1.0);
-  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waveCapIBO);
-  gl.drawElements(gl.TRIANGLE_STRIP, waveCapIndexCount, gl.UNSIGNED_INT, 0);
+  const offLoc = gl.getUniformLocation(waveCapProgram, 'uOffset');
+  if (window._waveLines !== false && waveCapLineIBO) {
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waveCapLineIBO);
+    // Multi-pass strand thickening: 1px GL_LINES get sparse/wireframe at high
+    // resolution (the rows spread apart). Redraw the strands a few times nudged
+    // vertically by sub-pixel amounts (constant in screen px via the *w in the
+    // VS) so adjacent strands overlap and merge into continuous silk at any
+    // resolution. The vertical pixel pitch of the 128 rows sets the spread.
+    const h = (gl.drawingBufferHeight || 1080);
+    const ndcPerPx = 2.0 / h;
+    const passes = (window._waveLinePasses != null) ? window._waveLinePasses : 7;
+    const spreadPx = (window._waveLineSpreadPx != null) ? window._waveLineSpreadPx : (h / 200.0);
+    // alpha is split across passes so total brightness stays stable.
+    gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uAlpha'),
+      ((window._waveAlpha2 != null) ? window._waveAlpha2 : 0.18) * (2.6 / passes));
+    for (let i = 0; i < passes; i++) {
+      const t = passes > 1 ? (i / (passes - 1) - 0.5) : 0.0; // -0.5..0.5
+      gl.uniform2f(offLoc, 0.0, t * spreadPx * ndcPerPx);
+      gl.drawElements(gl.LINES, waveCapLineCount, gl.UNSIGNED_INT, 0);
+    }
+  } else {
+    if (offLoc) gl.uniform2f(offLoc, 0.0, 0.0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waveCapIBO);
+    gl.drawElements(gl.TRIANGLE_STRIP, waveCapIndexCount, gl.UNSIGNED_INT, 0);
+  }
 }
 
 // ------ WebGL INIT ------
