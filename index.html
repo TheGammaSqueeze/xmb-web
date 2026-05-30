@@ -4712,6 +4712,18 @@ function loadWaveCapGeo() {
       }
       waveSeqFrames[f] = fr;
     }
+    // FLATTEN the undulation amplitude. Some captured phases curl up strongly on
+    // the right; the real XMB wave (waves.mp4/boot.mp4) has a gentler, flatter
+    // range of motion. Scale each vertex's per-frame Y deviation from its
+    // temporal-mean Y by uFlat so the crest amplitude shrinks toward the rest
+    // pose while the overall shape and X-flow are preserved. (Y is index *4+1.)
+    const flat = (window._waveFlatten != null) ? window._waveFlatten : 0.72;
+    if (flat < 0.999) {
+      const meanY = new Float32Array(NV);
+      for (let f = 0; f < frameCount; f++) { const fr = waveSeqFrames[f]; for (let i = 0; i < NV; i++) meanY[i] += fr[i*4+1]; }
+      for (let i = 0; i < NV; i++) meanY[i] /= frameCount;
+      for (let f = 0; f < frameCount; f++) { const fr = waveSeqFrames[f]; for (let i = 0; i < NV; i++) { const m = meanY[i]; fr[i*4+1] = m + (fr[i*4+1] - m) * flat; } }
+    }
     waveSeqCount = frameCount; waveSeqReady = true;
     console.log('wave_seq2.bin loaded:', frameCount, 'keyframes');
   }).catch(e => console.warn('wave_seq2.bin load failed', e));
@@ -4784,7 +4796,7 @@ function drawCapturedWave(fade) {
     // real XMB, so the nominal real-time rate played far too fast. 2 kf/s gives the
     // slow, gentle, hypnotic drift of the real XMB (full ~42s loop). CONSTANT (no
     // easing) -> perfectly uniform speed. Tunable via window._waveSeqFps.
-    const kfps = (window._waveSeqFps != null) ? window._waveSeqFps : 0.7;
+    const kfps = (window._waveSeqFps != null) ? window._waveSeqFps : 0.8;
     const count = waveSeqCount, S = waveCapScratch, n = S.length;
     const XF = 5;                       // crossfade keyframes at the loop seam
     let p = (window._waveForcePhase != null) ? (window._waveForcePhase % count)
