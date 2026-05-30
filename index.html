@@ -4644,7 +4644,14 @@ function drawCapturedWave(fade) {
   // continuously through the warning and into the XMB (no freeze, no snap; the
   // boot's settled keyframe ~= the steady loop's start, so the hand-in is
   // seamless). The steady clock is started at that moment so it picks up smoothly.
-  const _bootGeomActive = (typeof bootWaveActive !== 'undefined' && bootWaveActive) &&
+  // The real XMB wave does NOT do a dramatic streak->ribbon swell during the logo
+  // (verified frame-by-frame vs real.mp4): it keeps a STABLE ribbon shape and just
+  // brightens + gently drifts. So by default the boot uses the SAME slow steady
+  // drift geometry throughout (uniform speed, stable shape) -- only the brightness
+  // fades in (bootWaveBrightness). The captured boot-swell keyframes are kept but
+  // opt-in (window.WAVE_BOOT_SWELL===true) for reference.
+  const _bootGeomActive = (window.WAVE_BOOT_SWELL === true) &&
+                          (typeof bootWaveActive !== 'undefined' && bootWaveActive) &&
                           waveBootReady && waveBootCount > 1 && waveCapScratch &&
                           (typeof bootWaveGeom !== 'undefined') && bootWaveGeom < 0.999;
   if (_bootGeomActive) {
