@@ -6295,12 +6295,13 @@ function drawXMB(now) {
                           y + V.ITEM_DESC_OFFSET + 4, maxWidth, V.ITEM_DESC_SIZE + 4, 3);
         }
 
-        if (items[i].ch) {
-          ctx.globalAlpha = 0.45 * alphaMul;
-          ctx.font = '11px PS3';
-          const tw = ctx.measureText(items[i].n).width;
-          ctx.fillText('>', V.ITEM_TEXT_X + xShift + tw + 14, y - 1);
-        }
+        // NOTE: the real PS3 XMB shows NO '>' chevron after a submenu-parent
+        // item's text (verified against /work/realxmb: the active "Date and Time"
+        // item has only the left-pointing back-arrow before it, no trailing
+        // arrow). Submenu depth is conveyed purely by the column slide. A former
+        // '>' indicator here rendered in the MIDDLE of the name (its width was
+        // measured at the wrong font) and was inauthentic regardless, so it is
+        // removed entirely.
 
         // Submenu item value indicator (e.g. "Off") at far right.
         // Side-panel choosers (Theme/Color/Background) cover the right side of
