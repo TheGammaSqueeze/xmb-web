@@ -937,8 +937,12 @@ const LANDING_TEMPLATES = {
   'Sign Up': {
     title:'Welcome to PlayStation\u00aeNetwork',
     body:'PSN is all about entertainment and interaction.\nEnjoy FREE* online gaming, download amazing new games, game expansion packs for a host of top titles, watch trailers and get your hands on exclusive content, chat with friends, and compare Trophies.\n\nSign up today \u2013 it\'s easy and it\'s FREE!\n\n* Broadband Internet connection required.',
-    hero:'xmb_icon_029',
-    bg:'backgrounds/cinfo-bg-signup.jpg'
+    hero:'xmb_icon_029'
+    // NO bg image: the firmware PSN sign-up / Network screen renders over the
+    // SOLID deep saturated blue #143CAF (0.0784,0.2353,0.6875) field (explore
+    // plugin vaddr 0x271630, back_colours_pipeline.md S6), NOT the desaturated
+    // cinfo-bg-signup.jpg artwork (which measures a washed purple-grey S~0.32).
+    // Omitting bg routes drawLanding to the #143CAF ramp fallback below.
   },
   'PlayStation\u00aeStore': {
     title:'PlayStation\u00aeStore',
@@ -2229,7 +2233,13 @@ vec3 silkWave(vec2 uv, float t) {
   // only RIGHT at the very edges -- on real the ribbon is clearly visible from
   // x~0.05 (high, upper-left) all the way to x~0.95, so keep the taper narrow.
   acc *= smoothstep(0.0, 0.05, uv.x) * smoothstep(0.0, 0.05, 1.0 - uv.x);
-  vec3 silkTint = vec3(0.85, 0.86, 0.96);     // silvery, faintly lavender
+  // Firmware wave ribbon tint c[23] = (0.651, 0.759, 1.000), the pale
+  // cyan-BLUE that the wave blooms additively over the bright neutral top
+  // corners, casting the blue hint at the top of the gradient
+  // (back_colours_pipeline.md S4/S5). B=1.0 is the bluest channel, so the
+  // additive bloom reads cool/blue at the top while the saturated month
+  // hue dominates the lower band. NOT baked into the background.
+  vec3 silkTint = vec3(0.651, 0.759, 1.000);  // c[23] pale cyan-blue
   // Boosted so the silvery ribbon matches real's peak luminance (real ribbon
   // sits ~45-65 above the ~75-110 background; the old 0.22 left it only a few
   // levels above bg). Still thin/wispy/translucent -- no thick band/bloom.
@@ -2489,42 +2499,41 @@ void main() {
   vec3 gradColor = mix(dayColor, nightColor, uNightDayBlend);
   gradColor = mix(gradColor, gradColor * uNightBrightness, uNightDayBlend);
 
-  // EMPIRICAL per-month "Original" gradient. Override the raw-texture gradColor
-  // with the measured per-month hue/sat/value (day<->night already folded into
-  // uMonthBaseColor in JS). The vertical vignette structure (vis, corner
-  // vignette) is applied below for ALL paths; the texture-tuned value-shaping
-  // block is skipped for this path since the value is already correct.
+  // FIRMWARE PIPELINE (back_colours_pipeline.md S2/S7, replaces the measured
+  // single-anchor shortcut of commit 49c2843):
+  //   field = cornerLum(x,y) * lerp(monthTexA, monthTexB, blendW)
+  // gradColor above already IS lerp(monthTexA, monthTexB, uMonthTime) with the
+  // day/night DDS set chosen by uNightDayBlend -- the JS binds the CURRENT
+  // month into tex1 and the NEXT month into tex2, so uMonthTime = (day-1)/
+  // (daysInMonth-1) reproduces the empirical within-month progression
+  // (May green d01 -> desaturated d15 -> June purple d28). The texture carries
+  // the ENTIRE hue + the full vertical chroma profile; we do NOT flatten it to
+  // one anchor. uUseMonthBase is forced to 0 from JS for all non-classic modes
+  // so this is the active path; the flat anchor branch is retained only as a
+  // dead fallback.
   bool useMonthBase = (uUseMonthBase >= 0.5);
   if (useMonthBase) {
     gradColor = uMonthBaseColor;
   }
 
   float screenY = 1.0 - vUV.y;
-  // Vertical brightness envelope. Flatter than before so the TOP of the screen
-  // is not crushed dark: real.mp4 steady (t>=14s) measures top luma ~97,
-  // mid ~93, bottom ~116 -- a bottom/top ratio of only ~1.2, not the ~1.5 the
-  // old 0.60+0.25 envelope produced. Keep a mild bottom lift for the
-  // characteristic lower-screen glow.
-  float vis = 0.80 + 0.135 * screenY;
-  // Horizontal field: real has a soft bright center that falls off gently to
-  // the left and right edges (top center ~104 vs edges ~55-71), with the RIGHT
-  // edge slightly brighter than the LEFT (right LED bias). Model as a gentle
-  // center-weighted curve plus a small right-lean, normalized to 1.0 at center
-  // so the measured center column targets are preserved.
-  {
-    // Hotspot sits RIGHT of center (real right edge brighter than left), so the
-    // LEFT falls off more than the right. Falloff is STRONGER at the top
-    // (center ~97 vs edges ~63) than the bottom (center ~116 vs edges ~106):
-    // k interpolates 1.7 (top) -> 0.55 (bottom).
-    float xc = vUV.x - mix(0.55, 0.62, screenY);
-    float kH = mix(2.05, 0.95, screenY);
-    float hCenter = 1.0 - kH * xc * xc;
-    // Bottom is a left-dark -> right-bright RAMP (real BL ~75, center ~116,
-    // BR ~142), not a symmetric hotspot. Add a linear left->right term that
-    // grows toward the bottom.
-    float hRamp = 1.0 + mix(0.08, 0.46, screenY) * (vUV.x - 0.5);
-    vis *= hCenter * hRamp;
-  }
+
+  // FIRMWARE cornerLum: bilinear interpolation of the 4 BACKGROUND.mnu corner
+  // greys -- TL/TR = (1,1,1) white, BL = (0.8473,0.8462,0.8464),
+  // BR = (0.9249,0.9226,0.9229). This is the VALUE/vignette structure ONLY
+  // (R~=G~=B, never hue); it modulates luminance of the month texture.
+  // back_colours_pipeline.md S2(a)/S7 Layer A. xn=0 left, 1 right; screenY=0
+  // top, 1 bottom.
+  float xn = clamp(vUV.x, 0.0, 1.0);
+  vec3 cTL = vec3(1.0, 1.0, 1.0);
+  vec3 cTR = vec3(1.0, 1.0, 1.0);
+  vec3 cBL = vec3(0.847347, 0.846155, 0.846448);
+  vec3 cBR = vec3(0.924870, 0.922603, 0.922933);
+  vec3 cTop = mix(cTL, cTR, xn);
+  vec3 cBot = mix(cBL, cBR, xn);
+  vec3 cornerLum = mix(cTop, cBot, screenY);
+  // vis kept for the wave headroom multiply lower down (legacy name).
+  float vis = 1.0;
 
   // STEADY "Original" background: the firmware drives this from the CURRENT
   // month's gradient texture (per-month hue: May green, June purple, etc.)
@@ -2544,52 +2553,22 @@ void main() {
   // (default = plum), this luminance-shaping block runs unconditionally -- it sets
   // up the V (luminance) that applyHSVRotation preserves while swapping the hue.
   if (!useMonthBase) {
-    // HDR enrichment: undo the downstream glare/tonemap wash so the per-month
-    // hue reads RICH and SATURATED (May purple vivid, never washed grey),
-    // matching the real PS3's HDR look (real steady gradient HSV S~0.47 vs the
-    // flat web S~0.24). Portable LDR path -- no EXT_float_blend. See enrichHDR.
-    gradColor = enrichHDR(gradColor);
-    // Brightness lift: the raw 64x32 month textures sit ~0.4-0.5 linear and,
-    // after the vis envelope + composite tonemap, land far darker than
-    // real.mp4's steady gradient (center column top luma ~0.61, mid ~0.65, bot
-    // ~0.66 -- bright and fairly flat). Lift toward that target, slightly
-    // stronger toward the (darker) top, preserving the bottom-bright structure
-    // and the day/night dimming carried in gradColor. Boot is unaffected:
-    // uBootBgActive fades this same lifted color up from black, so it stays the
-    // correct fade target with no hand-off pop.
-    // Vertical brightness envelope. MEASURED on the real RPCS3 dump (boot
-    // pre-warning f120-225 AND steady): the gradient is a SOFT purple vignette,
-    // NOT a near-black top with a hard bottom bloom. Normalizing to the
-    // lower-center luminance, real sits at: top-center ~0.90, mid ~0.72,
-    // low-center 1.00 (a gentle dip through the middle that lifts back at the
-    // very top and the bottom). The old mix(0.30,1.45,screenY^1.6) crushed the
-    // top to near-black (web top L~1 vs real ~64-80) and was far too steep.
-    // Replace with a gentle profile (top 0.86, mid ~0.74, bottom 1.18) that the
-    // downstream 'vis' envelope + tonemap land on real's measured ratio while
-    // keeping a mild lower-screen glow. screenY=0 top, screenY=1 bottom.
-    float vEnv = mix(0.86, 1.18, screenY);
-    // Slight mid dip so the brightest band stays low (real mid ~0.72 of low).
-    vEnv *= 1.0 - 0.10 * (1.0 - abs(screenY - 0.42) * 2.0) * step(abs(screenY - 0.42), 0.5);
-    gradColor *= vEnv;
-    // DAYTIME brightness lift: the real day steady gradient (real.mp4) sits at
-    // V ~0.62-0.68 (top..bottom), brighter than the raw web composite (~0.40).
-    // Lift the DAY end only (weighted by 1-uNightDayBlend) so NIGHT -- which
-    // already matches the darker real-night band -- is untouched. Hue/structure
-    // preserved; this is a pure value lift toward the measured real luminance.
-    gradColor *= mix(1.0, 1.55, 1.0 - uNightDayBlend);
-    // TOP-CORNER VIGNETTE. Real darkens the top corners to ~0.57x of the
-    // top-center (topL/topC ~0.57, topR/topC ~0.65). Model a radial darkening
-    // anchored at the top center that bites only near the top edge and the L/R
-    // edges, leaving the lower-center bright.
-    {
-      float dx = (vUV.x - 0.5);                 // -0.5..0.5 horizontal
-      float dyTop = (1.0 - screenY);            // 0 bottom .. 1 top
-      // distance into the top corners: strong when both near top AND near edge
-      float corner = clamp(pow(dyTop, 1.4) * (abs(dx) * 2.0), 0.0, 1.0);
-      // right corner slightly less dark than left (topR brighter than topL)
-      float side = mix(1.0, 0.88, smoothstep(0.0, 0.5, dx));
-      gradColor *= 1.0 - 0.45 * corner * side;
-    }
+    // FIRMWARE field (back_colours0 tail, line 789): R3 = cornerLum * monthTex.
+    // The month texture (gradColor) already carries the FULL vertical chroma
+    // profile (bright desaturated top -> high-chroma dark mid band -> saturated
+    // coloured bottom) and the entire hue; cornerLum modulates luminance only
+    // (white top -> grey bottom corners). NO HSV, NO tint, NO flattening.
+    //
+    // The raw 64x32 DDS sit at low linear values (~0.4-0.5); after the global
+    // tonemap they land far darker than the RPCS3 day captures. Apply a single
+    // exposure (NOT a vertical re-profile -- that would crush the texture's own
+    // structure) to bring the field to the measured day luminance. Lift the DAY
+    // end only (weighted by 1-uNightDayBlend); night already matches the darker
+    // real-night band. Pure VALUE scale -> hue + the texture's per-row
+    // saturation profile are preserved. cornerLum (~0.85-1.0) barely touches
+    // chroma, so this stays as saturated as the texture.
+    float dayLift = mix(1.0, 1.70, 1.0 - uNightDayBlend);
+    gradColor = gradColor * cornerLum * dayLift;
   }
 
   // MONTH-BASE structure: the empirical per-month color already carries the
@@ -2813,15 +2792,21 @@ void main() {
     finalColor = mix(classicTop, classicBot, screenY);
   }
 
-  // Tone mapping from firmware HDR.mnu (EXPOSURE: 1.05, WHITE: 0.899).
-  // The HSV rotation already produces firmware-correct hue, so we no
-  // longer need the position-dependent green/blue rebalance that was
-  // patching the old multiply-tint output. Apply a mild exposure +
-  // Reinhard soft-clip to match the captured RPCS3 luminance range
-  // (back_colours0 ARB lines 738-765 final tone mapping pass).
+  // GLOBAL tonemap (back_colours_pipeline.md S3/S7): the firmware tone-maps
+  // ONCE, globally in the compositor (HDR.mnu EXPOSURE 1.05), AFTER the
+  // additive wave+particles -- NOT per-pixel on the bare gradient. The old
+  // per-pixel Reinhard finalColor/(1+0.30*finalColor) compressed the brighter
+  // (dominant-hue) channel harder than the dim one, COLLAPSING chroma and
+  // washing the month colour to grey. Replace it with a LUMINANCE-ONLY soft
+  // shoulder + exposure: scale value by a Reinhard curve on luma alone and
+  // re-project the chroma about the new luma, so the field stays in range
+  // without desaturating. This is what raises on-screen saturation toward the
+  // RPCS3 captures.
   if (uBgMode != 2) {
-    finalColor *= 1.05;
-    finalColor = finalColor / (1.0 + finalColor * 0.30);
+    finalColor *= 1.05;                                  // HDR.mnu EXPOSURE
+    float lumT = dot(finalColor, vec3(0.299, 0.587, 0.114));
+    float lumO = lumT / (1.0 + lumT * 0.30);             // soft shoulder on luma
+    finalColor = finalColor * (lumT > 1e-4 ? lumO / lumT : 1.0);
   }
 
   // The background gradient is rendered into the HDR scene FBO in LINEAR
@@ -4533,31 +4518,34 @@ function ensureFBOs(w, h) {
 // Load 4 monthly gradient textures for back_colours0 shader
 function loadMonthGradientTextures() {
   if (!gl) return;
-  const now = new Date();
-  // Firmware uses the CURRENT month's gradient discretely (one of the 12
-  // day textures, one of the 12 night). It does NOT cross-fade adjacent
-  // months: blending two opposite hues (e.g. May green -> June purple) in
-  // RGB collapses saturation into a washed grey, which is exactly the
-  // desaturation the old monthTime cross-fade produced. So bind the current
-  // month into BOTH tex1 and tex2 slots; the shader's mix(tex1,tex2,monthTime)
-  // then resolves to the single saturated current-month gradient regardless
-  // of monthTime. Day<->night is blended separately (same month, same hue
-  // family) so it never desaturates.
-  // Firmware indexes the 24 monthly DDS textures by CALENDAR MONTH (1-12). The
-  // texture supplies VALUE/STRUCTURE + day/night ONLY -- the displayed HUE comes
-  // from the theme tint via HSV hue-replacement (default = PLUM), NOT from the
-  // month texture's own colour. So we use the ACTUAL current month (no off-by-one
-  // swap to fake plum). gradient_firmware_logic.md S1c/S2.
+  const now = (typeof window !== 'undefined' && window.PIN_TIME != null)
+    ? new Date(window.PIN_TIME) : new Date();
+  // FIRMWARE PIPELINE (back_colours_pipeline.md S1a/S2): back_colours0 samples
+  // TWO month textures -- TEX2 = current month (A), TEX3 = NEXT month (B) -- and
+  // RGB-crossfades them by the within-month date weight blendW. The crossfade is
+  // firmware-correct: near a month boundary it DESATURATES (e.g. May green ->
+  // June purple at mid-month reads desaturated teal), exactly matching the RPCS3
+  // per-date captures (m05_d01 green H119 -> m05_d15 teal -> m05_d28 purple).
+  //
+  // Texture index mapping (verified against permonth_date/frames d01 hues vs the
+  // 24 month_bg DDS): calendar month M (1-12, where d01 == pure current-month
+  // texture) maps to DAY texture index ((M+10) % 12) + 1 (so M=5 May -> tex04
+  // green, M=6 June -> tex05 purple, M=1 Jan -> tex12 grey). NIGHT set = +12.
   const month = (window._monthOverride != null) ? window._monthOverride : now.getMonth(); // 0-11
-  const texMonth = month + 1; // 1..12, current calendar month
-  const dayIdx = texMonth.toString().padStart(2, '0');
-  const nightIdx = (texMonth + 12).toString().padStart(2, '0');
+  const calMonth = month + 1;                       // 1..12
+  const curDay = (((calMonth + 10) % 12) + 1);      // current-month DAY texture index
+  const nxtDay = (((calMonth + 11) % 12) + 1);      // next-month DAY texture index (wraps)
+  const pad = (n) => n.toString().padStart(2, '0');
+  const curDayIdx = pad(curDay);
+  const nxtDayIdx = pad(nxtDay);
+  const curNightIdx = pad(curDay + 12);
+  const nxtNightIdx = pad(nxtDay + 12);
 
   const mgt = window._monthGradTextures;
-  mgt.tex1Day = loadTexture('month_bg_' + dayIdx + '.png', gl.CLAMP_TO_EDGE, gl.LINEAR);
-  mgt.tex2Day = loadTexture('month_bg_' + dayIdx + '.png', gl.CLAMP_TO_EDGE, gl.LINEAR);
-  mgt.tex1Night = loadTexture('month_bg_' + nightIdx + '.png', gl.CLAMP_TO_EDGE, gl.LINEAR);
-  mgt.tex2Night = loadTexture('month_bg_' + nightIdx + '.png', gl.CLAMP_TO_EDGE, gl.LINEAR);
+  mgt.tex1Day = loadTexture('month_bg_' + curDayIdx + '.png', gl.CLAMP_TO_EDGE, gl.LINEAR);   // A: current
+  mgt.tex2Day = loadTexture('month_bg_' + nxtDayIdx + '.png', gl.CLAMP_TO_EDGE, gl.LINEAR);   // B: next
+  mgt.tex1Night = loadTexture('month_bg_' + curNightIdx + '.png', gl.CLAMP_TO_EDGE, gl.LINEAR);
+  mgt.tex2Night = loadTexture('month_bg_' + nxtNightIdx + '.png', gl.CLAMP_TO_EDGE, gl.LINEAR);
   mgt.loaded = true;
 }
 
@@ -5264,7 +5252,12 @@ function drawBGWebGL(dt) {
     ? new Date(window.PIN_TIME) : new Date();
   var dayTime = nowDate.getHours() + nowDate.getMinutes() / 60.0 + nowDate.getSeconds() / 3600.0;
   var daysInCurMonth = new Date(nowDate.getFullYear(), nowDate.getMonth() + 1, 0).getDate();
-  var monthTime = nowDate.getDate() / daysInCurMonth;
+  // FIRMWARE within-month crossfade weight blendW = (day-1)/(daysInMonth-1):
+  // d01 -> pure current-month texture (A), last day -> pure next-month texture
+  // (B). This is the same weight back_colours0 feeds mix(TEX2, TEX3) and
+  // reproduces the empirical d01/d15/d28 progression. (back_colours_pipeline.md
+  // S1c/S2, replaces the old day/daysInMonth that never reached pure A or B.)
+  var monthTime = (nowDate.getDate() - 1) / Math.max(1, (daysInCurMonth - 1));
   var nightDayBlend = computeNightDayBlend(dayTime);
   // Publish for the HDR steady params + wave emission gain (day/night aware).
   currentNightDayBlend = nightDayBlend;
@@ -5342,8 +5335,13 @@ function drawBGWebGL(dt) {
   // last day -> pure month M+1. (Distinct from the texture-blend monthTime above.)
   var _colorMonthTime = (nowDate.getDate() - 1) / Math.max(1, (daysInCurMonth - 1));
   var _monthBase = monthBaseColor(_mbMonth, nightDayBlend, _colorMonthTime);
-  gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uUseMonthBase'),
-               bgModeNum === 2 ? 0.0 : 1.0);
+  // FIRMWARE PIPELINE: drive the steady background from the REAL crossfaded month
+  // textures (cornerLum * lerp(texA,texB,blendW)), NOT the flat single-anchor
+  // uMonthBaseColor of commit 49c2843. uUseMonthBase is forced OFF for every
+  // non-classic mode so the texture path (which carries the full vertical chroma
+  // profile + within-month crossfade) is always active. The anchor branch
+  // remains only as a dead fallback. (back_colours_pipeline.md S7 Layer A.)
+  gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uUseMonthBase'), 0.0);
   gl.uniform3fv(gl.getUniformLocation(bgShaderProgram, 'uMonthBaseColor'),
                 new Float32Array(_monthBase));
 
@@ -7684,10 +7682,20 @@ function drawLanding(ctx2) {
     }
   }
   if (!bgPainted) {
+    // PSN / Network sign-up blue: firmware explore-plugin constant
+    // #143CAF = (0.0784, 0.2353, 0.6875) at vaddr 0x271630
+    // (back_colours_pipeline.md S6). Deep, fully saturated blue applied
+    // DIRECTLY with only the dialog's vertical brightness ramp
+    // (top x0.20 -> bottom x1.10). Do NOT lighten or desaturate it.
+    const PB = [0.0784, 0.2353, 0.6875]; // #143CAF
+    const ramp = (k) => 'rgb(' +
+      Math.round(Math.min(255, PB[0] * 255 * k)) + ',' +
+      Math.round(Math.min(255, PB[1] * 255 * k)) + ',' +
+      Math.round(Math.min(255, PB[2] * 255 * k)) + ')';
     const bg = ctx2.createLinearGradient(0, 0, 0, V.H);
-    bg.addColorStop(0, '#1a3a8e');
-    bg.addColorStop(0.55, '#0d2455');
-    bg.addColorStop(1, '#06122c');
+    bg.addColorStop(0, ramp(0.20));   // top  x0.20
+    bg.addColorStop(0.55, ramp(0.70));
+    bg.addColorStop(1, ramp(1.10));   // bottom x1.10 (deep saturated #143CAF)
     ctx2.fillStyle = bg;
     ctx2.fillRect(0, 0, V.W, V.H);
   }
