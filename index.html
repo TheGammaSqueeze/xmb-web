@@ -1322,6 +1322,18 @@ let dialogState = null;
 // in) until the animation completes, then it is cleared.
 let dialogClosing = null;
 
+// All FULLSCREEN settings dialogs (System Update and every menu/submenu like it)
+// share the System Update design + transition: the live wave + per-month gradient
+// stay rendering behind, blur-ramp in, the XMB chrome (icon row, clock, Settings
+// column) zoom-fades out, and the dialog cross-fades over ~110ms (reversed on
+// exit). This is the default for any dialog template UNLESS it is a side-panel
+// chooser (Theme/Color/Background, panel:true) -- those keep the XMB sharp and
+// slide a panel in -- or it explicitly opts out with liveWave:false. Centralising
+// the rule here means every fullscreen dialog matches System Update automatically.
+function isLiveWaveDlg(t) {
+  return !!t && t.panel !== true && t.liveWave !== false;
+}
+
 // PSN/landing fullscreen card state - replaces the XMB when set.
 // landingState = {item, template, anim}
 let landingState = null;
@@ -5297,8 +5309,7 @@ function drawBGWebGL(dt) {
   // Some fullscreen dialogs (e.g. System Update) keep the live wave + gradient
   // rendering behind them, only applying a dim vignette overlay. Those must
   // NOT fade the wave out.
-  const dialogLiveWave = fullscreenDialog &&
-                         dialogState.template && dialogState.template.liveWave === true;
+  const dialogLiveWave = fullscreenDialog && isLiveWaveDlg(dialogState.template);
   const modal = (fullscreenDialog && !dialogLiveWave) ||
                 (typeof landingState !== 'undefined' && landingState);
   const classicMode = THEME_OPTIONS[themeIdx].key === 'classic' ||
@@ -7109,7 +7120,7 @@ function drawDialog(ctx2) {
   // darkened to ~(65,44,71)). The foreground chrome (header/options/footer)
   // cross-fades in/out via `ap`.
   // -----------------------------------------------------------------------
-  if (t.liveWave) {
+  if (isLiveWaveDlg(t)) {
     // System Update: the real PS3 keeps the LIVE XMB gradient + wave showing
     // through, but BLURRED and DIMMED (a translucent dark wash, NOT opaque
     // black). Reference frames (xmb-ref/sysupdate/frames_enter, settled):
@@ -7161,7 +7172,7 @@ function drawDialog(ctx2) {
     dialogBlurCtx.fillRect(0, 0, DIALOG_BLUR_W, DIALOG_BLUR_H);
   }
 
-  if (!t.liveWave) {
+  if (!isLiveWaveDlg(t)) {
     // Crossfade: leave the XMB visible (already on the canvas) and fade the
     // blurred backdrop in over it. Once ap reaches 1 the backdrop is fully
     // opaque, so the XMB content underneath no longer affects the result.
@@ -8164,7 +8175,7 @@ function enter() {
       // measured from the RPCS3 capture (4-5 flips @ 60fps). Others keep the
       // 250ms firmware default.
       anim: {start: performance.now(),
-             dur: (tpl.liveWave ? 110 : 250) * (window.XFADE_SLOMO || 1)}
+             dur: (isLiveWaveDlg(tpl) ? 110 : 250) * (window.XFADE_SLOMO || 1)}
     };
     playNav2();
     return;
@@ -8209,7 +8220,7 @@ function back() {
   if (dialogState) {
     // Live-wave dialogs (System Update) animate an exit cross-fade: the dialog
     // fades out while the XMB chrome fades back in over the continuous wave.
-    if (dialogState.template && dialogState.template.liveWave) {
+    if (isLiveWaveDlg(dialogState.template)) {
       dialogClosing = {
         template: dialogState.template,
         sel: dialogState.sel,
@@ -9347,10 +9358,10 @@ function frame(now) {
     // steady wave is always crisp.
     const BACKDROP_BLUR_PX = 9;
     let blurProg = 0;
-    if (dialogState && dialogState.template && dialogState.template.liveWave) {
+    if (dialogState && isLiveWaveDlg(dialogState.template)) {
       const a = dialogState.anim;
       blurProg = a ? Math.min(1, (now - a.start) / a.dur) : 1;
-    } else if (dialogClosing && dialogClosing.template && dialogClosing.template.liveWave) {
+    } else if (dialogClosing && isLiveWaveDlg(dialogClosing.template)) {
       blurProg = 1 - Math.min(1, (now - dialogClosing.start) / dialogClosing.dur);
     }
     if (blurProg > 0.001) {
@@ -9416,8 +9427,8 @@ function frame(now) {
   // chrome fades back in as the dialog fades out. We implement the chrome side
   // of the cross-fade by erasing the just-drawn XMB layer with a fade that
   // tracks the dialog's open progress.
-  const lwDlg = (dialogState && dialogState.template && dialogState.template.liveWave) ||
-                (dialogClosing && dialogClosing.template && dialogClosing.template.liveWave);
+  const lwDlg = (dialogState && isLiveWaveDlg(dialogState.template)) ||
+                (dialogClosing && isLiveWaveDlg(dialogClosing.template));
   if (lwDlg) {
     // chromeGone runs 0->1 on ENTER (chrome present -> fully gone) and 1->0 on
     // EXIT (chrome absent -> fully back). The XMB chrome (icon row, clock,
