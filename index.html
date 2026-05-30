@@ -6038,10 +6038,23 @@ function drawXMB(now) {
   // === DRAW CATEGORY ICONS ===
   // PS3 behavior: in submenu the category bar dims/shifts; only the active
   // category icon stays visible (others hidden), pulled up-left.
-  const catSubShift = inSubmenu ? -V.CAT_SUBMENU_SHIFT_X : 0;
-  const catSubScale = inSubmenu ? V.CAT_SUBMENU_SCALE : 1;
-  const catSubAlpha = inSubmenu ? V.CAT_SUBMENU_ALPHA : 1;
-  const catSubYShift = inSubmenu ? V.CAT_SUBMENU_Y_SHIFT : 0;
+  // Smooth submenu factor subT (0 = full XMB, 1 = settled in submenu), ANIMATED
+  // through the enter/exit slide so the category bar transition matches the real
+  // XMB (verified /work/submenu.mp4): on enter the active category icon glides to
+  // the top-left corner and enlarges while the OTHER category icons fade away; on
+  // exit it reverses. Previously this was an instant boolean (others hard-hidden),
+  // which skipped the whole category animation.
+  let subT;
+  if (submenuAnim) {
+    const sp = (slideProgress != null) ? slideProgress : 0;
+    subT = (submenuAnim.dir === 1) ? sp : (1 - sp);
+  } else {
+    subT = inSubmenu ? 1 : 0;
+  }
+  const catSubShift = -V.CAT_SUBMENU_SHIFT_X * subT;
+  const catSubScale = 1 + (V.CAT_SUBMENU_SCALE - 1) * subT;
+  const catSubAlpha = 1 + (V.CAT_SUBMENU_ALPHA - 1) * subT;
+  const catSubYShift = V.CAT_SUBMENU_Y_SHIFT * subT;
   // Post-warning staged reveal (boot intro). bootLabelReveal/bootIconReveal are
   // 1.0 except during the [BOOT_UI_IN_MS, BOOT_SEQ_END_MS] window, when the
   // category LABEL fades in first, then the icon row CASCADES up. Per-icon
@@ -6051,7 +6064,11 @@ function drawXMB(now) {
   const inBootReveal = bootIconReveal < 0.999 || bootLabelReveal < 0.999;
   for (let i = 0; i < DATA.length; i++) {
     const isActive = (i === ci);
-    if (inSubmenu && !isActive) continue; // hide non-active categories in submenu
+    // Non-active categories FADE OUT as we descend into the submenu (and fade
+    // back in on exit) instead of hard-hiding; the active one stays and moves to
+    // the corner. nonActiveSubFade 1 -> 0 across the enter slide.
+    const nonActiveSubFade = isActive ? 1 : (1 - subT);
+    if (nonActiveSubFade <= 0.002) continue;
 
     const dx = (i - ci) * V.CAT_SPACING + catOffset;
     const baseSz = isActive ? V.CAT_ICON_ACTIVE : V.CAT_ICON_INACTIVE;
@@ -6061,7 +6078,7 @@ function drawXMB(now) {
     // from RPCS3 reference). This creates the proper clearance for the label below.
     // Only applied in the normal XMB state (not submenu, where the active icon is
     // already shifted to its corner position with its own offset semantics).
-    const activeYOffset = (isActive && !inSubmenu) ? V.CAT_Y_ACTIVE_OFFSET : 0;
+    const activeYOffset = isActive ? V.CAT_Y_ACTIVE_OFFSET * (1 - subT) : 0;
     const y = V.CAT_Y + catSubYShift + activeYOffset;
 
     if (x < -120 || x > V.W + 120) continue;
@@ -6071,7 +6088,7 @@ function drawXMB(now) {
     if (isActive) alpha = 1.0;
     else if (catDist <= 2) alpha = V.CAT_INACTIVE_ALPHA;
     else alpha = V.CAT_FAR_ALPHA;
-    alpha *= catSubAlpha;
+    alpha *= catSubAlpha * nonActiveSubFade;
 
     // Boot-reveal cascade: stagger each icon by its distance from the active
     // icon so the active leads and neighbours follow; fade + rise a few px.
@@ -6098,8 +6115,9 @@ function drawXMB(now) {
 
     // Category label - only on active category when NOT in submenu.
     // The label LEADS the icon cascade (bootLabelReveal ramps in first).
-    if (isActive && !inSubmenu) {
-      ctx.globalAlpha = 0.9 * bootLabelReveal;
+    if (isActive && subT < 0.999) {
+      // Category label fades out as we descend into the submenu (1 - subT).
+      ctx.globalAlpha = 0.9 * bootLabelReveal * (1 - subT);
       ctx.fillStyle = 'rgb(225,210,235)';
       ctx.font = '300 ' + V.CAT_LABEL_SIZE + 'px PS3';
       ctx.textAlign = 'center';
@@ -8925,9 +8943,8 @@ function drawBootIntro(now) {
     bootUIReveal = 1.0;
     bootLabelReveal = 1.0;
     bootIconReveal = 1.0;
-    // Clear any residual CSS blur on the background canvases.
-    if (bgCanvas) bgCanvas.style.filter = '';
-    if (waveCanvas) waveCanvas.style.filter = '';
+    // Clear any residual CSS blur + overscan transform on the background canvases.
+    applyBgBlur(0);
     return false;
   }
 
@@ -9307,6 +9324,25 @@ function drawBootIntro(now) {
   return elapsed < BOOT_UI_IN_MS;
 }
 
+// Apply a SEAMLESS background blur to the #bg + #wave canvases. A raw CSS
+// filter:blur darkens the screen EDGES, because the blur kernel samples the
+// transparent area outside the canvas -> a dark border the real XMB does not
+// have (epilepsy warning, System Update, submenus). Compensate by scaling the
+// canvases up so the blurred dark edge is pushed just off-screen, giving a blur
+// that reads seamless to all four edges. px <= 0 clears both filter + transform.
+function applyBgBlur(px) {
+  const f = px > 0.05 ? ('blur(' + px.toFixed(2) + 'px)') : '';
+  // Overscan ~2x the blur radius on each edge; uniform scale keyed to the
+  // shorter half-dimension (1080/2 = 540) so BOTH axes are fully covered.
+  const t = px > 0.05 ? ('scale(' + (1 + (px * 2.0) / 540).toFixed(4) + ')') : '';
+  for (let ci = 0; ci < 2; ci++) {
+    const c = ci === 0 ? bgCanvas : waveCanvas;
+    if (!c) continue;
+    if (c.style.filter !== f) c.style.filter = f;
+    if (c.style.transform !== t) c.style.transform = t;
+  }
+}
+
 function frame(now) {
   if (!lastT) lastT = now;
   const dt = Math.min(now - lastT, 50); // cap delta to avoid jumps
@@ -9326,8 +9362,7 @@ function frame(now) {
       bootBgBlurPx = 0.0;
       // ?noboot never runs drawBootIntro (which clears the canvas filters), so
       // clear any blur here too -- the wave/bg must never be left soft.
-      if (bgCanvas) bgCanvas.style.filter = '';
-      if (waveCanvas) waveCanvas.style.filter = '';
+      applyBgBlur(0);
     }
   } else {
     bootSuppressUI = drawBootIntro(now);
@@ -9342,9 +9377,7 @@ function frame(now) {
   // when the value changes to avoid redundant style recalcs. Cleared to '' at
   // boot-done. drawBootIntro leaves bootBgBlurPx at 0 outside the warning.
   if (!bootIntroDone) {
-    const bf = bootBgBlurPx > 0.05 ? ('blur(' + bootBgBlurPx.toFixed(2) + 'px)') : '';
-    if (bgCanvas.style.filter !== bf) bgCanvas.style.filter = bf;
-    if (waveCanvas && waveCanvas.style.filter !== bf) waveCanvas.style.filter = bf;
+    applyBgBlur(bootBgBlurPx > 0.05 ? bootBgBlurPx : 0);
   } else {
     // SYSTEM UPDATE (live-wave dialog) BACKDROP BLUR.
     // The real PS3 blurs the WHOLE live gradient + wave behind the System
@@ -9382,17 +9415,9 @@ function frame(now) {
       }
       blurProg = Math.max(blurProg, submenuBlur);
     }
-    if (blurProg > 0.001) {
-      const px = (blurProg * BACKDROP_BLUR_PX);
-      const bf = 'blur(' + px.toFixed(2) + 'px)';
-      if (bgCanvas.style.filter !== bf) bgCanvas.style.filter = bf;
-      if (waveCanvas && waveCanvas.style.filter !== bf) waveCanvas.style.filter = bf;
-    } else {
-      // Crisp forever otherwise: no residual blur may survive (timed hand-off,
-      // input skip, ?noboot, or a closed dialog). Idempotent.
-      if (bgCanvas.style.filter) bgCanvas.style.filter = '';
-      if (waveCanvas && waveCanvas.style.filter) waveCanvas.style.filter = '';
-    }
+    // Seamless blur (scales the canvases to hide the CSS-blur dark edge). px=0
+    // clears it. Idempotent, so a closed dialog / exited submenu sharpens fully.
+    applyBgBlur(blurProg > 0.001 ? (blurProg * BACKDROP_BLUR_PX) : 0);
   }
 
   // While the boot intro still owns the screen, render only the wave/gradient
