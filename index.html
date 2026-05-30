@@ -4483,6 +4483,105 @@ void main() {
   gl_FragColor = vec4(color * a, a);
 }`;
 
+// ============================================================================
+// CAPTURED-GEOMETRY WAVE (firmware-exact moyou)
+// ============================================================================
+// The real XMB wave (draw 5) is a 128x128 cloth grid whose FINAL CLIP-SPACE
+// positions are baked by the SPU into vertex attribute 0 each frame; the vertex
+// program is a pure pass-through (gl_Position = ATTR0). We captured one frame's
+// exact clip positions + object normals + UV from the instrumented RPCS3
+// (xmb-ref/wave_capture/) and exported them to wave_geo.bin (16384 verts x 9
+// floats: clip xyzw, normal xyz, uv). We render that EXACT grid as additive
+// triangle strips -- where the warped grid bunches/overlaps (the left "knot")
+// the additive accumulation builds the bright silk, exactly like the firmware.
+const VS_WAVECAP = `
+precision highp float;
+attribute vec4 aClip;     // SPU-baked clip-space position
+attribute vec3 aNormal;   // object-space normal (lighting)
+attribute vec2 aUV;       // [0,1]^2 over the grid
+uniform float uYFlip;     // PS3 clip-space -> WebGL clip-space Y sign
+uniform float uScaleY;    // small vertical fit factor if needed (1.0 default)
+varying vec3 vNdc;
+varying vec3 vNrm;
+varying vec2 vUV;
+void main(){
+  vec4 p = aClip;
+  p.y *= uYFlip * uScaleY;
+  gl_Position = p;
+  vNdc = p.xyz / p.w;
+  vNrm = aNormal;
+  vUV = aUV;
+}`;
+const FS_WAVECAP = `
+#extension GL_OES_standard_derivatives : enable
+precision highp float;
+varying vec3 vNdc;
+varying vec3 vNrm;
+varying vec2 vUV;
+uniform float uFade;
+uniform vec3 uTint;
+uniform float uAlpha;     // per-fragment additive weight (overlap builds brightness)
+void main(){
+  // Cross-ribbon soft profile: fade toward the U edges of the grid so each strip
+  // is a soft filament rather than a hard band; the additive overlap of the many
+  // warped strips produces the silk + the bright bunched knot.
+  float edge = smoothstep(0.0, 0.06, vUV.x) * smoothstep(0.0, 0.06, 1.0 - vUV.x);
+  float a = uAlpha * edge;
+  // Premultiplied additive (blendFunc ONE, ONE): accumulate tint*a.
+  gl_FragColor = vec4(uTint * a * uFade, 1.0);
+}`;
+let waveCapProgram = null;
+let waveCapVBO = null, waveCapIBO = null, waveCapIndexCount = 0, waveCapReady = false;
+const WAVE_GRID_N = 128;
+// Build the 128x128 zig-zag triangle-strip index buffer (firmware topology:
+// strips run down columns 0,128,1,129,... ) with degenerate joins for WebGL1.
+function buildWaveCapIndices() {
+  const N = WAVE_GRID_N, idx = [];
+  for (let c = 0; c < N - 1; c++) {
+    if (c > 0) { idx.push(c + (N - 1) * N); idx.push(c + 1); } // degenerate join (col-major strips)
+    for (let r = 0; r < N; r++) { idx.push(r * N + c + 1); idx.push(r * N + c); }
+  }
+  return idx;
+}
+function loadWaveCapGeo() {
+  fetch('wave_geo.bin?cb=' + Date.now()).then(r => r.arrayBuffer()).then(buf => {
+    const data = new Float32Array(buf); // 16384 * 9
+    waveCapVBO = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, waveCapVBO);
+    gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+    const idx = buildWaveCapIndices();
+    waveCapIBO = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waveCapIBO);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(idx), gl.STATIC_DRAW);
+    waveCapIndexCount = idx.length;
+    waveCapReady = true;
+    console.log('wave_geo.bin loaded:', data.length / 9, 'verts,', idx.length, 'indices');
+  }).catch(e => console.warn('wave_geo.bin load failed', e));
+}
+// Draw the captured firmware wave additively into the currently-bound FBO.
+function drawCapturedWave(fade) {
+  if (!waveCapReady || !waveCapProgram) return;
+  gl.useProgram(waveCapProgram);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE);   // premultiplied additive
+  gl.disable(gl.DEPTH_TEST);
+  gl.bindBuffer(gl.ARRAY_BUFFER, waveCapVBO);
+  const stride = 9 * 4;
+  const aClip = gl.getAttribLocation(waveCapProgram, 'aClip');
+  const aNormal = gl.getAttribLocation(waveCapProgram, 'aNormal');
+  const aUV = gl.getAttribLocation(waveCapProgram, 'aUV');
+  gl.enableVertexAttribArray(aClip); gl.vertexAttribPointer(aClip, 4, gl.FLOAT, false, stride, 0);
+  if (aNormal >= 0) { gl.enableVertexAttribArray(aNormal); gl.vertexAttribPointer(aNormal, 3, gl.FLOAT, false, stride, 16); }
+  if (aUV >= 0) { gl.enableVertexAttribArray(aUV); gl.vertexAttribPointer(aUV, 2, gl.FLOAT, false, stride, 28); }
+  gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uYFlip'), (window._waveYFlip != null) ? window._waveYFlip : 1.0);
+  gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uScaleY'), (window._waveScaleY != null) ? window._waveScaleY : 1.0);
+  gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uFade'), fade);
+  gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uAlpha'), (window._waveAlpha2 != null) ? window._waveAlpha2 : 0.05);
+  gl.uniform3fv(gl.getUniformLocation(waveCapProgram, 'uTint'), new Float32Array((window._waveTint) || [0.96, 0.97, 1.00]));
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waveCapIBO);
+  gl.drawElements(gl.TRIANGLE_STRIP, waveCapIndexCount, gl.UNSIGNED_INT, 0);
+}
+
 // ------ WebGL INIT ------
 
 function compileShader(src, type) {
@@ -5052,6 +5151,8 @@ function initWebGL() {
   brightpassShaderProgram = createShaderProgram(VS_QUAD, FS_BRIGHTPASS);
   addShaderProgram = createShaderProgram(VS_QUAD, FS_ADD);
   waveShaderProgram = createShaderProgram(VS_WAVE, FS_WAVE);
+  waveCapProgram = createShaderProgram(VS_WAVECAP, FS_WAVECAP);
+  gl.getExtension('OES_element_index_uint');  // 32-bit indices for the 128x128 wave grid
 
   if (!bgShaderProgram || !particleShaderProgram ||
       !bloomShaderProgram || !compositeShaderProgram ||
@@ -5101,6 +5202,7 @@ function initWebGL() {
   // vertex count down. Resolution: 200x32 segments = ~12800 triangles, plenty
   // of tessellation for smooth silk threads.
   buildWaveMesh(200, 32);
+  loadWaveCapGeo();   // firmware-exact captured wave geometry (wave_geo.bin)
 
   // Spline displacement texture (PS3SplineReverse pipeline output).
   // Filled and uploaded each frame in drawBGWebGL.
@@ -5505,10 +5607,21 @@ function drawBGWebGL(dt) {
                (typeof bootLitScene === 'number') ? bootLitScene : 0.0);
   // Thin silvery screen-space wave presence. Boot rides bootWaveBrightness
   // (emerges early, stays present); steady rides the normal waveAlpha fade.
+  // When the firmware-exact captured wave (WAVE_CAP) is active, silence the
+  // silkWave approximation baked into FS_BG so we don't double-draw.
+  // WAVE_CAP = firmware-exact captured-geometry wave. Currently OPT-IN
+  // (window.WAVE_CAP === true) while it is a single static captured frame; the
+  // animated silkWave stays the default live wave until the captured wave is
+  // driven by a multi-frame ATTR0 sequence (then this becomes the default).
+  var _waveCapOn = (window.WAVE_CAP === true) && waveCapReady;
+  var _silkFade = bootWaveActive ? bootWaveBrightness : waveAlpha;
   gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uWaveFade'),
-               bootWaveActive ? bootWaveBrightness : waveAlpha);
+               _waveCapOn ? 0.0 : _silkFade);
 
   drawQuad(bgShaderProgram);
+
+  // === PASS 1a: firmware-exact captured wave (additive) into sceneFBO ===
+  if (_waveCapOn) drawCapturedWave(_silkFade);
 
   // === PASS 1b: Wave silk surface drawn into sceneFBO ===
   // 3D MESH approach matching PlayStation-3-XMB reference:
