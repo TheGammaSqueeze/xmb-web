@@ -330,18 +330,23 @@ const PLUM_TINT = [0.82, 0.62, 0.90];
 // day->night value ratio (~0.33 mean of Jan/Jun/Sep/Dec) applied to the day V.
 // Months 1..12 (index = month-1).
 const MONTH_GRADIENT = [
-  { h:  51.9, s: 0.293, v: 0.645, nv: 0.252 }, // Jan  gold/olive   (night measured)
-  { h:  68.0, s: 0.524, v: 0.572, nv: 0.200 }, // Feb  green
-  { h:  41.5, s: 0.286, v: 0.569, nv: 0.199 }, // Mar  tan
-  { h:  57.8, s: 0.194, v: 0.369, nv: 0.129 }, // Apr  olive-gray
-  { h: 164.3, s: 0.079, v: 0.293, nv: 0.148 }, // May  teal          (night measured, hue preserved)
-  { h: 195.9, s: 0.372, v: 0.446, nv: 0.169 }, // Jun  blue          (night measured)
-  { h: 194.7, s: 0.699, v: 0.309, nv: 0.108 }, // Jul  deep cyan-blue
-  { h: 272.0, s: 0.474, v: 0.420, nv: 0.147 }, // Aug  violet/indigo
-  { h:  13.1, s: 0.321, v: 0.633, nv: 0.210 }, // Sep  salmon        (night measured)
-  { h:  40.3, s: 0.610, v: 0.479, nv: 0.168 }, // Oct  amber
-  { h:  15.3, s: 0.536, v: 0.499, nv: 0.175 }, // Nov  rust
-  { h:   7.1, s: 0.247, v: 0.659, nv: 0.153 }  // Dec  warm pink-red  (night measured)
+  // s/v re-derived from the REAL per-month captures' colored gradient band
+  // (median of the top-30%-saturation pixels in boot/per_month/<MM>_day.png),
+  // not the lowest-saturation corner -- so each month renders a clearly VISIBLE
+  // color (May teal, not grey). nv keeps each month's measured day->night value
+  // ratio applied to the new day V. Hue sweep preserved (already accurate).
+  { h:  51.9, s: 0.348, v: 0.510, nv: 0.199 }, // Jan  gold/olive
+  { h:  68.0, s: 0.628, v: 0.463, nv: 0.162 }, // Feb  green
+  { h:  41.5, s: 0.326, v: 0.447, nv: 0.156 }, // Mar  tan
+  { h:  57.8, s: 0.274, v: 0.384, nv: 0.134 }, // Apr  olive-gray
+  { h: 164.3, s: 0.226, v: 0.365, nv: 0.184 }, // May  teal
+  { h: 195.9, s: 0.455, v: 0.529, nv: 0.200 }, // Jun  blue
+  { h: 194.7, s: 0.735, v: 0.482, nv: 0.168 }, // Jul  deep cyan-blue
+  { h: 272.0, s: 0.436, v: 0.443, nv: 0.155 }, // Aug  violet/indigo
+  { h:  13.1, s: 0.398, v: 0.490, nv: 0.163 }, // Sep  salmon
+  { h:  40.3, s: 0.694, v: 0.427, nv: 0.150 }, // Oct  amber
+  { h:  15.3, s: 0.611, v: 0.439, nv: 0.154 }, // Nov  rust
+  { h:   7.1, s: 0.336, v: 0.533, nv: 0.124 }  // Dec  warm pink-red
 ];
 
 // HSV (h in deg, s/v in 0..1) -> linear-ish RGB 0..1.
