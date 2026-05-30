@@ -6399,7 +6399,10 @@ function drawXMB(now) {
         const py = parentActiveY + dy;
         if (py < 80 || py > V.H - 40) continue;
         const sz = isActiveParent ? parentIconSz * 1.4 : parentIconSz;
-        const alpha = isActiveParent ? 0.9 : 0.5;
+        // Real XMB keeps the parent siblings visible but heavily faded/transparent
+        // in the background (verified by contrast-boosting the RPCS3 capture, where
+        // the sibling column sits at ~0.25-0.3 opacity vs the bright active cube).
+        const alpha = isActiveParent ? 0.9 : 0.28;
         const pic = getIcon(parentItems[i].i);
         ctx.globalAlpha = alpha;
         if (pic.loaded || pic.normalMapReady) {
@@ -6410,10 +6413,12 @@ function drawXMB(now) {
         }
       }
 
-      // Back arrow next to active parent
-      ctx.globalAlpha = 0.7;
-      ctx.fillStyle = 'rgb(235,235,235)';
-      ctx.font = 'bold 28px PS3';
+      // Back chevron: the real XMB draws a SMALL, soft, semi-transparent gray
+      // left-triangle (verified against the RPCS3 breadcrumb) -- not a large bold
+      // white one. Smaller, lower opacity, non-bold, slightly gray.
+      ctx.globalAlpha = 0.55;
+      ctx.fillStyle = 'rgb(220,220,222)';
+      ctx.font = '21px PS3';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText('\u25C0', parentX + parentIconSz * 0.9, parentActiveY);
