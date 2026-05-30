@@ -359,7 +359,7 @@ const MONTH_GRADIENT = [
   { h: 118.1, s: 0.713, v: 0.277, nv: 0.031 }, // Apr  green (darker)
   { h: 270.7, s: 0.475, v: 0.440, nv: 0.188 }, // May  PURPLE
   { h: 166.5, s: 0.723, v: 0.632, nv: 0.031 }, // Jun  teal / cyan
-  { h: 220.9, s: 0.734, v: 0.330, nv: 0.122 }, // Jul  blue
+  { h: 196.0, s: 0.620, v: 0.585, nv: 0.122 }, // Jul  cyan top (bottom -> MONTH_GRADIENT_BOT)
   { h: 288.0, s: 0.600, v: 0.672, nv: 0.104 }, // Aug  violet / magenta
   { h:  47.6, s: 0.705, v: 0.816, nv: 0.176 }, // Sep  GOLD / amber
   { h:  33.2, s: 0.590, v: 0.314, nv: 0.074 }, // Oct  orange / brown (darker)
@@ -394,6 +394,14 @@ function hsvToRgb(h, s, v) {
 // within a few degrees; HSV hue-lerp does NOT match). A mild mid-fade
 // desaturation pull replicates the small saturation dip the real crossfade of
 // two opposite-hue colors produces at d15 (peak ~18% at monthTime 0.5).
+// Sparse per-month BOTTOM-of-screen anchor overrides. Most months have a
+// vertically-constant hue so the bottom equals the top anchor (MONTH_GRADIENT).
+// July is a genuine vertical gradient in the /work/realxmb video (cyan top H~194
+// -> blue bottom H~225, and the bottom is notably DARKER), which a single anchor
+// cannot represent. Keyed by month index (0=Jan). Fields mirror MONTH_GRADIENT.
+const MONTH_GRADIENT_BOT = {
+  6: { h: 242.0, s: 0.900, v: 0.230, nv: 0.180 }  // Jul  deep blue bottom edge
+};
 // Pre-compensation so the on-screen V (after the shader vertical envelope and the
 // downstream composite tonemap) lands on the video-measured target. Tuned via the
 // /work/realxmb validation harness; keep as a single global so it is easy to fit.
@@ -407,6 +415,14 @@ function monthBaseColor(month, nightBlend, monthTime) {
   // the last/first few days only.
   var m0 = ((month % 12) + 12) % 12;
   var e = MONTH_GRADIENT[m0];
+  var v = e.v * (1 - nightBlend) + e.nv * nightBlend;
+  return hsvToRgb(e.h, e.s, v * MONTH_VALUE_PRECOMP);
+}
+// Bottom-of-screen anchor color. Falls back to the top anchor when the month has
+// no vertical-gradient override (so all months except July are unchanged).
+function monthBaseColorBot(month, nightBlend) {
+  var m0 = ((month % 12) + 12) % 12;
+  var e = MONTH_GRADIENT_BOT[m0] || MONTH_GRADIENT[m0];
   var v = e.v * (1 - nightBlend) + e.nv * nightBlend;
   return hsvToRgb(e.h, e.s, v * MONTH_VALUE_PRECOMP);
 }
@@ -2271,6 +2287,11 @@ uniform sampler2D uWaveProfile;
 // from this color instead of the raw month_bg textures, so May reads teal, Aug
 // violet, Jan gold, etc., matching the empirical captures.
 uniform vec3 uMonthBaseColor;
+// Bottom-of-screen per-month color. For most months this equals uMonthBaseColor
+// (the gradient hue is vertically constant). A few months (July: cyan top -> blue
+// bottom) have a genuine vertical HUE/VALUE gradient the videos show, so the steady
+// background lerps top->bottom between these two anchors by screenY.
+uniform vec3 uMonthBaseColorBot;
 uniform float uUseMonthBase;
 // Theme system uniforms. uBgMode: 0=Original (monthly gradient),
 // 1=Theme (same as Original for this build), 2=Classic (solid PS3 blue).
@@ -2534,7 +2555,12 @@ void main() {
   // dead fallback.
   bool useMonthBase = (uUseMonthBase >= 0.5);
   if (useMonthBase) {
-    gradColor = uMonthBaseColor;
+    // Confine the bottom anchor to the lower edge only: the vertical-gradient
+    // months (July) are DOMINANTLY the top color (cyan) across the screen, with
+    // the deep-blue bottom appearing just below the menu row. A full 0..1 mix
+    // spread the dark color across the whole lower half (wrong); restrict it to
+    // screenY > ~0.7 so most of the screen keeps the top color.
+    gradColor = mix(uMonthBaseColor, uMonthBaseColorBot, smoothstep(0.70, 1.0, 1.0 - vUV.y));
   }
 
   float screenY = 1.0 - vUV.y;
@@ -5422,6 +5448,9 @@ function drawBGWebGL(dt) {
   gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uUseMonthBase'), _useMB);
   gl.uniform3fv(gl.getUniformLocation(bgShaderProgram, 'uMonthBaseColor'),
                 new Float32Array(_monthBase));
+  var _monthBaseBot = monthBaseColorBot(_mbMonth, nightDayBlend);
+  gl.uniform3fv(gl.getUniformLocation(bgShaderProgram, 'uMonthBaseColorBot'),
+                new Float32Array(_monthBaseBot));
 
   // MANUAL COLOR theme: when the user picks a Color other than "Original", the
   // chosen hue REPLACES the per-month hue (same value/structure) on the SETTLED
