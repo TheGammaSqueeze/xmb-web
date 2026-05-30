@@ -6343,21 +6343,12 @@ function drawXMB(now) {
           ctx.fillText(vInactive, V.W - V.ITEM_VALUE_RIGHT_PAD, y);
           ctx.globalAlpha = prevAlpha;
         }
-        // Description crossfade: if this item was the active one before the
-        // current navigation, draw its long description here with fading-out
-        // alpha so it overlaps with the new active's fade-in. Long help text
-        // (>= 20 chars) doesn't normally render on inactive items, so we
-        // explicitly render it only during the fade window.
-        if (isPrevActive && items[i].d && items[i].d.length >= 20 && descOldAlpha > 0.001) {
-          const prevAlpha = ctx.globalAlpha;
-          ctx.fillStyle = 'rgb(245,240,250)';
-          ctx.globalAlpha = 0.7 * alphaMul * descOldAlpha;
-          ctx.font = '300 ' + V.ITEM_DESC_SIZE + 'px PS3';
-          const maxWidth = V.W - (V.ITEM_TEXT_X + xShift) - 200;
-          drawWrappedText(ctx, items[i].d, V.ITEM_TEXT_X + xShift,
-                          y + V.ITEM_DESC_OFFSET + 4, maxWidth, V.ITEM_DESC_SIZE + 4, 3);
-          ctx.globalAlpha = prevAlpha;
-        }
+        // NOTE: the real PS3 XMB anchors the help/description text to the ACTIVE
+        // row only -- it never renders a previous item's description at that
+        // item's scrolled-away position. A former crossfade here drew the prior
+        // active item's description at its (now moving) y, so the subtitle
+        // appeared to linger above/below during navigation. Removed: only the
+        // active item draws its description (fading in at the active row).
       }
 
       ctx.shadowBlur = 0;
