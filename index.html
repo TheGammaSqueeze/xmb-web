@@ -4526,6 +4526,7 @@ uniform float uAlpha;     // per-fragment additive weight (overlap builds bright
 uniform float uSilk;      // silk lighting gain (0 = flat, 1 = full firmware sheen)
 uniform float uSpecW;     // specular weight
 uniform float uSpecExp;   // specular exponent (lower = broader, lower-freq, AA-friendly)
+uniform vec2 uYFade;      // (lo,hi) NDC-y band over which the far/folded sheen fades out
 void main(){
   // === SILK SHEEN (smooth Fresnel rim on a per-fragment derivative normal) ===
   // Key technique: recover the surface normal from the SCREEN-SPACE DERIVATIVES
@@ -4557,13 +4558,24 @@ void main(){
   // is a soft filament rather than a hard band; the additive overlap of the many
   // warped strips produces the silk + the bright bunched knot.
   float edge = smoothstep(0.0, 0.06, vUV.x) * smoothstep(0.0, 0.06, 1.0 - vUV.x);
-  float a = uAlpha * edge * lit;
-  // Premultiplied additive (blendFunc ONE, ONE): accumulate tint*a.
-  gl_FragColor = vec4(uTint * a * uFade, 1.0);
+  // Far-band fade: the captured cloth folds over in its upper/far region, where
+  // additive overlap of the doubled layers reads as hard diagonal slashes the
+  // real XMB does not show (the real wave fades into the distance there). Fade
+  // the sheen out above uYFade.x -> uYFade.y in NDC y so only the smooth front
+  // ribbon remains, matching the real's vertical profile. vNdc.y: +1 top.
+  float yf = 1.0 - smoothstep(uYFade.x, uYFade.y, vNdc.y);
+  float a = uAlpha * edge * lit * yf;
+  // Output (tint, alpha). The draw call picks the blend mode:
+  //   additive   blendFunc(SRC_ALPHA, ONE)                -> accumulates tint*a
+  //   alpha-over blendFunc(SRC_ALPHA, ONE_MINUS_SRC_ALPHA)-> front layer blends
+  //              over back instead of adding, so the cloth's folded overlapping
+  //              layers stop doubling into hard diagonal slashes (the reference
+  //              recreation alpha-blends for exactly this reason).
+  gl_FragColor = vec4(uTint * uFade, clamp(a, 0.0, 1.0));
 }`;
 let waveCapProgram = null;
 let waveCapClipVBO = null, waveCapAttrVBO = null, waveCapIBO = null, waveCapIndexCount = 0, waveCapReady = false;
-let waveCapLineIBO = null, waveCapLineCount = 0;
+let waveCapLineIBO = null, waveCapLineCount = 0, waveCapPrim = 0;
 const WAVE_GRID_N = 128;
 const WAVE_NV = WAVE_GRID_N * WAVE_GRID_N; // 16384
 // Animation sequence (wave_seq.bin): keyframes of the SPU-baked clip positions,
@@ -4592,6 +4604,18 @@ function buildWaveCapIndices() {
   for (let c = 0; c < N - 1; c++) {
     if (c > 0) { idx.push(c + (N - 1) * N); idx.push(c + 1); } // degenerate join (col-major strips)
     for (let r = 0; r < N; r++) { idx.push(r * N + c + 1); idx.push(r * N + c); }
+  }
+  return idx;
+}
+// Clean two-triangles-per-quad index buffer (GL_TRIANGLES, no degenerate strip
+// joins). Strip joins emit long thin diagonal bridge triangles between columns
+// that can show as diagonal slashes where the mesh foreshortens; explicit
+// triangles avoid that entirely.
+function buildWaveCapTriIndices() {
+  const N = WAVE_GRID_N, idx = [];
+  for (let r = 0; r < N - 1; r++) for (let c = 0; c < N - 1; c++) {
+    const a = r*N + c, b = r*N + c + 1, d = (r+1)*N + c, e = (r+1)*N + c + 1;
+    idx.push(a, d, b, b, d, e);
   }
   return idx;
 }
@@ -4652,7 +4676,8 @@ function loadWaveCapGeo() {
     gl.bindBuffer(gl.ARRAY_BUFFER, waveCapAttrVBO); gl.bufferData(gl.ARRAY_BUFFER, attr, gl.STATIC_DRAW);
     waveCapClipVBO = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, waveCapClipVBO); gl.bufferData(gl.ARRAY_BUFFER, clip0, gl.DYNAMIC_DRAW);
-    const idx = buildWaveCapIndices();
+    const idx = (window._waveTris !== false) ? buildWaveCapTriIndices() : buildWaveCapIndices();
+    waveCapPrim = (window._waveTris !== false) ? gl.TRIANGLES : gl.TRIANGLE_STRIP;
     waveCapIBO = gl.createBuffer();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waveCapIBO);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(idx), gl.STATIC_DRAW);
@@ -4793,7 +4818,11 @@ function drawCapturedWave(fade) {
   }
   gl.useProgram(waveCapProgram);
   gl.enable(gl.BLEND);
-  gl.blendFunc(gl.ONE, gl.ONE);   // premultiplied additive
+  if (window._waveAlphaBlend === true) {
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); // alpha-over: no fold doubling
+  } else {
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE);                 // additive (premultiplied via src alpha)
+  }
   gl.disable(gl.DEPTH_TEST);
   const aClip = gl.getAttribLocation(waveCapProgram, 'aClip');
   const aNormal = gl.getAttribLocation(waveCapProgram, 'aNormal');
@@ -4813,6 +4842,9 @@ function drawCapturedWave(fade) {
     (window._waveSpecW != null) ? window._waveSpecW : 0.30);
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uSpecExp'),
     (window._waveSpecExp != null) ? window._waveSpecExp : 44.8563);
+  gl.uniform2f(gl.getUniformLocation(waveCapProgram, 'uYFade'),
+    (window._waveYFadeLo != null) ? window._waveYFadeLo : 10.0,
+    (window._waveYFadeHi != null) ? window._waveYFadeHi : 11.0);
   const offLoc = gl.getUniformLocation(waveCapProgram, 'uOffset');
   if (window._waveLines === true && waveCapLineIBO) {
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waveCapLineIBO);
@@ -4840,7 +4872,7 @@ function drawCapturedWave(fade) {
     gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uAlpha'),
       (window._waveAlpha2 != null) ? window._waveAlpha2 : 0.10);
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waveCapIBO);
-    gl.drawElements(gl.TRIANGLE_STRIP, waveCapIndexCount, gl.UNSIGNED_INT, 0);
+    gl.drawElements(waveCapPrim || gl.TRIANGLES, waveCapIndexCount, gl.UNSIGNED_INT, 0);
   }
 }
 
