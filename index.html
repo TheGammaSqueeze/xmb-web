@@ -329,24 +329,25 @@ const PLUM_TINT = [0.82, 0.62, 0.90];
 // for months without a direct night capture is interpolated from the measured
 // day->night value ratio (~0.33 mean of Jan/Jun/Sep/Dec) applied to the day V.
 // Months 1..12 (index = month-1).
+// EMPIRICAL ground truth from the per-month/date sweep (boot/permonth_date.md).
+// Each entry is the d01 ANCHOR (pure month M), measured in the colored band
+// (L_mid,R_mid,L_lower,R_lower,L_bottom,R_bottom). The firmware crossfades month
+// M -> M+1 across the calendar date (monthTime = day/daysInMonth); the date
+// crossfade is done by RGB-lerping adjacent anchors (see monthBaseColor below).
+// nv = night value (day->night collapses VALUE only; hue/sat preserved).
 const MONTH_GRADIENT = [
-  // s/v re-derived from the REAL per-month captures' colored gradient band
-  // (median of the top-30%-saturation pixels in boot/per_month/<MM>_day.png),
-  // not the lowest-saturation corner -- so each month renders a clearly VISIBLE
-  // color (May teal, not grey). nv keeps each month's measured day->night value
-  // ratio applied to the new day V. Hue sweep preserved (already accurate).
-  { h:  51.9, s: 0.348, v: 0.510, nv: 0.199 }, // Jan  gold/olive
-  { h:  68.0, s: 0.628, v: 0.463, nv: 0.162 }, // Feb  green
-  { h:  41.5, s: 0.326, v: 0.447, nv: 0.156 }, // Mar  tan
-  { h:  57.8, s: 0.274, v: 0.384, nv: 0.134 }, // Apr  olive-gray
-  { h: 164.3, s: 0.226, v: 0.365, nv: 0.184 }, // May  teal
-  { h: 195.9, s: 0.455, v: 0.529, nv: 0.200 }, // Jun  blue
-  { h: 194.7, s: 0.735, v: 0.482, nv: 0.168 }, // Jul  deep cyan-blue
-  { h: 272.0, s: 0.436, v: 0.443, nv: 0.155 }, // Aug  violet/indigo
-  { h:  13.1, s: 0.398, v: 0.490, nv: 0.163 }, // Sep  salmon
-  { h:  40.3, s: 0.694, v: 0.427, nv: 0.150 }, // Oct  amber
-  { h:  15.3, s: 0.611, v: 0.439, nv: 0.154 }, // Nov  rust
-  { h:   7.1, s: 0.336, v: 0.533, nv: 0.124 }  // Dec  warm pink-red
+  { h:   0.0, s: 0.00, v: 0.57, nv: 0.19 }, // Jan  grey base
+  { h:  50.3, s: 0.78, v: 0.59, nv: 0.20 }, // Feb  amber
+  { h:  84.1, s: 0.71, v: 0.51, nv: 0.17 }, // Mar  green
+  { h: 344.3, s: 0.43, v: 0.63, nv: 0.21 }, // Apr  pink
+  { h: 120.0, s: 0.83, v: 0.27, nv: 0.13 }, // May  green
+  { h: 282.9, s: 0.44, v: 0.44, nv: 0.14 }, // Jun  purple
+  { h: 171.8, s: 0.91, v: 0.47, nv: 0.16 }, // Jul  teal
+  { h: 232.9, s: 0.98, v: 0.24, nv: 0.13 }, // Aug  deep blue
+  { h: 292.6, s: 0.54, v: 0.59, nv: 0.20 }, // Sep  magenta
+  { h:  44.6, s: 0.84, v: 0.64, nv: 0.21 }, // Oct  gold
+  { h:  31.9, s: 0.78, v: 0.31, nv: 0.13 }, // Nov  brown
+  { h:   7.5, s: 0.70, v: 0.62, nv: 0.21 }  // Dec  red
 ];
 
 // HSV (h in deg, s/v in 0..1) -> linear-ish RGB 0..1.
@@ -370,17 +371,40 @@ function hsvToRgb(h, s, v) {
 // value blends day->night. This feeds uMonthBaseColor; the shader then applies
 // the vertical vignette/structure on top. The value is normalized so the
 // shader's downstream tonemap lands near the empirical measured V.
-function monthBaseColor(month, nightBlend) {
-  var e = MONTH_GRADIENT[((month % 12) + 12) % 12];
-  var v = e.v * (1 - nightBlend) + e.nv * nightBlend;
-  // Compensate for the downstream Reinhard tonemap (c/(1+0.30c)) + 1.05 exposure
-  // applied to the steady gradient so the on-screen value matches the empirical
-  // measured V. Solve approx: pre = v / (1.05 - 0.30*v).
-  var pre = v / Math.max(0.2, (1.05 - 0.30 * v));
-  // The downstream vis envelope + structure vignette darken the sampled region
-  // ~1.3x below the empirical measured V; pre-lift to land on the measured value.
-  pre *= 1.32;
-  return hsvToRgb(e.h, e.s, pre);
+// monthTime in [0,1] = day-of-month / daysInMonth. The firmware crossfades
+// month M -> month M+1 across the date. We reproduce it by RGB-lerping the two
+// adjacent month anchors (this matches the measured d01/d15/d28 hue+value to
+// within a few degrees; HSV hue-lerp does NOT match). A mild mid-fade
+// desaturation pull replicates the small saturation dip the real crossfade of
+// two opposite-hue colors produces at d15 (peak ~18% at monthTime 0.5).
+function monthBaseColor(month, nightBlend, monthTime) {
+  if (monthTime == null) monthTime = 0.0;
+  var t = Math.max(0.0, Math.min(1.0, monthTime));
+  var m0 = ((month % 12) + 12) % 12;
+  var m1 = (m0 + 1) % 12;
+  var a = MONTH_GRADIENT[m0], b = MONTH_GRADIENT[m1];
+  function lift(e) {
+    var v = e.v * (1 - nightBlend) + e.nv * nightBlend;
+    // Compensate downstream Reinhard tonemap + exposure and the structure
+    // vignette so the on-screen V lands on the empirical measured value.
+    var pre = v / Math.max(0.2, (1.05 - 0.30 * v));
+    pre *= 1.58;
+    return hsvToRgb(e.h, e.s, pre);
+  }
+  var ca = lift(a), cb = lift(b);
+  var rgb = [ca[0] + (cb[0] - ca[0]) * t,
+             ca[1] + (cb[1] - ca[1]) * t,
+             ca[2] + (cb[2] - ca[2]) * t];
+  // Mid-fade desaturation pull toward the band's own luma, matching the real
+  // d15 saturation dip without ever forcing grey.
+  var desat = 0.18 * 4.0 * t * (1.0 - t);
+  if (desat > 0.0) {
+    var luma = 0.30 * rgb[0] + 0.59 * rgb[1] + 0.11 * rgb[2];
+    rgb[0] += (luma - rgb[0]) * desat;
+    rgb[1] += (luma - rgb[1]) * desat;
+    rgb[2] += (luma - rgb[2]) * desat;
+  }
+  return rgb;
 }
 
 const COLOR_OPTIONS = [
@@ -2576,9 +2600,37 @@ void main() {
   // already folded into uMonthBaseColor; night thus collapses brightness with
   // hue preserved (top reads near-black at night because the base value is low).
   if (useMonthBase) {
-    // Vertical envelope: top a touch brighter at center, gentle lower glow.
-    float vEnvM = mix(1.0, 1.05, screenY);
+    // EMPIRICAL vertical structure (boot/permonth_date.md, section B). Measured
+    // normalized V profile, top->bottom (screenY 0=top, 1=bottom): bright top
+    // (~0.96), gently darkening to a DARK BAND centered ~0.78 down (the menu row,
+    // norm V ~0.68), then brightening back to a bright, saturated colored BOTTOM
+    // band (~0.95). The old mix(1.0,1.05,screenY) was nearly flat -- this is the
+    // real dark-mid / colored-bottom structure that the web was missing.
+    // Build it as: bright baseline minus a Gaussian dip at the dark band. The
+    // dark band sits at the menu/icon row (~0.66 down); the COLORED lower band
+    // below it (where L_lower is measured) stays bright and saturated. Dip is
+    // narrow so it does not pull the bright lower band or the bright top down.
+    float dip = exp(-pow((screenY - 0.68) / 0.14, 2.0)); // 1.0 at band, ->0 away
+    float vEnvM = 1.05 - 0.26 * dip;
+    // Soft bright top highlight (real top band is the brightest, norm ~1.0).
+    vEnvM *= 1.0 + 0.05 * smoothstep(0.30, 0.0, screenY);
+    // Mild lift at the very bottom (colored glow band).
+    vEnvM *= 1.0 + 0.06 * smoothstep(0.85, 1.0, screenY);
     gradColor *= vEnvM;
+    // The dark band is also where saturation PEAKS on the real captures (mid-band
+    // S up to ~0.92 vs top ~0.75). Boost chroma in the dark band so it reads as a
+    // rich saturated stripe, not a flat darkening.
+    {
+      float lumM = dot(gradColor, vec3(0.299, 0.587, 0.114));
+      gradColor = lumM + (gradColor - lumM) * (1.0 + 0.22 * dip);
+    }
+    // Horizontal vignette: edges ~12% darker and a touch more saturated than
+    // center (real left edge V~0.49 vs center ~0.59; left darker than right).
+    {
+      float dxm = vUV.x - 0.52;                 // hotspot just right of center
+      float hV = 1.0 - 0.30 * dxm * dxm * (dxm < 0.0 ? 1.6 : 1.0); // left falls more
+      gradColor *= hV;
+    }
     // Bottom-corner darkening (BL 0.847, BR 0.925 relative to bottom-center).
     {
       float dxm = (vUV.x - 0.5);
@@ -2586,12 +2638,13 @@ void main() {
       float sideM = mix(0.847, 0.925, smoothstep(-0.5, 0.5, dxm)); // left darker
       gradColor *= mix(1.0, sideM, botEdge);
     }
-    // Top-corner darkening toward ~1.0 (subtle), keeps the top from blooming.
+    // Top-corner darkening: real top corners drop to ~0.57-0.65x of top-center.
     {
       float dxm = (vUV.x - 0.5);
       float dyTopM = (1.0 - screenY);
-      float cornerM = clamp(pow(dyTopM, 1.4) * (abs(dxm) * 2.0), 0.0, 1.0);
-      gradColor *= 1.0 - 0.20 * cornerM;
+      float cornerM = clamp(pow(dyTopM, 1.5) * (abs(dxm) * 2.0), 0.0, 1.0);
+      float sideC = mix(0.88, 1.0, smoothstep(0.0, 0.5, dxm)); // left corner darker
+      gradColor *= 1.0 - 0.40 * cornerM * sideC;
     }
   }
 
@@ -5283,7 +5336,12 @@ function drawBGWebGL(dt) {
   //    value blended day<->night by the live clock (hue preserved, night dark).
   //  - uUseMonthBase enables this for all non-classic backgrounds.
   var _mbMonth = (window._monthOverride != null) ? window._monthOverride : nowDate.getMonth();
-  var _monthBase = monthBaseColor(_mbMonth, nightDayBlend);
+  // Date crossfade: blend month M -> M+1 across the calendar date by monthTime
+  // (same monthTime the shader uses for the texture blend).
+  // Firmware crossfade param is (day-1)/(daysInMonth-1): d01 -> pure month M,
+  // last day -> pure month M+1. (Distinct from the texture-blend monthTime above.)
+  var _colorMonthTime = (nowDate.getDate() - 1) / Math.max(1, (daysInCurMonth - 1));
+  var _monthBase = monthBaseColor(_mbMonth, nightDayBlend, _colorMonthTime);
   gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uUseMonthBase'),
                bgModeNum === 2 ? 0.0 : 1.0);
   gl.uniform3fv(gl.getUniformLocation(bgShaderProgram, 'uMonthBaseColor'),
