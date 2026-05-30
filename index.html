@@ -9366,6 +9366,22 @@ function frame(now) {
     } else if (dialogClosing && isLiveWaveDlg(dialogClosing.template)) {
       blurProg = 1 - Math.min(1, (now - dialogClosing.start) / dialogClosing.dur);
     }
+    // SUBMENU depth-of-field blur: the real XMB blurs the bg + wave when you
+    // descend into a submenu and sharpens it again on exit (verified in
+    // /work/submenu.mp4). Ramp with the submenu enter/exit animation; hold full
+    // while settled in a submenu. Take the max with any dialog blur so an open
+    // dialog inside a submenu doesn't un-blur the backdrop.
+    {
+      let submenuBlur = 0;
+      const inSub = (typeof stack !== 'undefined') && stack.length > 0;
+      if (submenuAnim) {
+        const sp = Math.min(1, (now - submenuAnim.start) / submenuAnim.dur);
+        submenuBlur = (submenuAnim.dir === 1) ? sp : (1 - sp);
+      } else if (inSub) {
+        submenuBlur = 1;
+      }
+      blurProg = Math.max(blurProg, submenuBlur);
+    }
     if (blurProg > 0.001) {
       const px = (blurProg * BACKDROP_BLUR_PX);
       const bf = 'blur(' + px.toFixed(2) + 'px)';
