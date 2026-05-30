@@ -8945,9 +8945,9 @@ const BOOT_WAVE_EMERGE_MS  = 800;   // thin silvery wave streak starts emerging
 const BOOT_LOGO_IN_START_MS= 2200;  // white "PS3" logo begins LEFT-first reveal (left edge)
 const BOOT_LOGO_FULL_MS    = 4000;  // logo fully revealed/bright (~1.8s L->R sweep; real reaches
                                     //   max brightness ~4.0s, mean logo luma 250 @ 4.0s)
-const BOOT_LOGO_FADE_START_MS = 5450; // logo begins fading as purple bg comes up (real: full
+const BOOT_LOGO_FADE_START_MS = 5800; // logo begins fading as purple bg comes up (real: full
                                       //   until ~5.5s, then a fast drop 5.55->5.70s)
-const BOOT_LOGO_OUT_MS     = 5900;  // logo fully gone (~5.9s, real)
+const BOOT_LOGO_OUT_MS     = 6800;  // logo fully gone (~5.9s, real)
 // LOGO FADE IS UNIFORM (firmware-verified, logo_firmware_forensics.md):
 //   The PS3 logo does NOT do a left-to-right wipe. coldboot.jsx ramps a single
 //   uniform setColor(br,br,br,alpha); the logo mesh is position+UV only (no
@@ -8975,9 +8975,9 @@ const BOOT_WARN_OUT_MS     = 12530;  // warning text gone (real t~12.53s, measur
 // After the warning dismisses the background stays saturated purple and the
 // thin silvery wave SWELLS/sharpens (real t=12.6-17s, wave-only, no XMB icons
 // captured in the clip). The XMB UI then cascades in after the swell settles.
-const BOOT_UI_IN_MS        = 15150;  // XMB UI begins appearing (real: clock/icons pop in at
+const BOOT_UI_IN_MS        = 15900;  // XMB UI begins appearing (real: clock/icons pop in at
                                      //   t~15.15-15.20s, measured by clock-region brightness)
-const BOOT_SEQ_END_MS      = 16100;  // XMB UI settled; bg+wave already steady
+const BOOT_SEQ_END_MS      = 16900;  // XMB UI settled; bg+wave already steady
 
 // Wave vertical crest positions (NDC). The capture shows the crest at y~425/1080
 // during the logo+warning (LOW) rising to y~96/1080 at steady (HIGH). With
@@ -9261,7 +9261,7 @@ function drawBootIntro(now) {
     [5700, 0.647, 0.643],
     [6700, 0.753, 0.750],
     [7700, 0.941, 0.938],
-    [8100, 1.000, 1.000],
+    [8500, 1.000, 1.000],
   ];
   function gradReveal(t, col) {
     if (t <= GRAD_REVEAL[0][0]) return 0.0;
