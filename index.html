@@ -4543,6 +4543,9 @@ let waveCapScratch = null, waveSeqStartT = 0;
 // web's calibrated bootWaveBrightness so the EXACT firmware geometry evolution is
 // time-synced to the (real.mp4-calibrated) boot intro.
 let waveBootFrames = null, waveBootCount = 0, waveBootReady = false;
+// Boot->steady hand-in crossfade: the boot and steady captures are different, so
+// blend the boot's last settled frame into the steady loop over ~0.9s (no snap).
+let waveBootLast = null, waveBootHandoffT = 0;
 // half-float (f16) -> float32
 function f16tof32(h) {
   const s = (h & 0x8000) >> 15, e = (h & 0x7c00) >> 10, f = h & 0x03ff;
@@ -4585,24 +4588,30 @@ function loadWaveCapGeo() {
     waveCapReady = true;
     console.log('wave_geo.bin loaded:', WAVE_NV, 'verts,', idx.length, 'indices');
   }).catch(e => console.warn('wave_geo.bin load failed', e));
-  // Animation keyframe sequence (wave_seq.bin): WSQ1 header (20B) + frameCount x
-  // WAVE_NV x 4 float16 clip positions. Decoded once into Float32 keyframes.
-  fetch('wave_seq.bin?cb=' + Date.now()).then(r => r.arrayBuffer()).then(buf => {
+  // Steady loop (wave_seq2.bin, WSQ2): a long ~7s capture of the real cloth. 24B
+  // header (magic, frameCount, gridN, vertStride=3, format, f32 zwRatio) then
+  // frameCount x WAVE_NV x 3 float16 = clip X,Y,W (Z = W*zwRatio). Decoded once
+  // into Float32 xyzw keyframes. Played FORWARD at real-time with a crossfade loop.
+  fetch('wave_seq2.bin?cb=' + Date.now()).then(r => r.arrayBuffer()).then(buf => {
     const dv = new DataView(buf);
     const magic = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
-    if (magic !== 'WSQ1') { console.warn('wave_seq bad magic', magic); return; }
+    if (magic !== 'WSQ2') { console.warn('wave_seq2 bad magic', magic); return; }
     const frameCount = dv.getUint32(4, true), gridN = dv.getUint32(8, true), vstride = dv.getUint32(12, true);
-    const perFrame = gridN * gridN * vstride;
-    const u16 = new Uint16Array(buf, 20);
+    const zwRatio = dv.getFloat32(20, true);
+    const NV = gridN * gridN;
+    const u16 = new Uint16Array(buf, 24);
     waveSeqFrames = new Array(frameCount);
     for (let f = 0; f < frameCount; f++) {
-      const fr = new Float32Array(perFrame), off = f * perFrame;
-      for (let i = 0; i < perFrame; i++) fr[i] = f16tof32(u16[off + i]);
+      const fr = new Float32Array(NV * 4), off = f * NV * vstride;
+      for (let i = 0; i < NV; i++) {
+        const X = f16tof32(u16[off + i*3]), Y = f16tof32(u16[off + i*3 + 1]), W = f16tof32(u16[off + i*3 + 2]);
+        fr[i*4] = X; fr[i*4+1] = Y; fr[i*4+2] = W * zwRatio; fr[i*4+3] = W;
+      }
       waveSeqFrames[f] = fr;
     }
     waveSeqCount = frameCount; waveSeqReady = true;
-    console.log('wave_seq.bin loaded:', frameCount, 'keyframes');
-  }).catch(e => console.warn('wave_seq.bin load failed', e));
+    console.log('wave_seq2.bin loaded:', frameCount, 'keyframes');
+  }).catch(e => console.warn('wave_seq2.bin load failed', e));
   // Boot wave keyframes (wave_boot.bin, WBT1 = same f16 layout as WSQ1).
   fetch('wave_boot.bin?cb=' + Date.now()).then(r => r.arrayBuffer()).then(buf => {
     const dv = new DataView(buf);
@@ -4646,7 +4655,11 @@ function drawCapturedWave(fade) {
     for (let i = 0; i < n; i++) S[i] = A[i] + (B[i] - A[i]) * fr;
     gl.bindBuffer(gl.ARRAY_BUFFER, waveCapClipVBO);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, S);
-    waveSeqStartT = 0; // hold the steady clock until the boot geometry has settled
+    // Snapshot the (latest) boot frame so the steady branch can crossfade out of it
+    // at the hand-in; reset the steady clock + handoff timer until then.
+    if (!waveBootLast) waveBootLast = new Float32Array(n);
+    waveBootLast.set(S);
+    waveSeqStartT = 0; waveBootHandoffT = 0;
   } else if (waveSeqReady && waveSeqCount > 1 && waveCapScratch) {
     // STEADY: play the captured keyframes FORWARD at a slow constant rate (gentle
     // one-directional silk flow, like the real XMB) and CROSSFADE the loop seam
@@ -4657,26 +4670,38 @@ function drawCapturedWave(fade) {
     // wave starts at keyframe 0 moving -- which ~= the boot's settled keyframe, so
     // the hand-in from the boot wave is seamless.
     if (!waveSeqStartT) waveSeqStartT = performance.now();
-    const kfps = (window._waveSeqFps != null) ? window._waveSeqFps : 5.0; // keyframes/sec (slow)
+    // Speed: the PAUSE+STEP capture advanced the cloth several x faster than the
+    // real XMB, so the nominal real-time rate played far too fast. 2 kf/s gives the
+    // slow, gentle, hypnotic drift of the real XMB (full ~42s loop). CONSTANT (no
+    // easing) -> perfectly uniform speed. Tunable via window._waveSeqFps.
+    const kfps = (window._waveSeqFps != null) ? window._waveSeqFps : 2.0;
     const count = waveSeqCount, S = waveCapScratch, n = S.length;
-    const XF = 8;                       // crossfade length (keyframes) at the seam
-    const span = count - 1;             // playhead range [0, span)
-    let p = (((performance.now() - waveSeqStartT) / 1000) * kfps) % span;
-    if (p < 0) p += span;
-    const i0 = Math.floor(p), i1 = Math.min(i0 + 1, span), fr = p - i0;
+    const XF = 5;                       // crossfade keyframes at the loop seam
+    let p = (((performance.now() - waveSeqStartT) / 1000) * kfps) % count;
+    if (p < 0) p += count;
+    const i0 = Math.floor(p) % count, i1 = (i0 + 1) % count, fr = p - Math.floor(p);
     const A = waveSeqFrames[i0], B = waveSeqFrames[i1];
-    const w = (p > span - XF) ? (p - (span - XF)) / XF : 0.0; // 0..1 near loop end
+    // The SPU cloth never exactly recurs, so blend the last XF keyframes back into
+    // keyframe 0 to hide the loop seam (a gentle ~0.4s crossfade, not a hard snap).
+    const w = (p > count - XF) ? (p - (count - XF)) / XF : 0.0;
     if (w > 0.0001) {
-      // blend the forward sample toward the START frame to hide the loop seam
-      const C0 = waveSeqFrames[0], C1 = waveSeqFrames[1];
-      const sfr = w * (XF / span) * 0.0; // start essentially at frame 0
-      for (let i = 0; i < n; i++) {
-        const main = A[i] + (B[i] - A[i]) * fr;
-        const start = C0[i] + (C1[i] - C0[i]) * sfr;
-        S[i] = main * (1.0 - w) + start * w;
-      }
+      const C = waveSeqFrames[0];
+      for (let i = 0; i < n; i++) { const main = A[i] + (B[i] - A[i]) * fr; S[i] = main * (1.0 - w) + C[i] * w; }
     } else {
       for (let i = 0; i < n; i++) S[i] = A[i] + (B[i] - A[i]) * fr;
+    }
+    // Boot->steady hand-in: blend OUT of the boot's last settled frame into the
+    // steady loop over ~0.9s so the geometry doesn't snap at the handoff (the boot
+    // and steady captures are different phases of the cloth).
+    if (waveBootLast) {
+      if (!waveBootHandoffT) waveBootHandoffT = performance.now();
+      const tw = (performance.now() - waveBootHandoffT) / 900.0;
+      if (tw < 1.0) {
+        const E = (tw < 0 ? 0 : tw); const e = E * E * (3 - 2 * E); // smoothstep
+        for (let i = 0; i < n; i++) S[i] = waveBootLast[i] + (S[i] - waveBootLast[i]) * e;
+      } else {
+        waveBootLast = null; // crossfade complete
+      }
     }
     gl.bindBuffer(gl.ARRAY_BUFFER, waveCapClipVBO);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, S);
@@ -9373,10 +9398,11 @@ function drawBootIntro(now) {
   // scene and stays present throughout. It is the same steady mesh ribbon.
   bootWaveBrightness = smooth(bootRamp(elapsed, BOOT_WAVE_EMERGE_MS, 2600));
   // GEOMETRY progress: evolve the captured boot keyframes (streak->swell->settled)
-  // SLOWLY across the logo phase (emerge ~800ms -> settled ~6800ms) to match
-  // real.mp4's gentle swell -- the brightness ramp above settles far too fast for
-  // the geometry. Once settled the steady wave loop flows on continuously.
-  bootWaveGeom = smooth(bootRamp(elapsed, BOOT_WAVE_EMERGE_MS, 6800));
+  // at CONSTANT velocity (LINEAR, not smoothed -- smoothing made the swell speed up
+  // then slow down). Timing measured from real.mp4: the wave appears ~1.6s and the
+  // geometry settles ~4.2s. Once settled the steady loop flows on continuously at a
+  // matched velocity (no jump). Linear keeps the swell speed uniform.
+  bootWaveGeom = bootRamp(elapsed, 1300, 4200);
 
   // Perturbation: flat/calm AND blurred during the warning (coldboot1: flat,
   // no ripple, dim), then the wave SWELLS/sharpens to the full rippling steady
