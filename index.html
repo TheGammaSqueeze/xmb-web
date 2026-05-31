@@ -10098,16 +10098,24 @@ function drawBootIntro(now) {
   // as "sharper during warning", which is backwards). The blur is re-enabled.
   // ~6.5 px at 1080p reference matches real's warning-phase softness.
   const BOOT_BG_BLUR_MAX = 6.5;          // px at 1080p reference (warning softness)
-  // Blur is held full while the warning is on screen, then ramps to 0 so the
-  // wave is fully CRISP by the moment the warning is gone (BOOT_WARN_OUT_MS) -
-  // real.mp4 shows a sharp steady wave the instant the warning clears. The
-  // sharpen window therefore ENDS at BOOT_WARN_OUT_MS (not +1400 ms after it);
-  // a previous version trailed the sharpen 1400 ms past dismiss, which left the
-  // wave visibly soft after the warning was already gone. The wave SWELL
-  // (bootWavePerturb) still runs on its own post-dismiss window above; only the
-  // blur clears in lockstep with the dismiss.
-  let blurT = smooth(bootRamp(elapsed, BOOT_WARN_IN_MS - 120, BOOT_WARN_IN_MS + 120));
-  blurT *= (1.0 - smooth(bootRamp(elapsed, BOOT_WARN_OUT_MS - 650, BOOT_WARN_OUT_MS)));
+  // The blurred/dimmed background BRACKETS the warning text -- it engages a beat
+  // BEFORE the text (with its drop shadow) cuts in, and releases a beat AFTER the
+  // text is gone -- so the white text never sits over, or vanishes from, a crisp
+  // wave. Measured on boot.mp4: the warning text clears ~300 ms BEFORE the wave
+  // re-sharpens (text gone ~11.35 s, wave crisp ~11.65 s), and the soft
+  // background is already established when the text cuts in. The text itself is a
+  // hard cut at BOOT_WARN_IN/OUT_MS (drawn below); only this background blur
+  // ramps, with the leads/holds below placing it around the text window.
+  const BLUR_IN_LEAD = 250;    // blur fully up this long BEFORE the text cuts in
+  const BLUR_IN_RAMP = 300;    // ...ramping in over this long
+  const BLUR_OUT_HOLD = 120;   // blur holds full this long AFTER the text is gone
+  const BLUR_OUT_RAMP = 220;   // ...then re-sharpens over this long (gone ~+340 ms)
+  let blurT = smooth(bootRamp(elapsed,
+                BOOT_WARN_IN_MS - BLUR_IN_LEAD - BLUR_IN_RAMP,
+                BOOT_WARN_IN_MS - BLUR_IN_LEAD));
+  blurT *= (1.0 - smooth(bootRamp(elapsed,
+                BOOT_WARN_OUT_MS + BLUR_OUT_HOLD,
+                BOOT_WARN_OUT_MS + BLUR_OUT_HOLD + BLUR_OUT_RAMP)));
   bootBgBlurPx = BOOT_BG_BLUR_MAX * blurT * (bootCanvas.height / 1080);
 
   // ---- STAGED XMB UI REVEAL after the warning dismisses ----
