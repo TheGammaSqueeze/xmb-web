@@ -1095,7 +1095,7 @@ const DATA = [
           {n:'Automatic Update',i:'xmb_icon_022',v:'Off',d:'Starts the system automatically and downloads game patches, uploads new saved data to online storage and syncs trophy information with the server.'},
           {n:'System Name',i:'xmb_icon_022',v:'PS3-625'},
           {n:'System Language',i:'xmb_icon_022',v:'English (United Kingdom)'},
-          {n:'Character Set',i:'xmb_icon_022',v:'ISO-8859-1'},
+          {n:'Character Set',i:'xmb_icon_022'},
           {n:'Dictionary Type',i:'xmb_icon_022',v:'English (UK)'},
           {n:'Add/Edit Term',i:'xmb_icon_022',action:'dialog'},
           {n:'Delete Predictive Text Dictionary',i:'xmb_icon_022',action:'dialog',d:'Deletes words that were added automatically to the dictionary when using the on-screen keyboard.'},
@@ -6991,15 +6991,25 @@ function drawXMB(now) {
         }
       }
 
-      // Back chevron: the real XMB draws a SMALL, soft, semi-transparent gray
-      // left-triangle (verified against the RPCS3 breadcrumb) -- not a large bold
-      // white one. Smaller, lower opacity, non-bold, slightly gray.
-      ctx.globalAlpha = 0.55;
-      ctx.fillStyle = 'rgb(220,220,222)';
-      ctx.font = '21px PS3';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('\u25C0', parentX + parentIconSz * 0.9, parentActiveY);
+      // Back chevron breadcrumb: the real XMB draws a SOLID left-pointing
+      // triangle (~30px tall) with a subtle vertical gradient (lighter top,
+      // darker bottom), sitting between the parent column and the active item's
+      // icon -- NOT a font glyph. Measured from RPCS3 1080p capture
+      // sub_system_real_d01.png: tip at x~430, y~508; base edge at x~462
+      // spanning y~493..523 (width ~32px, height ~30px, fill gray ~120..206).
+      const chCy = parentActiveY;
+      const chH = 30, chTipX = XCP(430), chBaseX = XCP(462);
+      const chGrad = ctx.createLinearGradient(0, chCy - chH / 2, 0, chCy + chH / 2);
+      chGrad.addColorStop(0, 'rgb(206,206,208)');
+      chGrad.addColorStop(1, 'rgb(120,120,124)');
+      ctx.globalAlpha = 0.95;
+      ctx.fillStyle = chGrad;
+      ctx.beginPath();
+      ctx.moveTo(chTipX, chCy);
+      ctx.lineTo(chBaseX, chCy - chH / 2);
+      ctx.lineTo(chBaseX, chCy + chH / 2);
+      ctx.closePath();
+      ctx.fill();
       ctx.globalAlpha = 1;
     }
 
