@@ -1681,6 +1681,15 @@ const chromeXfadeCanvas = document.createElement('canvas');
 const chromeXfadeCtx = chromeXfadeCanvas.getContext('2d');
 
 let scale = 1, scaleX = 1, scaleY = 1, dpr = window.devicePixelRatio || 1;
+// Horizontal position-compression for 4:3 (1.0 in 16:9). Compresses element
+// POSITIONS toward the left while element SIZES stay full -- the firmware 4:3
+// re-layout. Apply ONLY to x-position coordinates via XCP(); never to widths.
+let LAYOUT_XC = 1;
+function XCP(x) { return x * LAYOUT_XC; }
+// Compress a position that has a half-size offset baked in (e.g. a centred icon
+// drawn from its top-left): pass the CENTRE and half-width, compress only the
+// centre. Returns the compressed top-left x.
+function XCL(centerX, halfW) { return centerX * LAYOUT_XC - halfW; }
 
 function resize() {
   const vw = window.innerWidth, vh = window.innerHeight;
@@ -1690,15 +1699,18 @@ function resize() {
   if (vw / vh > r) { h = vh; w = h * r; } else { w = vw; h = w / r; }
   scr.style.width = w + 'px';
   scr.style.height = h + 'px';
-  // Scale from virtual 1920x1080 space to display pixels. UNIFORM scale (never
-  // anamorphic) so icons/text/wave keep their true aspect and are NEVER
-  // stretched. In 4:3 this fits the 16:9 layout into the 4:3 frame uniformly.
-  // (A true firmware-accurate 4:3 re-layout -- compressing element POSITIONS
-  // while keeping element SIZES -- is handled separately via LAYOUT_XC below,
-  // not by squashing the pixels.)
-  scale = w / V.W;
+  // UNIFORM scale (never anamorphic) so icons/text/wave keep their true aspect
+  // and are NEVER stretched. Scale fills the HEIGHT (h/V.H); in 16:9 this equals
+  // w/V.W (unchanged). In 4:3 the 16:9-wide layout would overflow the narrower
+  // frame, so we don't squash it -- instead LAYOUT_XC compresses element
+  // POSITIONS (not sizes) so the full-size layout fits the 4:3 frame, exactly
+  // like the real PS3 4:3 re-layout.
+  scale = h / V.H;
   scaleX = scale;
   scaleY = scale;
+  // Horizontal position-compression: 1.0 in 16:9 (no-op), ~0.75 in 4:3. Applied
+  // to x-POSITIONS only (via XCP()), element widths/sizes are left intact.
+  LAYOUT_XC = (w * V.H) / (h * V.W);
   bgCanvas.width = w * dpr;
   bgCanvas.height = h * dpr;
   xmbCanvas.width = w * dpr;
@@ -6603,7 +6615,7 @@ function drawXMB(now) {
       ctx.shadowBlur = 4;
       ctx.shadowOffsetX = 0;
       ctx.shadowOffsetY = 2;
-      drawIconAt(ctx, ic, DATA[i].icon, x - csz / 2, y - csz / 2 + revealRise, csz, csz);
+      drawIconAt(ctx, ic, DATA[i].icon, XCL(x, csz / 2), y - csz / 2 + revealRise, csz, csz);
       ctx.shadowColor = 'transparent';
       ctx.shadowBlur = 0;
       ctx.shadowOffsetY = 0;
@@ -6618,7 +6630,7 @@ function drawXMB(now) {
       ctx.font = '300 ' + V.CAT_LABEL_SIZE + 'px PS3';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
-      ctx.fillText(DATA[i].name, x, V.CAT_LABEL_Y);
+      ctx.fillText(DATA[i].name, XCP(x), V.CAT_LABEL_Y);
     }
   }
 
@@ -6737,7 +6749,7 @@ function drawXMB(now) {
       if (ic.loaded || ic.normalMapReady) {
         // Per-icon visual scale (PSN/PS Store have less transparent padding).
         const ciz = isz * iconScale(items[i].i);
-        const iconX = V.ITEM_ICON_X + xShift - ciz / 2;
+        const iconX = XCL(V.ITEM_ICON_X + xShift, ciz / 2);
         const iconY = y - ciz / 2;
         drawIconAt(ctx, ic, items[i].i, iconX, iconY, ciz, ciz);
       }
@@ -6777,7 +6789,7 @@ function drawXMB(now) {
         ctx.shadowBlur = V.TEXT_GLOW_RADIUS;
         ctx.shadowOffsetX = 0;
         ctx.shadowOffsetY = 0;
-        ctx.fillText(items[i].n, V.ITEM_TEXT_X + xShift, y - 1);
+        ctx.fillText(items[i].n, XCP(V.ITEM_TEXT_X + xShift), y - 1);
         // Pass 2: tighter inner halo (the steep near-text falloff: 89 -> 25
         // over 5 pixels). Same fill, smaller blur radius accumulates close
         // to the strokes without widening the existing outer halo. Both
@@ -6785,7 +6797,7 @@ function drawXMB(now) {
         // computed once per drawItemList call above.
         ctx.shadowColor = glowInnerColor;
         ctx.shadowBlur = V.TEXT_GLOW_INNER_RADIUS;
-        ctx.fillText(items[i].n, V.ITEM_TEXT_X + xShift, y - 1);
+        ctx.fillText(items[i].n, XCP(V.ITEM_TEXT_X + xShift), y - 1);
         // Pass 3: final crisp text on top. By day there is no dark shadow (the
         // white halo provides ample contrast against the dark background and an
         // extra drop shadow would erode it). At night, the bright bloomed wave
@@ -6796,16 +6808,18 @@ function drawXMB(now) {
         ctx.shadowBlur = 4 * nightShadow;
         ctx.shadowOffsetY = nightShadow;
         ctx.fillStyle = 'rgb(255,255,255)';
-        ctx.fillText(items[i].n, V.ITEM_TEXT_X + xShift, y - 1);
+        ctx.fillText(items[i].n, XCP(V.ITEM_TEXT_X + xShift), y - 1);
 
         if (items[i].d) {
           // Fade in over ITEM_DESC_FADE_MS so the new active description
           // doesn't snap-in mid-slide.
           ctx.globalAlpha = 0.7 * alphaMul * descNewAlpha;
           ctx.font = '300 ' + V.ITEM_DESC_SIZE + 'px PS3';
-          // Wrap long descriptions to 2-3 lines within the available width
-          const maxWidth = V.W - (V.ITEM_TEXT_X + xShift) - 200;
-          drawWrappedText(ctx, items[i].d, V.ITEM_TEXT_X + xShift,
+          // Wrap long descriptions within the available width. In 4:3 that width
+          // is compressed (LAYOUT_XC) so the description re-wraps to more lines,
+          // exactly like the real PS3 4:3.
+          const maxWidth = (V.W - (V.ITEM_TEXT_X + xShift) - 200) * LAYOUT_XC;
+          drawWrappedText(ctx, items[i].d, XCP(V.ITEM_TEXT_X + xShift),
                           y + V.ITEM_DESC_OFFSET + 4, maxWidth, V.ITEM_DESC_SIZE + 4, 3);
         }
 
@@ -6828,14 +6842,14 @@ function drawXMB(now) {
           ctx.fillStyle = 'rgb(245,240,250)';
           ctx.font = V.ITEM_TEXT_SIZE + 'px PS3';
           ctx.textAlign = 'right';
-          ctx.fillText(vActive, V.W - V.ITEM_VALUE_RIGHT_PAD, y - 1);
+          ctx.fillText(vActive, XCP(V.W) - V.ITEM_VALUE_RIGHT_PAD, y - 1);
         }
       } else {
         // PS3 inactive items use Rodin Regular weight (matches glyph thickness)
         ctx.font = V.ITEM_TEXT_SIZE + 'px PS3';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillText(items[i].n, V.ITEM_TEXT_X + xShift, y);
+        ctx.fillText(items[i].n, XCP(V.ITEM_TEXT_X + xShift), y);
         // PS3 shows short status descriptions on inactive items (e.g. "8 Images",
         // "*User"), but NOT long help text (e.g. "Adjusts settings for games.").
         // Heuristic: only short status strings (< 20 chars).
@@ -6843,7 +6857,7 @@ function drawXMB(now) {
           const prevAlpha = ctx.globalAlpha;
           ctx.globalAlpha = 0.6 * alpha;
           ctx.font = '300 ' + (V.ITEM_TEXT_SIZE - 8) + 'px PS3';
-          ctx.fillText(items[i].d, V.ITEM_TEXT_X + xShift, y + 22);
+          ctx.fillText(items[i].d, XCP(V.ITEM_TEXT_X + xShift), y + 22);
           ctx.globalAlpha = prevAlpha;
         }
         // Inactive submenu items also show their value (suppressed while a
