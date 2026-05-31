@@ -1772,6 +1772,12 @@ function XCF(x) { return x * LAYOUT_FIT; }
 // vertical letterbox-less fill). In landscape these are 0 and V.H.
 function frameTopV() { return -LAYOUT_VOFF; }
 function frameHV() { return V.H * LAYOUT_VFIT; }
+// Device-space vertical translate that CENTRES the 1080-tall virtual design in
+// the visible frame. Used by fullscreen dialogs / side panels / landing cards so
+// they sit centred for any aspect, orientation or resolution (it is 0 in 16:9
+// and in any frame whose design already fills the height). cy_px = dpr*scaleY*y
+// + frameCenterTY() maps virtual y=540 to the frame's vertical centre.
+function frameCenterTY() { return xmbCanvas.height / 2 - dpr * scaleY * (V.H / 2); }
 // Compress a centred draw's top-left: pass CENTRE and half-width, compress only
 // the centre (keeps the element full size).
 function XCL(centerX, halfW) { return centerX * LAYOUT_XC - LAYOUT_XSHIFT - halfW; }
@@ -7975,9 +7981,11 @@ function drawDialog(ctx2) {
     ctx2.fillRect(0, 0, cw, ch);
   }
 
-  // Restore the virtual-pixel transform used by the rest of the dialog
-  // (matches the value set up in resize()).
-  ctx2.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, 0);
+  // Restore the virtual-pixel transform for the dialog chrome, CENTRED in the
+  // visible frame (frameCenterTY is 0 in 16:9; in portrait / zoomed frames it
+  // shifts the 1080 design so the dialog sits centred instead of stuck at the
+  // top of a tall frame).
+  ctx2.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, frameCenterTY());
   ctx2.globalAlpha = ap;
 
   // ---- Dialog text drop shadow ----
@@ -8384,7 +8392,8 @@ function drawSidePanel(ctx2, ds, ap) {
   grad.addColorStop(0.820, 'rgba(220,217,229,' + (0.22 * ap) + ')');
   grad.addColorStop(1.000, 'rgba(245,244,247,' + (0.00 * ap) + ')');
   ctx2.fillStyle = grad;
-  ctx2.fillRect(SP_PANEL_LEFT + xShift, 0, SP_PANEL_WIDTH, V.H);
+  // Full visible-frame height (portrait frames are taller than the 1080 band).
+  ctx2.fillRect(SP_PANEL_LEFT + xShift, frameTopV(), SP_PANEL_WIDTH, frameHV());
 
   // -----------------------------------------------------------------------
   // 2. Compute visible window. List starts at SP_LIST_TOP_Y and steps down
@@ -8646,6 +8655,11 @@ function drawLanding(ctx2) {
   vig.addColorStop(1, bgPainted ? 'rgba(0,0,0,0.65)' : 'rgba(0,0,0,0.28)');
   ctx2.fillStyle = vig;
   ctx2.fillRect(0, frameTopV(), XCF(V.W), frameHV());
+
+  // The background/vignette above fill the whole frame; the CARD CONTENT (hero,
+  // title, copy, footer) is centred in the visible frame via the same transform
+  // the dialogs use, so it doesn't stick to the top of a tall portrait frame.
+  ctx2.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, frameCenterTY());
 
   // Hero panel on the left: rounded square containing the item icon. If the
   // normal-map icon hasn't finished loading we still draw the placeholder
