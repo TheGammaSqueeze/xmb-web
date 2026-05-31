@@ -13,6 +13,9 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'PS
 #wrap{display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:#000}
 #scr{position:relative;overflow:hidden;background:#000;flex-shrink:0}
 canvas{position:absolute;top:0;left:0;width:100%;height:100%}
+/* Integer-scaled resolution simulation: nearest-neighbour so each native pixel
+   maps to a clean NxN block (no blurry fractional browser resample). */
+#scr.pixelated canvas{image-rendering:pixelated;image-rendering:crisp-edges}
 #bg{z-index:0}
 #wave{z-index:1}
 #xmb{z-index:2}
@@ -1362,7 +1365,7 @@ let simRes = (function () {
       if (RES_PRESETS[q]) wh = RES_PRESETS[q];
       else { const m = q.match(/^(\d+)\s*[x×*]\s*(\d+)$/); if (m) wh = [+m[1], +m[2]]; }
     }
-    if (wh) return { w: wh[0], h: wh[1], dpr: (dprq > 0 ? dprq : 1) };
+    if (wh) return { w: wh[0], h: wh[1], dpr: (dprq > 0 ? dprq : null) };
     if (dprq > 0) return { w: null, h: null, dpr: dprq };
   } catch (e) {}
   return null;
@@ -1785,9 +1788,16 @@ function XCL(centerX, halfW) { return centerX * LAYOUT_XC - LAYOUT_XSHIFT - half
 function resize() {
   // Simulated viewport: ?res forces a specific pixel resolution; otherwise use
   // the real window. ?dpr overrides the device pixel ratio.
+  const realDPR = window.devicePixelRatio || 1;
   const vw = (simRes && simRes.w) ? simRes.w : window.innerWidth;
   const vh = (simRes && simRes.h) ? simRes.h : window.innerHeight;
-  dpr = (simRes && simRes.dpr) ? simRes.dpr : (window.devicePixelRatio || 1);
+  // Render resolution (canvas backing). On real devices we render at the device
+  // pixel ratio so text/icons are pixel-sharp. When simulating a resolution we
+  // render the canvas at the chosen NATIVE pixel size (dpr=1, unless ?dpr
+  // supersamples it) and integer-scale it for display below.
+  dpr = (simRes && simRes.w)
+        ? (simRes.dpr || 1)
+        : (simRes && simRes.dpr ? simRes.dpr : realDPR);
   // Target display aspect ratio (1:1 / 4:3 / 3:2 / 16:9 / 21:9). In portrait the
   // ratio is inverted (e.g. 16:9 -> 9:16) so the frame is taller than wide.
   const baseR = ASPECTS[aspect] || 16 / 9;
@@ -1801,19 +1811,27 @@ function resize() {
   if (vw / vh > r) { h = vh; w = h * r; } else { w = vw; h = w / r; }
   scr.style.width = w + 'px';
   scr.style.height = h + 'px';
-  // When simulating a resolution, the canvas backing store stays at the chosen
-  // native size (so the content is RENDERED at exactly that resolution) and the
-  // whole frame is then scaled to FILL the real window (aspect preserved, up or
-  // down) for display. Browser image smoothing makes the scale a clean bilinear
-  // resample, so a low res reads as a properly anti-aliased low-res image rather
-  // than a tiny 1:1 block, and a high res downscales smoothly. The rendered
-  // pixel count is unchanged by the display scale.
+  // Display scaling for a simulated resolution. The canvas is rendered at the
+  // native size; for display we use the LARGEST INTEGER scale that still fits the
+  // real window, with pill/ letterboxing around it (the black #wrap background),
+  // and nearest-neighbour (pixelated) filtering -- so each native pixel maps to a
+  // clean NxN block instead of the browser's blurry fractional resample. Only
+  // when the native frame is bigger than the window do we fall back to a
+  // fractional fit (you cannot integer-downscale). Recomputed on every resize, so
+  // it stays responsive to viewport changes.
   if (simRes && simRes.w) {
-    const fit = Math.min(window.innerWidth / w, window.innerHeight / h);
+    const kf = Math.min(window.innerWidth / w, window.innerHeight / h);
+    const k = (kf >= 1) ? Math.floor(kf) : kf;       // integer up, fractional down
+    // Nearest-neighbour only for a true-native (dpr=1) integer UPSCALE -- that is
+    // the clean NxN pixel block. When ?dpr supersamples (backing > display) we
+    // want a smooth downscale instead, so leave it off.
+    const integer = (kf >= 1) && dpr === 1;
     scr.style.transformOrigin = 'center center';
-    scr.style.transform = (Math.abs(fit - 1) > 0.001) ? ('scale(' + fit + ')') : '';
+    scr.style.transform = (Math.abs(k - 1) > 0.0001) ? ('scale(' + k + ')') : '';
+    scr.classList.toggle('pixelated', integer);      // crisp nearest-neighbour blocks
   } else {
     scr.style.transform = '';
+    scr.classList.remove('pixelated');
   }
   // UNIFORM scale (never anamorphic) so icons/text/wave keep their true aspect
   // and are NEVER stretched. Scale fills the HEIGHT (h/V.H); in 16:9 this equals
