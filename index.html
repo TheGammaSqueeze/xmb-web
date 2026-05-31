@@ -6815,10 +6815,12 @@ function drawXMB(now) {
           // doesn't snap-in mid-slide.
           ctx.globalAlpha = 0.7 * alphaMul * descNewAlpha;
           ctx.font = '300 ' + V.ITEM_DESC_SIZE + 'px PS3';
-          // Wrap long descriptions within the available width. In 4:3 that width
-          // is compressed (LAYOUT_XC) so the description re-wraps to more lines,
-          // exactly like the real PS3 4:3.
-          const maxWidth = (V.W - (V.ITEM_TEXT_X + xShift) - 200) * LAYOUT_XC;
+          // Wrap long descriptions within the available width. In 4:3 the usable
+          // width is the left ~55% of the frame (before the chooser panel / value
+          // column), so the description re-wraps to more lines like the real.
+          const maxWidth = (LAYOUT_XC < 0.999)
+            ? (XCP(V.W) * 0.55 - XCP(V.ITEM_TEXT_X + xShift))
+            : (V.W - (V.ITEM_TEXT_X + xShift) - 200);
           drawWrappedText(ctx, items[i].d, XCP(V.ITEM_TEXT_X + xShift),
                           y + V.ITEM_DESC_OFFSET + 4, maxWidth, V.ITEM_DESC_SIZE + 4, 3);
         }
@@ -7054,6 +7056,10 @@ function drawClock(fadeMul) {
   const timeStr = day + '/' + month + ' ' + h + ':' + min;
 
   ctx.save();
+
+  // 4:3: the clock is right-anchored. Shift the whole group left so its right
+  // edge lands on the 4:3 frame edge, keeping its size (LAYOUT_XC-1 is 0 in 16:9).
+  ctx.translate(V.W * (LAYOUT_XC - 1), 0);
 
   // ---- Drop shadow (whole clock group) ----
   // The real PS3 XMB renders the clock with a subtle dark drop shadow for
@@ -8078,11 +8084,16 @@ function drawSidePanel(ctx2, ds, ap) {
   // xmb_plugin.prx and explore_plugin.prx). The XMB stays visible during
   // the animation; only the panel x-offset and alpha change.
 
-  const SP_PANEL_LEFT = 1324;
-  const SP_PANEL_RIGHT = 1697;
-  const SP_PANEL_CORE_X = 1377;            // darkest gradient point
-  const SP_PANEL_WIDTH = SP_PANEL_RIGHT - SP_PANEL_LEFT;  // 373
-  const SP_TEXT_X = 1340;                  // left edge of text labels
+  // Positions compressed by LAYOUT_XC in 4:3 (no-op in 16:9). The real PS3 4:3
+  // chooser panel is WIDER than a compressed 16:9 panel -- it starts near the
+  // frame centre and fills to the right edge -- so 4:3 uses its own base x's
+  // (then XCP-compressed): left base 1056 -> 0.55 of frame, text base 1100.
+  const _sp43 = LAYOUT_XC < 0.999;
+  const SP_PANEL_LEFT = XCP(_sp43 ? 1056 : 1324);
+  const SP_PANEL_RIGHT = _sp43 ? XCP(V.W) : 1697;
+  const SP_PANEL_CORE_X = XCP(_sp43 ? 1110 : 1377);  // darkest gradient point
+  const SP_PANEL_WIDTH = SP_PANEL_RIGHT - SP_PANEL_LEFT;
+  const SP_TEXT_X = XCP(_sp43 ? 1100 : 1340);  // left edge of text labels
   const SP_ITEM_PITCH = 40;                // vertical pitch between items
   // Font sizing measured from RPCS3 1080p captures:
   //   non-selected 'O' bounds 84x21 px, stroke width ~3 px, glyph peak ~229
@@ -8094,7 +8105,7 @@ function drawSidePanel(ctx2, ds, ap) {
   const SP_FONT_REG = '400 22px PS3';      // non-selected: Rodin Regular 22px
   const SP_FONT_SEL = '400 26px PS3';      // selected:     Rodin Regular 26px
   const SP_SWATCH_SIZE = 27;               // color swatch px (Color chooser only)
-  const SP_SWATCH_X = 1341;                // swatch left x
+  const SP_SWATCH_X = XCP(_sp43 ? 1101 : 1341);  // swatch left x
   // The option LIST has a fixed top y; selection just changes font weight/size,
   // it does NOT shift the list to anchor the selected item to a focus row.
   // Measured: in theme_chooser, Original (idx 0) is at y=512 and Classic
