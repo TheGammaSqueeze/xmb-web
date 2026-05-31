@@ -94,8 +94,8 @@ const V = {
   CAT_SUBMENU_SHIFT_ALT: -215,  // firmware: explore vaddr 0x2709C8 = -215.0 (alt state)
   CAT_SUBMENU_ALPHA: 0.6,       // firmware: explore vaddr 0x271B64, 0x271C54, 0x270A54 family = 0.6
   CAT_SUBMENU_SCALE: 0.833,     // firmware: explore vaddr 0x270A60 = 0.8333
-  CAT_SUBMENU_SHIFT_X: 380,     // firmware: xmb_plugin vaddr 0x17F6C = 380.0 (Bar::onScrollIn target X)
-  CAT_SUBMENU_Y_SHIFT: -220,    // firmware: explore vaddr 0x2709B4 = -220.0 (no -225 exists in binary)
+  CAT_SUBMENU_SHIFT_X: 257,     // measured sub_system_real_top.png: active cat icon settles at x~309 (CAT_X 566 - 257). The old 380 (xmb_plugin Bar::onScrollIn) put it too far left and too high.
+  CAT_SUBMENU_Y_SHIFT: -10,     // measured sub_system_real_top.png: cat icon stays at row y~279 (CAT_Y 289 - 10), NOT pushed to the top. The old -220 reused an x-offset constant as a y-shift.
   CAT_SUBMENU_BAR_TARGET_Y: 500, // firmware: xmb_plugin vaddr 0x17F70 = 500.0 (Bar::onScrollIn secondary)
   CAT_SUBMENU_BAR_ALT_Y: 240,   // firmware: xmb_plugin vaddr 0x17F74 = 240.0 (Bar::onScrollIn alt)
   BAR_RESTORE_X: 840,           // firmware: xmb_plugin vaddr 0x17FE8 = 840.0 (Bar::onScrollOut)
@@ -6664,11 +6664,13 @@ function drawXMB(now) {
       ctx.shadowOffsetY = 0;
     }
 
-    // Category label - only on active category when NOT in submenu.
-    // The label LEADS the icon cascade (bootLabelReveal ramps in first).
-    if (isActive && subT < 0.999) {
-      // Category label fades out as we descend into the submenu (1 - subT).
-      ctx.globalAlpha = 0.9 * bootLabelReveal * (1 - subT);
+    // Category label - on the active category. In the submenu the real XMB
+    // keeps the category name (e.g. "Settings") under the breadcrumb icon at
+    // reduced opacity (verified sub_system_real_top.png), so fade it toward a
+    // faint level rather than to zero.
+    if (isActive) {
+      // 0.9 in the full XMB, easing down to ~0.4 once settled in the submenu.
+      ctx.globalAlpha = 0.9 * bootLabelReveal * (1 - 0.55 * subT);
       ctx.fillStyle = 'rgb(225,210,235)';
       ctx.font = '300 ' + V.CAT_LABEL_SIZE + 'px PS3';
       ctx.textAlign = 'center';
@@ -6931,86 +6933,101 @@ function drawXMB(now) {
   }
 
   // === DRAW ITEMS with submenu slide animation ===
-  // The parent list travels EXACTLY from the item-icon column to the collapsed
-  // parent column (ITEM_ICON_X 566 -> PARENT_COL_X 316 = 250px), so the slide
-  // LANDS on the settled parent-column position with no snap-back. The old fixed
-  // 400px overshot past the settled position then snapped, which read as a jerky,
-  // non-1:1 motion. Children fade in at the item column over the same distance.
-  const SLIDE_DIST = V.ITEM_ICON_X - V.PARENT_COL_X; // = 250px (exact parent travel)
+  // Real XMB submenu layout (measured sub_system_real_top.png): entering a
+  // submenu does NOT leave the parent items in one linear list. Instead the
+  // parent (category) item list COLLAPSES:
+  //   - the SELECTED parent item slides left to the breadcrumb column
+  //     (PARENT_COL_X 316, at the focus row) and stays a normal-size icon (the
+  //     "cube"), its text fading away;
+  //   - the OTHER (sibling) items gather into a faded uniform column at
+  //     SIB_X (~455), 80px pitch centred on the selected slot (which is left
+  //     empty because it was pulled to the breadcrumb), fading with distance;
+  //   - the children slide in from the right and fade in at the item column.
+  // The category icon (e.g. the Settings toolbox) is moved to the breadcrumb by
+  // the category-bar code above. This replaces the old single-column render that
+  // crammed every sibling into one bright linear list at x316.
+  const SLIDE_DIST = V.ITEM_ICON_X - V.PARENT_COL_X; // 250px child slide-in distance
+  const SIB_X = 455;                                 // faded sibling column (566 - 111)
+
+  // Draw the parent layer at collapse factor t (0 = full bright list at the item
+  // column, exactly as it looked before pressing X; 1 = settled breadcrumb +
+  // faded sibling column). Used for both the live enter/exit animation and the
+  // settled state, so the two are perfectly continuous (no snap).
+  function drawParentLayer(pItems, pIdx, t) {
+    const srcX = V.ITEM_ICON_X;
+    for (let i = 0; i < pItems.length; i++) {
+      const sel = (i === pIdx);
+      // Y morphs from the full carousel layout to the uniform collapsed column.
+      const ySrc = itemSlotY(i, pIdx);
+      const yDst = V.ITEM_FOCUS_Y + (i - pIdx) * V.PARENT_SPACING;
+      const y = ySrc + (yDst - ySrc) * t;
+      if (y < -40 || y > V.H + 40) continue;
+      // X slides to the breadcrumb (selected) or the faded sibling column.
+      const dstX = sel ? V.PARENT_COL_X : SIB_X;
+      const cx = srcX + (dstX - srcX) * t;
+      // Alpha eases from the full-list value to the settled value (selected stays
+      // bright as the breadcrumb cube; siblings fade, more so with distance).
+      const dist = Math.abs(i - pIdx);
+      const fullA = sel ? V.ALPHA_FOCUS : V.ALPHA_INACTIVE;
+      const setA = sel ? 0.92 : Math.max(0.12, 0.42 - (dist - 1) * 0.05);
+      let a = fullA + (setA - fullA) * t;
+      if (y < 40) a *= Math.max(0, y / 40);
+      if (y > V.H - 20) a *= Math.max(0, (V.H - y) / 20);
+      const pic = getIcon(pItems[i].i);
+      if (a > 0.01 && (pic.loaded || pic.normalMapReady)) {
+        const psz = V.ITEM_ICON_SIZE * iconScale(pItems[i].i);
+        ctx.globalAlpha = a;
+        drawIconAt(ctx, pic, pItems[i].i, XCL(cx, psz / 2), y - psz / 2, psz, psz);
+      }
+      // Item TEXT only exists in the full list; it fades out as we collapse and
+      // travels left with its icon so it reads as the same row sliding away.
+      const textA = (1 - t) * (sel ? V.ALPHA_FOCUS : V.ALPHA_INACTIVE);
+      if (textA > 0.02) {
+        ctx.globalAlpha = textA;
+        ctx.fillStyle = sel ? 'rgb(255,255,255)' : 'rgb(235,235,235)';
+        ctx.font = (sel ? V.ITEM_TEXT_ACTIVE_SIZE : V.ITEM_TEXT_SIZE) + 'px PS3';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(pItems[i].n, XCP(V.ITEM_TEXT_X + (cx - srcX)), y);
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // Back-chevron breadcrumb: solid left-pointing gradient triangle (~30px),
+  // measured sub_system_real_d01.png (tip x~430,y~508; base x~462). alphaMul
+  // fades it in/out with the collapse.
+  function drawBackChevron(alphaMul) {
+    if (alphaMul <= 0.02) return;
+    const chCy = V.ITEM_FOCUS_Y, chH = 30, chTipX = XCP(430), chBaseX = XCP(462);
+    const chGrad = ctx.createLinearGradient(0, chCy - chH / 2, 0, chCy + chH / 2);
+    chGrad.addColorStop(0, 'rgb(206,206,208)');
+    chGrad.addColorStop(1, 'rgb(120,120,124)');
+    ctx.globalAlpha = 0.95 * alphaMul;
+    ctx.fillStyle = chGrad;
+    ctx.beginPath();
+    ctx.moveTo(chTipX, chCy);
+    ctx.lineTo(chBaseX, chCy - chH / 2);
+    ctx.lineTo(chBaseX, chCy + chH / 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
 
   if (submenuAnim && slideProgress !== null) {
     const p = slideProgress;
-    if (submenuAnim.dir === 1) {
-      // Entering submenu: parent slides left and dims, child slides in from right
-      const parentShift = -SLIDE_DIST * p;
-      const parentAlpha = 1 - p * 0.5; // dim to 50%
-      const childShift = SLIDE_DIST * (1 - p);
-      drawItemList(submenuAnim.parentItems, submenuAnim.parentIdx, parentShift, parentAlpha, 0);
-      drawItemList(submenuAnim.childItems, 0, childShift, p, 0);
-    } else {
-      // Exiting submenu: child slides right, parent slides in from left
-      const parentShift = -SLIDE_DIST * (1 - p);
-      const parentAlpha = 0.5 + p * 0.5;
-      const childShift = SLIDE_DIST * p;
-      drawItemList(submenuAnim.parentItems, submenuAnim.parentIdx, parentShift, parentAlpha, 0);
-      drawItemList(submenuAnim.childItems, 0, childShift, 1 - p, 0);
-    }
+    // Collapse factor: 1 = fully settled in the submenu, 0 = full parent list.
+    const t = (submenuAnim.dir === 1) ? p : (1 - p);
+    drawParentLayer(submenuAnim.parentItems, submenuAnim.parentIdx, t);
+    // Children slide in from the right and fade in as the parent collapses.
+    const childShift = SLIDE_DIST * (1 - t);
+    drawItemList(submenuAnim.childItems, 0, childShift, t, 0);
+    drawBackChevron(t);
   } else {
-    // No slide animation - in submenu PS3 renders parent items as small column
-    // on the left with the active parent at ITEM_FOCUS_Y, then submenu items
-    // extending to the right starting from same Y.
     if (inSubmenu) {
       const parentFrame = stack[stack.length - 1];
-      const parentItems = parentFrame.items;
-      const parentIdx = parentFrame.pi;
-
-      // Render parent items column at the left
-      const parentX = V.PARENT_COL_X;
-      const parentIconSz = V.PARENT_ICON_SIZE;
-      const parentSpacing = V.PARENT_SPACING;
-      const parentActiveY = V.ITEM_FOCUS_Y;
-
-      for (let i = 0; i < parentItems.length; i++) {
-        const isActiveParent = (i === parentIdx);
-        // Layout: active at ITEM_FOCUS_Y, items above stack up, items below stack down
-        const dy = (i - parentIdx) * parentSpacing;
-        const py = parentActiveY + dy;
-        if (py < 80 || py > V.H - 40) continue;
-        const sz = isActiveParent ? parentIconSz * 1.4 : parentIconSz;
-        // Real XMB keeps the parent siblings visible but heavily faded/transparent
-        // in the background (verified by contrast-boosting the RPCS3 capture, where
-        // the sibling column sits at ~0.25-0.3 opacity vs the bright active cube).
-        const alpha = isActiveParent ? 0.9 : 0.28;
-        const pic = getIcon(parentItems[i].i);
-        ctx.globalAlpha = alpha;
-        if (pic.loaded || pic.normalMapReady) {
-          const psz = sz * iconScale(parentItems[i].i);
-          const ppx = parentX - psz/2;
-          const ppy = py - psz/2;
-          drawIconAt(ctx, pic, parentItems[i].i, ppx, ppy, psz, psz);
-        }
-      }
-
-      // Back chevron breadcrumb: the real XMB draws a SOLID left-pointing
-      // triangle (~30px tall) with a subtle vertical gradient (lighter top,
-      // darker bottom), sitting between the parent column and the active item's
-      // icon -- NOT a font glyph. Measured from RPCS3 1080p capture
-      // sub_system_real_d01.png: tip at x~430, y~508; base edge at x~462
-      // spanning y~493..523 (width ~32px, height ~30px, fill gray ~120..206).
-      const chCy = parentActiveY;
-      const chH = 30, chTipX = XCP(430), chBaseX = XCP(462);
-      const chGrad = ctx.createLinearGradient(0, chCy - chH / 2, 0, chCy + chH / 2);
-      chGrad.addColorStop(0, 'rgb(206,206,208)');
-      chGrad.addColorStop(1, 'rgb(120,120,124)');
-      ctx.globalAlpha = 0.95;
-      ctx.fillStyle = chGrad;
-      ctx.beginPath();
-      ctx.moveTo(chTipX, chCy);
-      ctx.lineTo(chBaseX, chCy - chH / 2);
-      ctx.lineTo(chBaseX, chCy + chH / 2);
-      ctx.closePath();
-      ctx.fill();
-      ctx.globalAlpha = 1;
+      drawParentLayer(parentFrame.items, parentFrame.pi, 1);
+      drawBackChevron(1);
     }
 
     // Draw current items at the regular column. When an item-nav animation is
@@ -8849,7 +8866,7 @@ function enter() {
   ii = 0;
   submenuAnim = {
     start: performance.now(),
-    dur: V.SUBMENU_ANIM_MS,
+    dur: V.SUBMENU_ANIM_MS * (window.XFADE_SLOMO || 1),
     dir: 1,
     parentItems: parentItems,
     parentIdx: parentIdx,
