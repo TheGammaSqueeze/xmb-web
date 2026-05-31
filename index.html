@@ -7802,8 +7802,8 @@ function drawDialog(ctx2) {
   ctx2.strokeStyle = 'rgba(255,255,255,0.55)';
   ctx2.lineWidth = 1;
   ctx2.beginPath();
-  ctx2.moveTo(0, HEADER_DIV_Y);  ctx2.lineTo(V.W, HEADER_DIV_Y);
-  ctx2.moveTo(0, FOOTER_DIV_Y);  ctx2.lineTo(V.W, FOOTER_DIV_Y);
+  ctx2.moveTo(0, HEADER_DIV_Y);  ctx2.lineTo(XCP(V.W), HEADER_DIV_Y);
+  ctx2.moveTo(0, FOOTER_DIV_Y);  ctx2.lineTo(XCP(V.W), FOOTER_DIV_Y);
   ctx2.stroke();
   ctx2.restore();
 
@@ -7819,16 +7819,16 @@ function drawDialog(ctx2) {
     // upper-middle of the band, then the body lines below it.
     let centerCY = (innerTop + innerBot) / 2;
     if (t.illustration) {
-      drawIllustration(ctx2, t.illustration, V.W/2, innerTop + 230, 280);
+      drawIllustration(ctx2, t.illustration, XCP(V.W/2), innerTop + 230, 280);
       centerCY = innerTop + 460;
     }
     ctx2.font = '26px PS3';
     ctx2.fillStyle = 'rgba(255,255,255,0.95)';
     ctx2.textAlign = 'center';
-    const lines = wrapLines(ctx2, t.body || '', V.W - 400);
+    const lines = wrapLines(ctx2, t.body || '', (V.W - 400) * LAYOUT_XC);
     const lh = 36;
     let ty = centerCY - (lines.length - 1) * lh / 2;
-    for (const ln of lines) { ctx2.fillText(ln, V.W/2, ty); ty += lh; }
+    for (const ln of lines) { ctx2.fillText(ln, XCP(V.W/2), ty); ty += lh; }
   } else if (t.type === 'chooser') {
     // Chooser (no illustration): body centered near upper third, then
     // option list centered below it. PS3 ref measurement (sysupdate):
@@ -7836,9 +7836,9 @@ function drawDialog(ctx2) {
     ctx2.font = '24px PS3';
     ctx2.fillStyle = 'rgba(255,255,255,0.95)';
     ctx2.textAlign = 'center';
-    const bodyLines = wrapLines(ctx2, t.body || '', V.W - 400);
+    const bodyLines = wrapLines(ctx2, t.body || '', (V.W - 400) * LAYOUT_XC);
     let ty = innerTop + 105;
-    for (const ln of bodyLines) { ctx2.fillText(ln, V.W/2, ty); ty += 32; }
+    for (const ln of bodyLines) { ctx2.fillText(ln, XCP(V.W/2), ty); ty += 32; }
     // Options. For long lists (>9 items, e.g. Color chooser with 15 colors)
     // we window the visible slice around ds.sel so the focused item is
     // always centered/visible. PS3 firmware similarly scrolls long option
@@ -7863,18 +7863,18 @@ function drawDialog(ctx2) {
     for (let i = firstVisible; i <= lastVisible; i++) {
       const sel = (i === ds.sel);
       const optY = optTop + (i - firstVisible) * optSpacing;
-      drawDialogOption(ctx2, opts[i], V.W/2, optY, sel, 'center');
+      drawDialogOption(ctx2, opts[i], XCP(V.W/2), optY, sel, 'center');
     }
     // Up/down arrow hints if the list is windowed.
     if (firstVisible > 0) {
       ctx2.fillStyle = 'rgba(255,255,255,0.5)';
       ctx2.font = '20px PS3';
-      ctx2.fillText('\u25B2', V.W/2, optTop - 18);
+      ctx2.fillText('\u25B2', XCP(V.W/2), optTop - 18);
     }
     if (lastVisible < opts.length - 1) {
       ctx2.fillStyle = 'rgba(255,255,255,0.5)';
       ctx2.font = '20px PS3';
-      ctx2.fillText('\u25BC', V.W/2, optTop + visibleCount * optSpacing + 6);
+      ctx2.fillText('\u25BC', XCP(V.W/2), optTop + visibleCount * optSpacing + 6);
     }
   } else if (t.type === 'chooser_illust') {
     // Body text centered upper. Options centered upper. Illustration centered
@@ -7888,12 +7888,12 @@ function drawDialog(ctx2) {
     ctx2.font = '24px PS3';
     ctx2.fillStyle = 'rgba(255,255,255,0.95)';
     ctx2.textAlign = 'center';
-    const bodyLines = wrapLines(ctx2, t.body || '', V.W - 400);
+    const bodyLines = wrapLines(ctx2, t.body || '', (V.W - 400) * LAYOUT_XC);
     let by = innerTop + 115;
-    for (const ln of bodyLines) { ctx2.fillText(ln, V.W/2, by); by += 32; }
+    for (const ln of bodyLines) { ctx2.fillText(ln, XCP(V.W/2), by); by += 32; }
     // Options - left-aligned around x = V.W*0.37 (matches PS3 ref ~x=709/1920)
     const opts = t.options || [];
-    const OPT_X = Math.round(V.W * 0.37);
+    const OPT_X = Math.round(XCP(V.W * 0.37));
     const optTop = innerTop + 220;
     const optSpacing = 42;
     for (let i = 0; i < opts.length; i++) {
@@ -7903,31 +7903,31 @@ function drawDialog(ctx2) {
     }
     // Illustration - below the options.
     const illY = innerTop + 220 + Math.max(opts.length, 3) * optSpacing + 100;
-    drawIllustration(ctx2, t.illustration || 'hdmi_cable', V.W/2, illY, 240);
+    drawIllustration(ctx2, t.illustration || 'hdmi_cable', XCP(V.W/2), illY, 240);
     // Notice text right above the footer divider.
     if (t.notice) {
       ctx2.font = '22px PS3';
       ctx2.fillStyle = 'rgba(255,255,255,0.85)';
       ctx2.textAlign = 'center';
-      ctx2.fillText(t.notice, V.W/2, innerBot - 22);
+      ctx2.fillText(t.notice, XCP(V.W/2), innerBot - 22);
     }
   } else if (t.type === 'confirm') {
     // Confirm: body centered, Yes/No buttons centered below.
     ctx2.font = '26px PS3';
     ctx2.fillStyle = 'rgba(255,255,255,0.95)';
     ctx2.textAlign = 'center';
-    const bodyLines = wrapLines(ctx2, t.body || '', V.W - 400);
+    const bodyLines = wrapLines(ctx2, t.body || '', (V.W - 400) * LAYOUT_XC);
     let centerY = (innerTop + innerBot) / 2;
     if (t.illustration) {
-      drawIllustration(ctx2, t.illustration, V.W/2, innerTop + 230, 260);
+      drawIllustration(ctx2, t.illustration, XCP(V.W/2), innerTop + 230, 260);
       centerY = innerTop + 460;
     }
     const lh = 36;
     let ty = centerY - (bodyLines.length - 1) * lh / 2 - 50;
-    for (const ln of bodyLines) { ctx2.fillText(ln, V.W/2, ty); ty += lh; }
+    for (const ln of bodyLines) { ctx2.fillText(ln, XCP(V.W/2), ty); ty += lh; }
     // Yes / No, centered, side by side.
     const labels = ['Yes', 'No'];
-    const bx = V.W/2 - 110;
+    const bx = XCP(V.W/2) - 110;
     const by_ = ty + 30;
     for (let i = 0; i < 2; i++) {
       const sel = (i === ds.sel);
@@ -7950,8 +7950,8 @@ function drawDialog(ctx2) {
   // Hint slot definitions: fixed x centers matching the PS3 firmware layout.
   // Each hint chooses one of these two slots so positions stay consistent
   // across dialog types.
-  const HINT_SLOT_ENTER_CX  = Math.round(V.W * 0.401);   // 770 @ 1920w
-  const HINT_SLOT_CANCEL_CX = Math.round(V.W * 0.629);   // 1208 @ 1920w
+  const HINT_SLOT_ENTER_CX  = Math.round(XCP(V.W * 0.401));   // 770 @ 1920w
+  const HINT_SLOT_CANCEL_CX = Math.round(XCP(V.W * 0.629));   // 1208 @ 1920w
   const HINT_GLYPH_R = 12;
   const HINT_GLYPH_TEXT_GAP = 12;
 
