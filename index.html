@@ -1760,7 +1760,13 @@ let LAYOUT_XC = 1, LAYOUT_FIT = 1;
 //                 layout is positioned within the taller frame (0 in landscape).
 //                 The frame spans virtual y in [-LAYOUT_VOFF, V.H + (extra)].
 let LAYOUT_VFIT = 1, LAYOUT_VOFF = 0;
-function XCP(x) { return x * LAYOUT_XC; }
+// LAYOUT_XSHIFT: extra leftward shift (virtual px) of left-anchored content on
+// narrow non-4:3 frames, so the active row (name + subtitle + value) gets more
+// horizontal room on the right. 0 at 16:9 and at 4:3 (which is tuned to the real
+// PS3). DESC_BOOST: subtitle (item description) font multiplier, raised on small
+// frames so the secondary text stays readable at low resolutions.
+let LAYOUT_XSHIFT = 0, DESC_BOOST = 1;
+function XCP(x) { return x * LAYOUT_XC - LAYOUT_XSHIFT; }
 function XCF(x) { return x * LAYOUT_FIT; }
 // Full visible-frame bounds in virtual coords (accounts for the portrait
 // vertical letterbox-less fill). In landscape these are 0 and V.H.
@@ -1768,7 +1774,7 @@ function frameTopV() { return -LAYOUT_VOFF; }
 function frameHV() { return V.H * LAYOUT_VFIT; }
 // Compress a centred draw's top-left: pass CENTRE and half-width, compress only
 // the centre (keeps the element full size).
-function XCL(centerX, halfW) { return centerX * LAYOUT_XC - halfW; }
+function XCL(centerX, halfW) { return centerX * LAYOUT_XC - LAYOUT_XSHIFT - halfW; }
 
 function resize() {
   // Simulated viewport: ?res forces a specific pixel resolution; otherwise use
@@ -1809,20 +1815,28 @@ function resize() {
   // frame, so we don't squash it -- instead LAYOUT_XC compresses element
   // POSITIONS (not sizes) so the full-size layout fits the 4:3 frame, exactly
   // like the real PS3 4:3 re-layout.
+  // Readability zoom: enlarge the whole UI on small frames so text stays legible
+  // at low resolutions (e.g. 640x480, 480x800). 1.0 on normal-size frames
+  // (min dimension >= READ_REF), ramping up to READ_MAX on tiny ones. Zooming in
+  // shows less content but at a larger, readable size; the layout factors below
+  // are derived from the resulting scale so values/clock reflow and the list
+  // crops symmetrically around the focus.
+  const READ_REF = 640, READ_MAX = 1.85;
+  const readZoom = Math.min(READ_MAX, Math.max(1, READ_REF / Math.min(w, h)));
   let vOffPx = 0;
   if (portrait) {
     // PORTRAIT: the frame is taller than wide. We ZOOM IN past a plain width-fit
-    // (PORTRAIT_ZOOM) so the UI reads larger on a tall screen, then use the
-    // ample vertical room to show a LONG item list rather than a short centred
-    // band. Zooming makes the visible virtual width narrower than V.W, so
-    // right-anchored content (values, clock) is repositioned to that narrower
-    // right edge via LAYOUT_FIT and left-anchored content is mildly compressed
-    // via LAYOUT_XC -- exactly the narrow-landscape model (cf. 4:3/3:2), which
-    // keeps icons from overlapping. Vertically the focus row is parked ~44% down
-    // the frame so the list runs far below it; the wave/gradient fill the rest.
+    // (PORTRAIT_ZOOM, plus the readability zoom) so the UI reads larger on a tall
+    // screen, then use the ample vertical room to show a LONG item list rather
+    // than a short centred band. Zooming makes the visible virtual width narrower
+    // than V.W, so right-anchored content (values, clock) is repositioned to that
+    // narrower right edge via LAYOUT_FIT and left-anchored content is mildly
+    // compressed via LAYOUT_XC -- exactly the narrow-landscape model (cf.
+    // 4:3/3:2), which keeps icons from overlapping. Vertically the focus row is
+    // parked ~44% down the frame so the list runs far below it.
     const PORTRAIT_ZOOM = 1.3;
-    scale = (w / V.W) * PORTRAIT_ZOOM;
-    LAYOUT_FIT = 1 / PORTRAIT_ZOOM;                  // visible virtual width / V.W
+    scale = (w / V.W) * PORTRAIT_ZOOM * readZoom;
+    LAYOUT_FIT = (w / scale) / V.W;                   // visible virtual width / V.W
     LAYOUT_XC = 1 - (1 - LAYOUT_FIT) * 0.56;          // soften like a narrow frame
     LAYOUT_VFIT = (h / scale) / V.H;                  // tall: > 1
     // Park the focus row at 44% of the frame height (slightly above centre) so
@@ -1830,21 +1844,38 @@ function resize() {
     vOffPx = h * 0.44 - V.ITEM_FOCUS_Y * scale;
     LAYOUT_VOFF = vOffPx / scale;
   } else {
-    // LANDSCAPE / square: fill the HEIGHT (uniform), flex horizontally.
-    scale = h / V.H;
+    // LANDSCAPE / square: fill the HEIGHT (uniform) x the readability zoom, flex
+    // horizontally. With readZoom=1 (normal frames) this is the original
+    // height-fill layout; on small frames it zooms in and centres vertically.
+    scale = (h / V.H) * readZoom;
     // Frame geometry factor: V.W*LAYOUT_FIT is the frame's right edge in virtual
-    // space (= r / (16/9); 1.0 at 16:9, 0.75 at 4:3, 1.3125 at 21:9).
-    LAYOUT_FIT = (w * V.H) / (h * V.W);
+    // space (= visible virtual width / V.W; 1.0 at 16:9 with no zoom).
+    LAYOUT_FIT = (w / scale) / V.W;
     // Content position-compression. Narrow frames (<16:9) are softened toward 1.0
     // (factor 0.56) so the content is slightly less compressed than a pure fit and
     // overflows/crops on the right like the real PS3 4:3 (gives ~0.86 at 4:3 vs
     // 0.75 pure-fit). Wide frames just expand to fill (= LAYOUT_FIT).
     LAYOUT_XC = (LAYOUT_FIT >= 1) ? LAYOUT_FIT : (1 - (1 - LAYOUT_FIT) * 0.56);
-    LAYOUT_VFIT = 1;
-    LAYOUT_VOFF = 0;
+    LAYOUT_VFIT = (h / scale) / V.H;                  // 1 when readZoom=1, else < 1
+    vOffPx = (h - V.H * scale) / 2;                   // centre vertically (0 if no zoom)
+    LAYOUT_VOFF = vOffPx / scale;
   }
   scaleX = scale;
   scaleY = scale;
+  // Subtitle (item description) size boost on small frames so secondary text
+  // stays readable at low resolutions (e.g. 640x480, 480x800, 720x720). 1.0 on
+  // larger frames. Based on the frame's smaller pixel dimension.
+  DESC_BOOST = Math.min(1.5, Math.max(1, 820 / Math.min(w, h)));
+  // Shift left-anchored content further LEFT on frames NARROWER than 4:3 (but not
+  // 4:3 itself, which is matched to the real PS3) so the active row gets more room
+  // on the right for the name, subtitle and value. Ramps from 0 at LAYOUT_FIT 0.75
+  // (4:3) up as the frame narrows. Skipped for ~4:3 and for wide frames.
+  const FIT_43 = 0.75;
+  if (LAYOUT_FIT < FIT_43 - 0.01) {
+    LAYOUT_XSHIFT = (FIT_43 - LAYOUT_FIT) * V.W * 0.34;
+  } else {
+    LAYOUT_XSHIFT = 0;
+  }
   bgCanvas.width = w * dpr;
   bgCanvas.height = h * dpr;
   xmbCanvas.width = w * dpr;
@@ -6979,15 +7010,18 @@ function drawXMB(now) {
           // Fade in over ITEM_DESC_FADE_MS so the new active description
           // doesn't snap-in mid-slide.
           ctx.globalAlpha = 0.7 * alphaMul * descNewAlpha;
-          ctx.font = '300 ' + V.ITEM_DESC_SIZE + 'px PS3';
-          // Wrap long descriptions within the available width. In 4:3 the usable
-          // width is the left ~55% of the frame (before the chooser panel / value
-          // column), so the description re-wraps to more lines like the real.
+          const descSize = V.ITEM_DESC_SIZE * DESC_BOOST;
+          ctx.font = '300 ' + descSize + 'px PS3';
+          // Wrap the subtitle to the FULL available width -- from its start to the
+          // frame's right edge (minus a small margin) -- so on narrow frames it
+          // makes proper use of the space instead of scrunching into a tiny
+          // column. The old 0.60-of-frame cap left only ~130px at 1:1.
+          const descStartX = XCP(V.ITEM_TEXT_X + xShift);
           const maxWidth = (LAYOUT_FIT < 0.999)
-            ? (XCF(V.W) * 0.60 - XCP(V.ITEM_TEXT_X + xShift))
+            ? Math.max(180, XCF(V.W) - descStartX - 50)
             : (V.W - (V.ITEM_TEXT_X + xShift) - 200);
-          drawWrappedText(ctx, items[i].d, XCP(V.ITEM_TEXT_X + xShift),
-                          y + V.ITEM_DESC_OFFSET + 4, maxWidth, V.ITEM_DESC_SIZE + 4, 3);
+          drawWrappedText(ctx, items[i].d, descStartX,
+                          y + V.ITEM_DESC_OFFSET + 4, maxWidth, descSize + 4, 3);
         }
 
         // NOTE: the real PS3 XMB shows NO '>' chevron after a submenu-parent
@@ -10052,61 +10086,49 @@ function drawBootIntro(now) {
   // plate, NOT a blur plate). White text, left-aligned block, no dividers/icon/
   // footer. warning_screen_spec.md sections 2, 3, 6.
   if (elapsed >= BOOT_WARN_IN_MS && elapsed < BOOT_WARN_OUT_MS) {
-    // Layout measured at 1920x1080 (warning_screen_spec.md 2b): block left edge
-    // x=320, title baseline near y=490, line pitch ~34 px, font ~24 px. Made
-    // resolution-independent by scaling to the canvas (reference 1920x1080).
+    // The warning TEXT LAYOUT is unchanged from the firmware reference -- same
+    // per-axis scaling, font, pitch and left-aligned wrap (title + 3 body lines)
+    // as before -- only its POSITION changes: the whole block is centred in the
+    // frame (by its actual text extent, both axes) so it stays centred for any
+    // aspect ratio, orientation or simulated resolution. The old code pinned the
+    // block to a fixed left edge (x=320 ref) which drifted off-centre in
+    // portrait / non-16:9 frames.
     const sx = cW / 1920, sy = cH / 1080;
-    const blockX  = 320 * sx;
-    const blockR  = 1600 * sx;
-    const blockW  = blockR - blockX;
-    // Font size verified against the capture wrap (boot_independent_verify.md):
-    // at 24 px the web body wraps EXACTLY as the capture does --
-    //   b1 "IF YOU HAVE A HISTORY OF EPILEPSY OR SEIZURES, CONSULT A DOCTOR BEFORE USE. CERTAIN"
-    //   b2 "PATTERNS MAY TRIGGER SEIZURES WITH NO PRIOR HISTORY. BEFORE USING THIS PRODUCT, CAREFULLY"
-    //   b3 "READ THE INSTRUCTION MANUAL."
-    // matching the captured per-line break points (frame 85). Pitch ~34 px.
     const fontPx  = Math.round(24 * sy);
     const pitch   = 34 * sy;
-    let baseY     = 497 * sy;   // first (title) baseline
+    const blockW  = 1280 * sx;     // wrap width (= the reference 320..1600 block)
     c.save();
     c.setTransform(1, 0, 0, 1, 0, 0);
     c.globalCompositeOperation = 'source-over';
-    // Pure opaque WHITE (#FFFFFF), 100% opacity, HARD CUT in/out (measured:
-    // the text snaps on/off in one frame; the fade is on the BACKGROUND, not the
-    // text). The text stays SHARP on top of the blurred background.
+    // Pure opaque WHITE (#FFFFFF), 100% opacity, HARD CUT in/out (the fade is on
+    // the BACKGROUND, not the text). Soft dark shadow for legibility.
     c.globalAlpha = 1.0;
     c.fillStyle = '#FFFFFF';
-    // Drop shadow on the warning text (matches the real epilepsy screen: the
-    // white text carries a soft dark shadow for legibility over the dim wave).
     c.shadowColor = 'rgba(0,0,0,0.55)';
     c.shadowBlur = 4 * sy;
     c.shadowOffsetX = 0;
     c.shadowOffsetY = 2 * sy;
     c.textAlign = 'left';
     c.textBaseline = 'alphabetic';
-    // SCE-PS3 Rodin is the firmware UI font (already @font-face loaded). Fall
-    // back to the app's sans stack if unavailable.
     const warnFont = fontPx + "px 'SCE-PS3 Rodin','Rodin',sans-serif";
-    // Title line (own line, same color/size as body per the capture).
     c.font = warnFont;
-    c.fillText(BOOT_WARN_TITLE, blockX, baseY);
-    baseY += pitch;
-    // Word-wrap the single body paragraph to the block width, matching the
-    // on-screen wrap of the capture (3 lines).
-    c.font = warnFont;
+    // Word-wrap the body to the block width (same break points as the firmware).
+    const lines = [BOOT_WARN_TITLE];
     const words = BOOT_WARN_BODY.split(' ');
     let line = '';
     for (let i = 0; i < words.length; i++) {
       const test = line ? line + ' ' + words[i] : words[i];
-      if (c.measureText(test).width > blockW && line) {
-        c.fillText(line, blockX, baseY);
-        baseY += pitch;
-        line = words[i];
-      } else {
-        line = test;
-      }
+      if (c.measureText(test).width > blockW && line) { lines.push(line); line = words[i]; }
+      else line = test;
     }
-    if (line) c.fillText(line, blockX, baseY);
+    if (line) lines.push(line);
+    // Centre the block by its ACTUAL text extent (longest line), keeping the
+    // text left-aligned within. Vertically centre the block too.
+    let maxW = 0;
+    for (let i = 0; i < lines.length; i++) maxW = Math.max(maxW, c.measureText(lines[i]).width);
+    const blockX = (cW - maxW) / 2;
+    let baseY = (cH - lines.length * pitch) / 2 + fontPx;
+    for (let i = 0; i < lines.length; i++) { c.fillText(lines[i], blockX, baseY); baseY += pitch; }
     c.restore();
   }
 
