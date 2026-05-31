@@ -1304,7 +1304,21 @@ const DATA = [
 // STATE
 // =====================================================
 let ci = 0, ii = defaultItemIndexFor('user'), stack = [];
-let aspect = '16:9';
+// Supported display aspect ratios. The XMB is natively 16:9; the others are
+// derived from the same firmware 4:3 re-layout model (LAYOUT_FIT / LAYOUT_XC in
+// resize): the content fills the frame at full element size with positions
+// compressed (narrow) or expanded (wide). Order = TAB cycle order.
+const ASPECTS = { '1:1': 1/1, '4:3': 4/3, '3:2': 3/2, '16:9': 16/9, '21:9': 21/9 };
+const ASPECT_ORDER = ['16:9', '4:3', '3:2', '1:1', '21:9'];
+// Initial aspect: ?aspect=4:3 (also accepts 1.333 etc.) else 16:9.
+let aspect = (function () {
+  try {
+    const q = new URLSearchParams(location.search).get('aspect');
+    if (q && ASPECTS[q]) return q;
+    if (q) { const n = parseFloat(q); for (const k in ASPECTS) if (Math.abs(ASPECTS[k] - n) < 0.02) return k; }
+  } catch (e) {}
+  return '16:9';
+})();
 
 // Cinfo (hover) background state. Tracks the currently focused HOVER_BG-mapped
 // item, dwell start time, and the current bg image. When the cursor leaves an
@@ -1681,20 +1695,26 @@ const chromeXfadeCanvas = document.createElement('canvas');
 const chromeXfadeCtx = chromeXfadeCanvas.getContext('2d');
 
 let scale = 1, scaleX = 1, scaleY = 1, dpr = window.devicePixelRatio || 1;
-// Horizontal position-compression for 4:3 (1.0 in 16:9). Compresses element
-// POSITIONS toward the left while element SIZES stay full -- the firmware 4:3
-// re-layout. Apply ONLY to x-position coordinates via XCP(); never to widths.
-let LAYOUT_XC = 1;
+// Two horizontal factors for non-16:9 aspect ratios (both 1.0 in 16:9):
+//   LAYOUT_FIT = frame geometry. The frame shows virtual x in 0..V.W*LAYOUT_FIT,
+//                so V.W*LAYOUT_FIT is the frame's RIGHT edge. Use XCF() for
+//                right-anchored / centred / frame-spanning things.
+//   LAYOUT_XC  = content position compression for LEFT-anchored elements. It is
+//                softened relative to LAYOUT_FIT for narrow frames so the layout
+//                matches the real PS3 (slightly less compressed, right overflow
+//                cropped). Use XCP()/XCL() for left-anchored x-POSITIONS only;
+//                never apply either to element widths/sizes.
+let LAYOUT_XC = 1, LAYOUT_FIT = 1;
 function XCP(x) { return x * LAYOUT_XC; }
-// Compress a position that has a half-size offset baked in (e.g. a centred icon
-// drawn from its top-left): pass the CENTRE and half-width, compress only the
-// centre. Returns the compressed top-left x.
+function XCF(x) { return x * LAYOUT_FIT; }
+// Compress a centred draw's top-left: pass CENTRE and half-width, compress only
+// the centre (keeps the element full size).
 function XCL(centerX, halfW) { return centerX * LAYOUT_XC - halfW; }
 
 function resize() {
   const vw = window.innerWidth, vh = window.innerHeight;
-  // PS3 outputs 1920x1080 for 16:9 HD, 720x480 (NTSC) or 720x576 (PAL) for 4:3 SD
-  const r = aspect === '16:9' ? 16 / 9 : 4 / 3;
+  // Target display aspect ratio (1:1 / 4:3 / 3:2 / 16:9 / 21:9).
+  const r = ASPECTS[aspect] || 16 / 9;
   let w, h;
   if (vw / vh > r) { h = vh; w = h * r; } else { w = vw; h = w / r; }
   scr.style.width = w + 'px';
@@ -1708,9 +1728,14 @@ function resize() {
   scale = h / V.H;
   scaleX = scale;
   scaleY = scale;
-  // Horizontal position-compression: 1.0 in 16:9 (no-op), ~0.75 in 4:3. Applied
-  // to x-POSITIONS only (via XCP()), element widths/sizes are left intact.
-  LAYOUT_XC = (w * V.H) / (h * V.W);
+  // Frame geometry factor: V.W*LAYOUT_FIT is the frame's right edge in virtual
+  // space (= r / (16/9); 1.0 at 16:9, 0.75 at 4:3, 1.3125 at 21:9).
+  LAYOUT_FIT = (w * V.H) / (h * V.W);
+  // Content position-compression. Narrow frames (<16:9) are softened toward 1.0
+  // (factor 0.56) so the content is slightly less compressed than a pure fit and
+  // overflows/crops on the right like the real PS3 4:3 (gives ~0.86 at 4:3 vs
+  // 0.75 pure-fit). Wide frames just expand to fill (= LAYOUT_FIT).
+  LAYOUT_XC = (LAYOUT_FIT >= 1) ? LAYOUT_FIT : (1 - (1 - LAYOUT_FIT) * 0.56);
   bgCanvas.width = w * dpr;
   bgCanvas.height = h * dpr;
   xmbCanvas.width = w * dpr;
@@ -4911,7 +4936,7 @@ function drawCapturedWave(fade) {
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uScaleY'), (window._waveScaleY != null) ? window._waveScaleY : 0.8);
   // Aspect correction: in 4:3 the wave canvas is narrower, so multiply clip.x by
   // 1/LAYOUT_XC to keep the wave's strands at their true (16:9) width.
-  gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uScaleX'), (LAYOUT_XC > 0.0 ? 1.0 / LAYOUT_XC : 1.0));
+  gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uScaleX'), (LAYOUT_FIT > 0.0 ? 1.0 / LAYOUT_FIT : 1.0));
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uFade'), fade);
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uAlpha'), (window._waveAlpha2 != null) ? window._waveAlpha2 : 0.18);
   gl.uniform3fv(gl.getUniformLocation(waveCapProgram, 'uTint'), new Float32Array((window._waveTint) || [0.96, 0.97, 1.00]));
@@ -6825,8 +6850,8 @@ function drawXMB(now) {
           // Wrap long descriptions within the available width. In 4:3 the usable
           // width is the left ~55% of the frame (before the chooser panel / value
           // column), so the description re-wraps to more lines like the real.
-          const maxWidth = (LAYOUT_XC < 0.999)
-            ? (XCP(V.W) * 0.55 - XCP(V.ITEM_TEXT_X + xShift) - 34)
+          const maxWidth = (LAYOUT_FIT < 0.999)
+            ? (XCF(V.W) * 0.60 - XCP(V.ITEM_TEXT_X + xShift))
             : (V.W - (V.ITEM_TEXT_X + xShift) - 200);
           drawWrappedText(ctx, items[i].d, XCP(V.ITEM_TEXT_X + xShift),
                           y + V.ITEM_DESC_OFFSET + 4, maxWidth, V.ITEM_DESC_SIZE + 4, 3);
@@ -6851,7 +6876,7 @@ function drawXMB(now) {
           ctx.fillStyle = 'rgb(245,240,250)';
           ctx.font = V.ITEM_TEXT_SIZE + 'px PS3';
           ctx.textAlign = 'right';
-          ctx.fillText(vActive, XCP(V.W) - V.ITEM_VALUE_RIGHT_PAD, y - 1);
+          ctx.fillText(vActive, XCF(V.W) - V.ITEM_VALUE_RIGHT_PAD, y - 1);
         }
       } else {
         // PS3 inactive items use Rodin Regular weight (matches glyph thickness)
@@ -7066,7 +7091,7 @@ function drawClock(fadeMul) {
 
   // 4:3: the clock is right-anchored. Shift the whole group left so its right
   // edge lands on the 4:3 frame edge, keeping its size (LAYOUT_XC-1 is 0 in 16:9).
-  ctx.translate(V.W * (LAYOUT_XC - 1), 0);
+  ctx.translate(V.W * (LAYOUT_FIT - 1), 0);
 
   // ---- Drop shadow (whole clock group) ----
   // The real PS3 XMB renders the clock with a subtle dark drop shadow for
@@ -7809,8 +7834,8 @@ function drawDialog(ctx2) {
   ctx2.strokeStyle = 'rgba(255,255,255,0.55)';
   ctx2.lineWidth = 1;
   ctx2.beginPath();
-  ctx2.moveTo(0, HEADER_DIV_Y);  ctx2.lineTo(XCP(V.W), HEADER_DIV_Y);
-  ctx2.moveTo(0, FOOTER_DIV_Y);  ctx2.lineTo(XCP(V.W), FOOTER_DIV_Y);
+  ctx2.moveTo(0, HEADER_DIV_Y);  ctx2.lineTo(XCF(V.W), HEADER_DIV_Y);
+  ctx2.moveTo(0, FOOTER_DIV_Y);  ctx2.lineTo(XCF(V.W), FOOTER_DIV_Y);
   ctx2.stroke();
   ctx2.restore();
 
@@ -7826,16 +7851,16 @@ function drawDialog(ctx2) {
     // upper-middle of the band, then the body lines below it.
     let centerCY = (innerTop + innerBot) / 2;
     if (t.illustration) {
-      drawIllustration(ctx2, t.illustration, XCP(V.W/2), innerTop + 230, 280);
+      drawIllustration(ctx2, t.illustration, XCF(V.W/2), innerTop + 230, 280);
       centerCY = innerTop + 460;
     }
     ctx2.font = '26px PS3';
     ctx2.fillStyle = 'rgba(255,255,255,0.95)';
     ctx2.textAlign = 'center';
-    const lines = wrapLines(ctx2, t.body || '', (V.W - 400) * LAYOUT_XC);
+    const lines = wrapLines(ctx2, t.body || '', (V.W - 400) * LAYOUT_FIT);
     const lh = 36;
     let ty = centerCY - (lines.length - 1) * lh / 2;
-    for (const ln of lines) { ctx2.fillText(ln, XCP(V.W/2), ty); ty += lh; }
+    for (const ln of lines) { ctx2.fillText(ln, XCF(V.W/2), ty); ty += lh; }
   } else if (t.type === 'chooser') {
     // Chooser (no illustration): body centered near upper third, then
     // option list centered below it. PS3 ref measurement (sysupdate):
@@ -7843,9 +7868,9 @@ function drawDialog(ctx2) {
     ctx2.font = '24px PS3';
     ctx2.fillStyle = 'rgba(255,255,255,0.95)';
     ctx2.textAlign = 'center';
-    const bodyLines = wrapLines(ctx2, t.body || '', (V.W - 400) * LAYOUT_XC);
+    const bodyLines = wrapLines(ctx2, t.body || '', (V.W - 400) * LAYOUT_FIT);
     let ty = innerTop + 105;
-    for (const ln of bodyLines) { ctx2.fillText(ln, XCP(V.W/2), ty); ty += 32; }
+    for (const ln of bodyLines) { ctx2.fillText(ln, XCF(V.W/2), ty); ty += 32; }
     // Options. For long lists (>9 items, e.g. Color chooser with 15 colors)
     // we window the visible slice around ds.sel so the focused item is
     // always centered/visible. PS3 firmware similarly scrolls long option
@@ -7870,18 +7895,18 @@ function drawDialog(ctx2) {
     for (let i = firstVisible; i <= lastVisible; i++) {
       const sel = (i === ds.sel);
       const optY = optTop + (i - firstVisible) * optSpacing;
-      drawDialogOption(ctx2, opts[i], XCP(V.W/2), optY, sel, 'center');
+      drawDialogOption(ctx2, opts[i], XCF(V.W/2), optY, sel, 'center');
     }
     // Up/down arrow hints if the list is windowed.
     if (firstVisible > 0) {
       ctx2.fillStyle = 'rgba(255,255,255,0.5)';
       ctx2.font = '20px PS3';
-      ctx2.fillText('\u25B2', XCP(V.W/2), optTop - 18);
+      ctx2.fillText('\u25B2', XCF(V.W/2), optTop - 18);
     }
     if (lastVisible < opts.length - 1) {
       ctx2.fillStyle = 'rgba(255,255,255,0.5)';
       ctx2.font = '20px PS3';
-      ctx2.fillText('\u25BC', XCP(V.W/2), optTop + visibleCount * optSpacing + 6);
+      ctx2.fillText('\u25BC', XCF(V.W/2), optTop + visibleCount * optSpacing + 6);
     }
   } else if (t.type === 'chooser_illust') {
     // Body text centered upper. Options centered upper. Illustration centered
@@ -7895,12 +7920,12 @@ function drawDialog(ctx2) {
     ctx2.font = '24px PS3';
     ctx2.fillStyle = 'rgba(255,255,255,0.95)';
     ctx2.textAlign = 'center';
-    const bodyLines = wrapLines(ctx2, t.body || '', (V.W - 400) * LAYOUT_XC);
+    const bodyLines = wrapLines(ctx2, t.body || '', (V.W - 400) * LAYOUT_FIT);
     let by = innerTop + 115;
-    for (const ln of bodyLines) { ctx2.fillText(ln, XCP(V.W/2), by); by += 32; }
+    for (const ln of bodyLines) { ctx2.fillText(ln, XCF(V.W/2), by); by += 32; }
     // Options - left-aligned around x = V.W*0.37 (matches PS3 ref ~x=709/1920)
     const opts = t.options || [];
-    const OPT_X = Math.round(XCP(V.W * 0.37));
+    const OPT_X = Math.round(XCF(V.W * 0.37));
     const optTop = innerTop + 220;
     const optSpacing = 42;
     for (let i = 0; i < opts.length; i++) {
@@ -7910,31 +7935,31 @@ function drawDialog(ctx2) {
     }
     // Illustration - below the options.
     const illY = innerTop + 220 + Math.max(opts.length, 3) * optSpacing + 100;
-    drawIllustration(ctx2, t.illustration || 'hdmi_cable', XCP(V.W/2), illY, 240);
+    drawIllustration(ctx2, t.illustration || 'hdmi_cable', XCF(V.W/2), illY, 240);
     // Notice text right above the footer divider.
     if (t.notice) {
       ctx2.font = '22px PS3';
       ctx2.fillStyle = 'rgba(255,255,255,0.85)';
       ctx2.textAlign = 'center';
-      ctx2.fillText(t.notice, XCP(V.W/2), innerBot - 22);
+      ctx2.fillText(t.notice, XCF(V.W/2), innerBot - 22);
     }
   } else if (t.type === 'confirm') {
     // Confirm: body centered, Yes/No buttons centered below.
     ctx2.font = '26px PS3';
     ctx2.fillStyle = 'rgba(255,255,255,0.95)';
     ctx2.textAlign = 'center';
-    const bodyLines = wrapLines(ctx2, t.body || '', (V.W - 400) * LAYOUT_XC);
+    const bodyLines = wrapLines(ctx2, t.body || '', (V.W - 400) * LAYOUT_FIT);
     let centerY = (innerTop + innerBot) / 2;
     if (t.illustration) {
-      drawIllustration(ctx2, t.illustration, XCP(V.W/2), innerTop + 230, 260);
+      drawIllustration(ctx2, t.illustration, XCF(V.W/2), innerTop + 230, 260);
       centerY = innerTop + 460;
     }
     const lh = 36;
     let ty = centerY - (bodyLines.length - 1) * lh / 2 - 50;
-    for (const ln of bodyLines) { ctx2.fillText(ln, XCP(V.W/2), ty); ty += lh; }
+    for (const ln of bodyLines) { ctx2.fillText(ln, XCF(V.W/2), ty); ty += lh; }
     // Yes / No, centered, side by side.
     const labels = ['Yes', 'No'];
-    const bx = XCP(V.W/2) - 110;
+    const bx = XCF(V.W/2) - 110;
     const by_ = ty + 30;
     for (let i = 0; i < 2; i++) {
       const sel = (i === ds.sel);
@@ -7957,8 +7982,8 @@ function drawDialog(ctx2) {
   // Hint slot definitions: fixed x centers matching the PS3 firmware layout.
   // Each hint chooses one of these two slots so positions stay consistent
   // across dialog types.
-  const HINT_SLOT_ENTER_CX  = Math.round(XCP(V.W * 0.401));   // 770 @ 1920w
-  const HINT_SLOT_CANCEL_CX = Math.round(XCP(V.W * 0.629));   // 1208 @ 1920w
+  const HINT_SLOT_ENTER_CX  = Math.round(XCF(V.W * 0.401));   // 770 @ 1920w
+  const HINT_SLOT_CANCEL_CX = Math.round(XCF(V.W * 0.629));   // 1208 @ 1920w
   const HINT_GLYPH_R = 12;
   const HINT_GLYPH_TEXT_GAP = 12;
 
@@ -8097,7 +8122,7 @@ function drawSidePanel(ctx2, ds, ap) {
   // (then XCP-compressed): left base 1056 -> 0.55 of frame, text base 1100.
   const _sp43 = LAYOUT_XC < 0.999;
   const SP_PANEL_LEFT = XCP(_sp43 ? 1056 : 1324);
-  const SP_PANEL_RIGHT = _sp43 ? XCP(V.W) : 1697;
+  const SP_PANEL_RIGHT = _sp43 ? XCF(V.W) : 1697;
   const SP_PANEL_CORE_X = XCP(_sp43 ? 1110 : 1377);  // darkest gradient point
   const SP_PANEL_WIDTH = SP_PANEL_RIGHT - SP_PANEL_LEFT;
   const SP_TEXT_X = XCP(_sp43 ? 1100 : 1340);  // left edge of text labels
@@ -8387,7 +8412,7 @@ function drawLanding(ctx2) {
     if (bgEntry.loaded) {
       // COVER the frame at the image's true aspect (crop, never stretch). In
       // 4:3 the frame is XCP(V.W) wide, so the 16:9 wallpaper is centre-cropped.
-      const fw = XCP(V.W), fh = V.H, im = bgEntry.img;
+      const fw = XCF(V.W), fh = V.H, im = bgEntry.img;
       const ir = im.width / im.height, fr = fw / fh;
       let sw, sh, sx, sy;
       if (ir > fr) { sh = im.height; sw = sh * fr; sx = (im.width - sw) / 2; sy = 0; }
@@ -8415,12 +8440,12 @@ function drawLanding(ctx2) {
     bg.addColorStop(0.55, ramp(1.06));
     bg.addColorStop(1, ramp(1.18));   // bottom x1.18
     ctx2.fillStyle = bg;
-    ctx2.fillRect(0, 0, XCP(V.W), V.H);
+    ctx2.fillRect(0, 0, XCF(V.W), V.H);
   }
 
   // Subtle vignette in the corners for depth. Slightly darker when a bg image
   // is in use so the hero panel and text remain legible against busy imagery.
-  const _fw = XCP(V.W);
+  const _fw = XCF(V.W);
   const vig = ctx2.createRadialGradient(_fw / 2, V.H / 2, _fw * 0.35,
                                         _fw / 2, V.H / 2, _fw * 0.7);
   vig.addColorStop(0, 'rgba(0,0,0,0)');
@@ -8461,7 +8486,7 @@ function drawLanding(ctx2) {
 
   // Right column: title + body.
   const colX = heroX + heroSize + (_land43 ? 36 : 80);
-  const colW = XCP(V.W) - colX - (_land43 ? 40 : 160);
+  const colW = XCF(V.W) - colX - (_land43 ? 40 : 160);
 
   // Title.
   ctx2.fillStyle = '#fff';
@@ -8497,7 +8522,7 @@ function drawLanding(ctx2) {
   ctx2.textAlign = 'left';
   const hintLabel = 'Back';
   const lblW = ctx2.measureText(hintLabel).width;
-  const rightEdge = XCP(V.W) - 80;
+  const rightEdge = XCF(V.W) - 80;
   ctx2.fillText(hintLabel, rightEdge - lblW, hintY);
   drawCircleGlyph(ctx2, rightEdge - lblW - 18, hintY, 12);
 
@@ -8979,8 +9004,15 @@ document.addEventListener('keydown', e => {
       case 'Backspace': case 'Escape': case 'z': case 'Z':
         e.preventDefault(); back(); break;
       case 'Tab':
+        // Cycle through the supported aspect ratios (Shift+Tab goes backwards).
         e.preventDefault();
-        aspect = aspect === '16:9' ? '4:3' : '16:9';
+        {
+          const n = ASPECT_ORDER.length;
+          let idx = ASPECT_ORDER.indexOf(aspect);
+          if (idx < 0) idx = 0;
+          idx = (idx + (e.shiftKey ? n - 1 : 1)) % n;
+          aspect = ASPECT_ORDER[idx];
+        }
         resize(); break;
     }
   }
