@@ -1690,14 +1690,15 @@ function resize() {
   if (vw / vh > r) { h = vh; w = h * r; } else { w = vw; h = w / r; }
   scr.style.width = w + 'px';
   scr.style.height = h + 'px';
-  // Scale from virtual 1920x1080 space to display pixels. In 4:3 the real PS3
-  // does NOT letterbox the 16:9 XMB -- it FILLS the 4:3 frame, keeping the full
-  // vertical layout and compressing horizontally (anamorphic SD). So use a
-  // separate horizontal/vertical scale: scaleY fills the height, scaleX fills
-  // the (narrower) width. In 16:9 the two are equal (uniform).
-  scaleX = w / V.W;
-  scaleY = h / V.H;
-  scale = scaleX;   // back-compat for any single-scale consumers
+  // Scale from virtual 1920x1080 space to display pixels. UNIFORM scale (never
+  // anamorphic) so icons/text/wave keep their true aspect and are NEVER
+  // stretched. In 4:3 this fits the 16:9 layout into the 4:3 frame uniformly.
+  // (A true firmware-accurate 4:3 re-layout -- compressing element POSITIONS
+  // while keeping element SIZES -- is handled separately via LAYOUT_XC below,
+  // not by squashing the pixels.)
+  scale = w / V.W;
+  scaleX = scale;
+  scaleY = scale;
   bgCanvas.width = w * dpr;
   bgCanvas.height = h * dpr;
   xmbCanvas.width = w * dpr;
@@ -8063,17 +8064,11 @@ function drawSidePanel(ctx2, ds, ap) {
   // xmb_plugin.prx and explore_plugin.prx). The XMB stays visible during
   // the animation; only the panel x-offset and alpha change.
 
-  // In 4:3 the real PS3 side-panel chooser is much WIDER (it starts near the
-  // horizontal centre ~0.55 of the frame and fills to the right edge), versus
-  // the narrow band used in 16:9. Use 4:3-specific panel x metrics (in the same
-  // 1920-wide virtual space, which the anamorphic scaleX then compresses to the
-  // 4:3 frame, so 1056/1920 = 0.55 frac). Measured from the RPCS3 4:3 capture.
-  const _is43 = (typeof aspect !== 'undefined' && aspect === '4:3');
-  const SP_PANEL_LEFT = _is43 ? 1056 : 1324;
-  const SP_PANEL_RIGHT = _is43 ? 1920 : 1697;
-  const SP_PANEL_CORE_X = _is43 ? 1110 : 1377;   // darkest gradient point
-  const SP_PANEL_WIDTH = SP_PANEL_RIGHT - SP_PANEL_LEFT;
-  const SP_TEXT_X = _is43 ? 1110 : 1340;   // left edge of text labels
+  const SP_PANEL_LEFT = 1324;
+  const SP_PANEL_RIGHT = 1697;
+  const SP_PANEL_CORE_X = 1377;            // darkest gradient point
+  const SP_PANEL_WIDTH = SP_PANEL_RIGHT - SP_PANEL_LEFT;  // 373
+  const SP_TEXT_X = 1340;                  // left edge of text labels
   const SP_ITEM_PITCH = 40;                // vertical pitch between items
   // Font sizing measured from RPCS3 1080p captures:
   //   non-selected 'O' bounds 84x21 px, stroke width ~3 px, glyph peak ~229
@@ -8085,7 +8080,7 @@ function drawSidePanel(ctx2, ds, ap) {
   const SP_FONT_REG = '400 22px PS3';      // non-selected: Rodin Regular 22px
   const SP_FONT_SEL = '400 26px PS3';      // selected:     Rodin Regular 26px
   const SP_SWATCH_SIZE = 27;               // color swatch px (Color chooser only)
-  const SP_SWATCH_X = _is43 ? 1111 : 1341; // swatch left x
+  const SP_SWATCH_X = 1341;                // swatch left x
   // The option LIST has a fixed top y; selection just changes font weight/size,
   // it does NOT shift the list to anchor the selected item to a focus row.
   // Measured: in theme_chooser, Original (idx 0) is at y=512 and Classic
