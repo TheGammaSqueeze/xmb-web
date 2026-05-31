@@ -1829,8 +1829,14 @@ function resize() {
   const r = portrait ? (1 / baseR) : baseR;
   let w, h;
   if (vw / vh > r) { h = vh; w = h * r; } else { w = vw; h = w / r; }
-  scr.style.width = w + 'px';
-  scr.style.height = h + 'px';
+  // In TRUE 1x mode the CSS box is sized to native/realDPR while the backing
+  // stays at the native pixel count (dpr=1), so the browser maps each native
+  // pixel to exactly ONE physical device pixel -- the standard pixel-perfect
+  // canvas mapping, with NO transform-scale resample (which on a HiDPI display
+  // would otherwise upscale the backing 2x and then shrink it, leaving it soft).
+  const cssScale = trueNative ? (1 / realDPR) : 1;
+  scr.style.width = (w * cssScale) + 'px';
+  scr.style.height = (h * cssScale) + 'px';
   // Display scaling for a simulated resolution. The canvas is rendered at the
   // native size; for display we use the LARGEST INTEGER scale that still fits the
   // real window, with pill/ letterboxing around it (the black #wrap background),
@@ -1842,13 +1848,11 @@ function resize() {
   if (simRes && simRes.w) {
     scr.style.transformOrigin = 'center center';
     if (trueNative) {
-      // TRUE 1x: native backing (dpr=1) shown at exactly ONE device pixel per
-      // native pixel. On a HiDPI display the browser would otherwise magnify the
-      // CSS box by realDPR, so we counter-scale by 1/realDPR to keep it a literal
-      // 1:1 target-screen image. Centred -> pill/letterboxed by the black #wrap.
-      const s1 = 1 / realDPR;
-      scr.style.transform = (Math.abs(s1 - 1) > 0.0001) ? ('scale(' + s1 + ')') : '';
-      scr.classList.remove('pixelated');
+      // TRUE 1x: the pixel-perfect 1:1 mapping is achieved by the CSS box sizing
+      // above (native/realDPR) + native-size backing, so NO transform is needed.
+      // Centred by the flex #wrap -> pill/letterboxed by its black background.
+      scr.style.transform = '';
+      scr.classList.add('pixelated');
     } else {
       const kf = Math.min(window.innerWidth / w, window.innerHeight / h);
       const k = (kf >= 1) ? Math.floor(kf) : kf;     // integer up, fractional down
