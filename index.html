@@ -1680,7 +1680,7 @@ dialogBlurCanvas.height = DIALOG_BLUR_H;
 const chromeXfadeCanvas = document.createElement('canvas');
 const chromeXfadeCtx = chromeXfadeCanvas.getContext('2d');
 
-let scale = 1, dpr = window.devicePixelRatio || 1;
+let scale = 1, scaleX = 1, scaleY = 1, dpr = window.devicePixelRatio || 1;
 
 function resize() {
   const vw = window.innerWidth, vh = window.innerHeight;
@@ -1690,8 +1690,14 @@ function resize() {
   if (vw / vh > r) { h = vh; w = h * r; } else { w = vw; h = w / r; }
   scr.style.width = w + 'px';
   scr.style.height = h + 'px';
-  // Scale from virtual 1920x1080 space to display pixels
-  scale = w / V.W;
+  // Scale from virtual 1920x1080 space to display pixels. In 4:3 the real PS3
+  // does NOT letterbox the 16:9 XMB -- it FILLS the 4:3 frame, keeping the full
+  // vertical layout and compressing horizontally (anamorphic SD). So use a
+  // separate horizontal/vertical scale: scaleY fills the height, scaleX fills
+  // the (narrower) width. In 16:9 the two are equal (uniform).
+  scaleX = w / V.W;
+  scaleY = h / V.H;
+  scale = scaleX;   // back-compat for any single-scale consumers
   bgCanvas.width = w * dpr;
   bgCanvas.height = h * dpr;
   xmbCanvas.width = w * dpr;
@@ -1715,8 +1721,8 @@ function resize() {
       fboH = 0;
     }
   }
-  bgCtx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
-  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+  bgCtx.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, 0);
+  ctx.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, 0);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   // Crisp text rendering matching PS3 typography
@@ -7726,7 +7732,7 @@ function drawDialog(ctx2) {
 
   // Restore the virtual-pixel transform used by the rest of the dialog
   // (matches the value set up in resize()).
-  ctx2.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+  ctx2.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, 0);
   ctx2.globalAlpha = ap;
 
   // ---- Dialog text drop shadow ----
