@@ -6826,7 +6826,7 @@ function drawXMB(now) {
           // width is the left ~55% of the frame (before the chooser panel / value
           // column), so the description re-wraps to more lines like the real.
           const maxWidth = (LAYOUT_XC < 0.999)
-            ? (XCP(V.W) * 0.55 - XCP(V.ITEM_TEXT_X + xShift))
+            ? (XCP(V.W) * 0.55 - XCP(V.ITEM_TEXT_X + xShift) - 34)
             : (V.W - (V.ITEM_TEXT_X + xShift) - 200);
           drawWrappedText(ctx, items[i].d, XCP(V.ITEM_TEXT_X + xShift),
                           y + V.ITEM_DESC_OFFSET + 4, maxWidth, V.ITEM_DESC_SIZE + 4, 3);
@@ -8385,7 +8385,14 @@ function drawLanding(ctx2) {
   if (t.bg) {
     const bgEntry = getCinfoBg(t.bg);
     if (bgEntry.loaded) {
-      ctx2.drawImage(bgEntry.img, 0, 0, V.W, V.H);
+      // COVER the frame at the image's true aspect (crop, never stretch). In
+      // 4:3 the frame is XCP(V.W) wide, so the 16:9 wallpaper is centre-cropped.
+      const fw = XCP(V.W), fh = V.H, im = bgEntry.img;
+      const ir = im.width / im.height, fr = fw / fh;
+      let sw, sh, sx, sy;
+      if (ir > fr) { sh = im.height; sw = sh * fr; sx = (im.width - sw) / 2; sy = 0; }
+      else { sw = im.width; sh = sw / fr; sx = 0; sy = (im.height - sh) / 2; }
+      ctx2.drawImage(im, sx, sy, sw, sh, 0, 0, fw, fh);
       bgPainted = true;
     }
   }
@@ -8408,23 +8415,27 @@ function drawLanding(ctx2) {
     bg.addColorStop(0.55, ramp(1.06));
     bg.addColorStop(1, ramp(1.18));   // bottom x1.18
     ctx2.fillStyle = bg;
-    ctx2.fillRect(0, 0, V.W, V.H);
+    ctx2.fillRect(0, 0, XCP(V.W), V.H);
   }
 
   // Subtle vignette in the corners for depth. Slightly darker when a bg image
   // is in use so the hero panel and text remain legible against busy imagery.
-  const vig = ctx2.createRadialGradient(V.W / 2, V.H / 2, V.W * 0.35,
-                                        V.W / 2, V.H / 2, V.W * 0.7);
+  const _fw = XCP(V.W);
+  const vig = ctx2.createRadialGradient(_fw / 2, V.H / 2, _fw * 0.35,
+                                        _fw / 2, V.H / 2, _fw * 0.7);
   vig.addColorStop(0, 'rgba(0,0,0,0)');
   vig.addColorStop(1, bgPainted ? 'rgba(0,0,0,0.65)' : 'rgba(0,0,0,0.28)');
   ctx2.fillStyle = vig;
-  ctx2.fillRect(0, 0, V.W, V.H);
+  ctx2.fillRect(0, 0, XCP(V.W), V.H);
 
   // Hero panel on the left: rounded square containing the item icon. If the
   // normal-map icon hasn't finished loading we still draw the placeholder
   // panel so the layout never collapses.
+  // In 4:3 the frame is narrower, so the hero sits closer to the left and the
+  // title uses a slightly smaller face so it fits beside the text column.
+  const _land43 = LAYOUT_XC < 0.999;
   const heroSize = 460;
-  const heroX = 220;
+  const heroX = XCP(_land43 ? 130 : 220);
   const heroY = (V.H - heroSize) / 2;
   ctx2.save();
   const hg = ctx2.createLinearGradient(0, heroY, 0, heroY + heroSize);
@@ -8449,14 +8460,14 @@ function drawLanding(ctx2) {
   }
 
   // Right column: title + body.
-  const colX = heroX + heroSize + 80;
-  const colW = V.W - colX - 160;
+  const colX = heroX + heroSize + (_land43 ? 36 : 80);
+  const colW = XCP(V.W) - colX - (_land43 ? 40 : 160);
 
   // Title.
   ctx2.fillStyle = '#fff';
   ctx2.textAlign = 'left';
   ctx2.textBaseline = 'alphabetic';
-  ctx2.font = 'bold 52px PS3';
+  ctx2.font = 'bold ' + (_land43 ? 42 : 52) + 'px PS3';
   let ty = heroY + 70;
   ctx2.fillText(t.title || '', colX, ty);
 
@@ -8486,7 +8497,7 @@ function drawLanding(ctx2) {
   ctx2.textAlign = 'left';
   const hintLabel = 'Back';
   const lblW = ctx2.measureText(hintLabel).width;
-  const rightEdge = V.W - 80;
+  const rightEdge = XCP(V.W) - 80;
   ctx2.fillText(hintLabel, rightEdge - lblW, hintY);
   drawCircleGlyph(ctx2, rightEdge - lblW - 18, hintY, 12);
 
