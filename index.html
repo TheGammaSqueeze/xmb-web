@@ -4550,6 +4550,9 @@ attribute vec3 aNormal;   // object-space normal (lighting)
 attribute vec2 aUV;       // [0,1]^2 over the grid
 uniform float uYFlip;     // PS3 clip-space -> WebGL clip-space Y sign
 uniform float uScaleY;    // small vertical fit factor if needed (1.0 default)
+uniform float uScaleX;    // horizontal aspect correction: 1.0 in 16:9; >1 in 4:3
+                          // so the wave keeps its natural strand width instead
+                          // of being squashed into the narrower frame.
 uniform vec2 uOffset;     // clip-space nudge (px-scaled) for multi-pass strand thickening
 varying vec3 vNdc;
 varying vec3 vNrm;
@@ -4557,6 +4560,7 @@ varying vec2 vUV;
 void main(){
   vec4 p = aClip;
   p.y *= uYFlip * uScaleY;
+  p.x *= uScaleX;
   p.xy += uOffset * p.w;   // multiply by w so the nudge is constant in screen px
   gl_Position = p;
   vNdc = p.xyz / p.w;
@@ -4905,6 +4909,9 @@ function drawCapturedWave(fade) {
   if (aUV >= 0) { gl.enableVertexAttribArray(aUV); gl.vertexAttribPointer(aUV, 2, gl.FLOAT, false, 20, 12); }
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uYFlip'), (window._waveYFlip != null) ? window._waveYFlip : 1.0);
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uScaleY'), (window._waveScaleY != null) ? window._waveScaleY : 0.8);
+  // Aspect correction: in 4:3 the wave canvas is narrower, so multiply clip.x by
+  // 1/LAYOUT_XC to keep the wave's strands at their true (16:9) width.
+  gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uScaleX'), (LAYOUT_XC > 0.0 ? 1.0 / LAYOUT_XC : 1.0));
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uFade'), fade);
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uAlpha'), (window._waveAlpha2 != null) ? window._waveAlpha2 : 0.18);
   gl.uniform3fv(gl.getUniformLocation(waveCapProgram, 'uTint'), new Float32Array((window._waveTint) || [0.96, 0.97, 1.00]));
