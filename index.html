@@ -7592,18 +7592,28 @@ function drawClock(fadeMul) {
   const hourAngle = baseHour + spin;
   let minAngle = baseMin + spin;
   minAngle = hourAngle + (minAngle - hourAngle) * (1 - sweepT);
-  // Fill the MINOR arc between the two hands: normalize the signed delta into
-  // (-PI, PI] and sweep from the hour hand by that delta.
-  let delta = minAngle - hourAngle;
-  while (delta > Math.PI) delta -= TWO_PI;
-  while (delta <= -Math.PI) delta += TWO_PI;
-  const wedgeR = iconR - 2.7;
-  ctx.fillStyle = 'rgba(255,255,255,0.95)';
-  ctx.beginPath();
+  // ---- Hour + minute HANDS ----
+  // The real PS3 clock icon draws TWO distinct hands (a shorter hour hand and a
+  // longer minute hand) radiating from the centre -- NOT a filled pie wedge.
+  // Verified at 8x zoom on the 4K RPCS3 capture (at 21:01 the hour hand points
+  // to 9 o'clock and the minute hand to 12, with empty space between them). When
+  // the transition sweep converges minAngle onto hourAngle, the two hands stack
+  // into a single line -- matching the real "spin then collapse to a line".
+  ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = Math.max(2, iconR * 0.17);
+  ctx.beginPath();   // hour hand (shorter)
   ctx.moveTo(iconX, iconY);
-  ctx.arc(iconX, iconY, wedgeR, hourAngle, hourAngle + delta, delta < 0);
-  ctx.closePath();
-  ctx.fill();
+  ctx.lineTo(iconX + Math.cos(hourAngle) * iconR * 0.52,
+             iconY + Math.sin(hourAngle) * iconR * 0.52);
+  ctx.stroke();
+  ctx.beginPath();   // minute hand (longer)
+  ctx.moveTo(iconX, iconY);
+  ctx.lineTo(iconX + Math.cos(minAngle) * iconR * 0.74,
+             iconY + Math.sin(minAngle) * iconR * 0.74);
+  ctx.stroke();
+  ctx.lineCap = 'butt';
 
   // ---- Time text ----
   // Measured from RPCS3: digits span y=94..115 (baseline near y=114), text right
