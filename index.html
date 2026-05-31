@@ -7402,29 +7402,27 @@ function drawXMB(now) {
   drawClock(inBootReveal ? bootIconReveal : 1);
 }
 
-// Clock transition progress [0..1]: 0 = settled on the XMB, 1 = fully gone into a
-// FULLSCREEN menu (System Update etc.) or landing card. Ramps with that menu's
-// own open/close animation so the clock's hand-sweep stays synced to the chrome
-// cross-fade. Side-panel choosers (Theme/Colour) keep the XMB -- and the clock --
-// visible, so they do NOT drive this.
-function clockSweepProgress() {
+// One-shot clock-hand spin. The real XMB spins the analog hands a full
+// revolution whenever the menu context changes -- entering/leaving a submenu
+// (clock stays visible, hands cycle round and settle back on the time, verified
+// /work/clock2.mp4) OR a fullscreen dialog / landing (where the clock also fades
+// out via the chrome cross-fade, verified /work/clock.mp4). Side-panel choosers
+// (Theme/Colour) are NOT a context change, so they don't trigger it. Returns the
+// spin progress [0..1] of the most recent change; 1 (settled) leaves the hands
+// exactly on the current time.
+let _clkMenuSig = null, _clkSpinStart = -1e9;
+const CLOCK_SPIN_MS = 620;        // duration of the hand cycle
+const CLOCK_SWEEP_TURNS = 1;      // full revolutions per spin (integer -> ends on the time)
+function clockSpinProgress() {
   const now = performance.now();
-  if (dialogState && dialogState.template && dialogState.template.panel !== true) {
-    return dialogState.anim ? Math.min(1, (now - dialogState.anim.start) / dialogState.anim.dur) : 1;
-  }
-  if (dialogClosing && dialogClosing.template && dialogClosing.template.panel !== true) {
-    return 1 - Math.min(1, (now - dialogClosing.start) / dialogClosing.dur);
-  }
-  if (landingState) {
-    return landingState.anim ? Math.min(1, (now - landingState.anim.start) / landingState.anim.dur) : 1;
-  }
-  return 0;
+  const sig = stack.length + '|'
+            + ((dialogState && dialogState.template && dialogState.template.panel !== true) ? 'd' : '')
+            + (dialogClosing ? 'c' : '')
+            + (landingState ? 'l' : '');
+  if (_clkMenuSig === null) { _clkMenuSig = sig; }    // first frame: no spin
+  else if (sig !== _clkMenuSig) { _clkMenuSig = sig; _clkSpinStart = now; }
+  return Math.min(1, Math.max(0, (now - _clkSpinStart) / CLOCK_SPIN_MS));
 }
-// How far the minute hand winds over a full transition (the hour hand follows at
-// 1/12 that, like a real clock), giving the analog icon its signature sweep as
-// the clock enters/leaves. Tuned to the latest.mp4 menu transition (~one turn
-// over the ~0.3 s cross-fade); refined further against RPCS3/firmware later.
-const CLOCK_SWEEP_TURNS = 1.0;
 
 function drawClock(fadeMul) {
   if (fadeMul === undefined) fadeMul = 1;
@@ -7555,64 +7553,65 @@ function drawClock(fadeMul) {
   ctx.stroke();
 
   // ---- Clock icon ----
-  // Measured: 32x32 bbox, center at (1789.5, 103.5), so outer radius = 16.
-  // The icon is an outline ring (thickness ~2.5px) with a filled wedge that is
-  // the SECTOR BETWEEN THE HOUR HAND AND THE MINUTE HAND of a 12-hour analog
-  // clock (NOT a 12-o'clock-to-minute pie). Verified against the real frames:
-  //   - 12:19 -> hour 0deg (up), minute 114deg: wedge fills upper-right (the
-  //     0..114 deg minor arc).
-  //   - 21:44 -> hour 292deg, minute 264deg: thin wedge at 264..292 deg
-  //     (measured fill at radius 6 spanned ~252..309 deg, center 280).
-  // So fill the MINOR arc between the hour-hand angle and the minute-hand angle.
+  // Measured: 32x32 bbox, centre (1789.5, 103.5), outer radius 16. An outline
+  // RING with two analog HANDS (hour + minute), a white glow and a dark drop
+  // shadow. Pixel-matched to the 4K RPCS3 capture; see drawClockFace below.
   const iconR = V.CLOCK_ICON_R;
   const iconX = V.CLOCK_ICON_CX;
   const iconY = fy + fh / 2;
 
-  // Outline ring (thicker than a hairline; measured ~2.5px from the falloff)
-  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
-  ctx.lineWidth = 2.2;
-  ctx.beginPath();
-  ctx.arc(iconX, iconY, iconR - 1.1, 0, Math.PI * 2);
-  ctx.stroke();
-
   // Hour/minute hand angles (canvas angle space; -PI/2 == 12 o'clock / up).
-  // 12-hour analog convention: the hour hand advances with the minutes.
   const TWO_PI = Math.PI * 2;
   const UP = -Math.PI / 2;
-  // Transition sweep (verified against /work/clock.mp4): when the clock enters or
-  // leaves a fullscreen menu -- or the boot/XMB-load reveal (fadeMul 0->1) -- the
-  // analog hands CYCLE ALL THE WAY AROUND the face. Both hands spin
-  // CLOCK_SWEEP_TURNS full turns, AND the minute hand converges onto the hour
-  // hand over the sweep, so the wedge spins a full revolution then winds shut to
-  // a thin line right as the clock fades -- exactly the real icon's motion.
-  const sweepT = ease(Math.max(clockSweepProgress(), Math.max(0, 1 - fadeMul)));
-  const spin = sweepT * TWO_PI * CLOCK_SWEEP_TURNS;
-  const baseHour = UP + (((h % 12) + minNum / 60) / 12) * TWO_PI;
-  const baseMin = UP + (minNum / 60) * TWO_PI;
-  const hourAngle = baseHour + spin;
-  let minAngle = baseMin + spin;
-  minAngle = hourAngle + (minAngle - hourAngle) * (1 - sweepT);
-  // ---- Hour + minute HANDS ----
-  // The real PS3 clock icon draws TWO distinct hands (a shorter hour hand and a
-  // longer minute hand) radiating from the centre -- NOT a filled pie wedge.
-  // Verified at 8x zoom on the 4K RPCS3 capture (at 21:01 the hour hand points
-  // to 9 o'clock and the minute hand to 12, with empty space between them). When
-  // the transition sweep converges minAngle onto hourAngle, the two hands stack
-  // into a single line -- matching the real "spin then collapse to a line".
-  ctx.strokeStyle = 'rgba(255,255,255,0.95)';
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.lineWidth = Math.max(2, iconR * 0.17);
-  ctx.beginPath();   // hour hand (shorter)
-  ctx.moveTo(iconX, iconY);
-  ctx.lineTo(iconX + Math.cos(hourAngle) * iconR * 0.52,
-             iconY + Math.sin(hourAngle) * iconR * 0.52);
-  ctx.stroke();
-  ctx.beginPath();   // minute hand (longer)
-  ctx.moveTo(iconX, iconY);
-  ctx.lineTo(iconX + Math.cos(minAngle) * iconR * 0.74,
-             iconY + Math.sin(minAngle) * iconR * 0.74);
-  ctx.stroke();
+  // Both hands rotate rigidly by `spin`, which eases from 0 up through one full
+  // revolution and back to 0 over the spin (CLOCK_SWEEP_TURNS is an integer, so
+  // it lands exactly on 2*PI identity) -- the hands cycle all the way around and
+  // settle back on the current time. The boot/XMB-load reveal (fadeMul 0->1) also
+  // spins the hands in.
+  const spinT = ease(Math.max(clockSpinProgress(), Math.max(0, 1 - fadeMul)));
+  const spin = spinT * TWO_PI * CLOCK_SWEEP_TURNS;
+  const hourAngle = UP + (((h % 12) + minNum / 60) / 12) * TWO_PI + spin;
+  const minAngle = UP + (minNum / 60) * TWO_PI + spin;
+
+  // ---- Clock FACE: ring + two hands (pixel-matched to the 4K RPCS3 capture) ----
+  //   ring stroke ~2.6 px, hands ~4 px (iconR*0.25) uniform width, hour hand to
+  //   0.47*R, minute hand to 0.69*R. Drawn in three passes for the real look:
+  //   a dark DROP SHADOW (offset down), a soft white GLOW halo, then the crisp
+  //   white face. The face is two distinct hands -- NOT a filled wedge.
+  const HAND_W = Math.max(2.4, iconR * 0.25);
+  const RING_W = Math.max(2, iconR * 0.16);
+  const hourLen = iconR * 0.47, minLen = iconR * 0.69;
+  function drawClockFace() {
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(255,255,255,0.96)';
+    ctx.lineWidth = RING_W;                       // ring
+    ctx.beginPath();
+    ctx.arc(iconX, iconY, iconR - RING_W / 2 - 0.6, 0, TWO_PI);
+    ctx.stroke();
+    ctx.lineWidth = HAND_W;                        // hands
+    ctx.beginPath();
+    ctx.moveTo(iconX, iconY);
+    ctx.lineTo(iconX + Math.cos(hourAngle) * hourLen, iconY + Math.sin(hourAngle) * hourLen);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(iconX, iconY);
+    ctx.lineTo(iconX + Math.cos(minAngle) * minLen, iconY + Math.sin(minAngle) * minLen);
+    ctx.stroke();
+  }
+  ctx.save();
+  // 1. dark drop shadow (offset down), matching the dark halo under the real icon
+  ctx.shadowColor = 'rgba(0,0,0,0.55)';
+  ctx.shadowBlur = 3; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 2;
+  drawClockFace();
+  // 2. soft white glow halo (the icon's signature glow -- subtle, not a bloom)
+  ctx.shadowColor = 'rgba(255,255,255,0.35)';
+  ctx.shadowBlur = 3.5; ctx.shadowOffsetY = 0;
+  drawClockFace();
+  // 3. crisp face on top, no shadow
+  ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0;
+  drawClockFace();
+  ctx.restore();
   ctx.lineCap = 'butt';
 
   // ---- Time text ----
