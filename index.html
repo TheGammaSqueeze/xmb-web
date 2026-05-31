@@ -9041,10 +9041,10 @@ function enter() {
     parentItems: parentItems,
     parentIdx: parentIdx,
     childItems: childItems,
-    // Firmware-verified Hermite (0.5, 0.4) for submenu scroll-in
-    // (explore vaddr 0x2708D8/DC). The cat/item observation override
-    // (3.0, 0.3) is too aggressive for the wider 380px column slide.
-    ease: (t) => easeWithWeights(t, V.EASE_IN_WEIGHT, V.EASE_OUT_WEIGHT)
+    // Use the SAME snappy, front-loaded easeOutCubic as category scrolling so
+    // entering a submenu feels just as responsive (the old Hermite (0.5,0.4)
+    // started slowly and read as sluggish by comparison).
+    ease: easeOutCubic
   };
   queueOrLock(V.SUBMENU_ANIM_MS);
   playNav2();
@@ -9085,8 +9085,8 @@ function back() {
     parentItems: parentItems,
     parentIdx: f.pi,
     childItems: childItems,
-    // Symmetric Hermite (0.5, 0.4) for the scroll-out
-    ease: (t) => easeWithWeights(t, V.EASE_IN_WEIGHT, V.EASE_OUT_WEIGHT)
+    // Match the snappy easeOutCubic used for entering / category scrolling.
+    ease: easeOutCubic
   };
   ii = f.pi;
   queueOrLock(V.SUBMENU_ANIM_MS);
