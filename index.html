@@ -11,7 +11,7 @@
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'PS3',sans-serif;color:#fff;user-select:none}
 #wrap{display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:#000}
-#scr{position:relative;overflow:hidden;background:#000}
+#scr{position:relative;overflow:hidden;background:#000;flex-shrink:0}
 canvas{position:absolute;top:0;left:0;width:100%;height:100%}
 #bg{z-index:0}
 #wave{z-index:1}
@@ -1337,6 +1337,37 @@ let orientation = (function () {
   return 'landscape';
 })();
 
+// Resolution simulation. ?res=1280x720 (or a preset like ?res=720p / 1080p /
+// 4k / 480p / 576p) renders the app as if the viewport were exactly that pixel
+// size, regardless of the real window -- the frame is drawn at the simulated
+// resolution and visually shrunk to fit the window if it is larger. ?dpr=N
+// overrides the device pixel ratio (e.g. ?dpr=2 to simulate a retina panel; the
+// canvas backing store is N x the CSS size). Either can be combined with
+// ?aspect= and ?portrait. With ?res, dpr defaults to 1 so "res" is the true
+// backing-store pixel count.
+const RES_PRESETS = {
+  '240p': [426, 240], '360p': [640, 360], '480p': [640, 480], 'vga': [640, 480],
+  '576p': [720, 576], '720p': [1280, 720], 'hd': [1280, 720], '768p': [1366, 768],
+  '900p': [1600, 900], '1080p': [1920, 1080], 'fhd': [1920, 1080],
+  '1440p': [2560, 1440], 'qhd': [2560, 1440], '2160p': [3840, 2160],
+  '4k': [3840, 2160], 'uhd': [3840, 2160]
+};
+let simRes = (function () {
+  try {
+    const sp = new URLSearchParams(location.search);
+    const q = (sp.get('res') || sp.get('resolution') || '').toLowerCase().trim();
+    const dprq = parseFloat(sp.get('dpr'));
+    let wh = null;
+    if (q) {
+      if (RES_PRESETS[q]) wh = RES_PRESETS[q];
+      else { const m = q.match(/^(\d+)\s*[x×*]\s*(\d+)$/); if (m) wh = [+m[1], +m[2]]; }
+    }
+    if (wh) return { w: wh[0], h: wh[1], dpr: (dprq > 0 ? dprq : 1) };
+    if (dprq > 0) return { w: null, h: null, dpr: dprq };
+  } catch (e) {}
+  return null;
+})();
+
 // Cinfo (hover) background state. Tracks the currently focused HOVER_BG-mapped
 // item, dwell start time, and the current bg image. When the cursor leaves an
 // item (or moves to one without a bg) the alpha animates back to 0 and the
@@ -1740,7 +1771,11 @@ function frameHV() { return V.H * LAYOUT_VFIT; }
 function XCL(centerX, halfW) { return centerX * LAYOUT_XC - halfW; }
 
 function resize() {
-  const vw = window.innerWidth, vh = window.innerHeight;
+  // Simulated viewport: ?res forces a specific pixel resolution; otherwise use
+  // the real window. ?dpr overrides the device pixel ratio.
+  const vw = (simRes && simRes.w) ? simRes.w : window.innerWidth;
+  const vh = (simRes && simRes.h) ? simRes.h : window.innerHeight;
+  dpr = (simRes && simRes.dpr) ? simRes.dpr : (window.devicePixelRatio || 1);
   // Target display aspect ratio (1:1 / 4:3 / 3:2 / 16:9 / 21:9). In portrait the
   // ratio is inverted (e.g. 16:9 -> 9:16) so the frame is taller than wide.
   const baseR = ASPECTS[aspect] || 16 / 9;
@@ -1754,6 +1789,20 @@ function resize() {
   if (vw / vh > r) { h = vh; w = h * r; } else { w = vw; h = w / r; }
   scr.style.width = w + 'px';
   scr.style.height = h + 'px';
+  // When simulating a resolution, the canvas backing store stays at the chosen
+  // native size (so the content is RENDERED at exactly that resolution) and the
+  // whole frame is then scaled to FILL the real window (aspect preserved, up or
+  // down) for display. Browser image smoothing makes the scale a clean bilinear
+  // resample, so a low res reads as a properly anti-aliased low-res image rather
+  // than a tiny 1:1 block, and a high res downscales smoothly. The rendered
+  // pixel count is unchanged by the display scale.
+  if (simRes && simRes.w) {
+    const fit = Math.min(window.innerWidth / w, window.innerHeight / h);
+    scr.style.transformOrigin = 'center center';
+    scr.style.transform = (Math.abs(fit - 1) > 0.001) ? ('scale(' + fit + ')') : '';
+  } else {
+    scr.style.transform = '';
+  }
   // UNIFORM scale (never anamorphic) so icons/text/wave keep their true aspect
   // and are NEVER stretched. Scale fills the HEIGHT (h/V.H); in 16:9 this equals
   // w/V.W (unchanged). In 4:3 the 16:9-wide layout would overflow the narrower
@@ -1762,20 +1811,24 @@ function resize() {
   // like the real PS3 4:3 re-layout.
   let vOffPx = 0;
   if (portrait) {
-    // PORTRAIT: the frame is taller than wide. Scale to FILL THE WIDTH (uniform,
-    // never squashed) so icons/text keep true proportions, then centre the
-    // 1080-tall design vertically; the wave/gradient fill the rest of the frame.
-    // No horizontal compression is needed (width fits exactly), so the LAYOUT_FIT
-    // / LAYOUT_XC machinery is a no-op (=1) and every existing x-position stays
-    // put. A small upward bias keeps the category bar near the top third rather
-    // than dead-centre, which reads better and uses the vertical space.
-    scale = w / V.W;
-    LAYOUT_FIT = 1;
-    LAYOUT_XC = 1;
-    LAYOUT_VFIT = (h / scale) / V.H;                 // >= 1
-    const extraV = (h / scale) - V.H;                // virtual headroom
-    LAYOUT_VOFF = extraV * 0.42;                      // bias content slightly up
-    vOffPx = LAYOUT_VOFF * scale;
+    // PORTRAIT: the frame is taller than wide. We ZOOM IN past a plain width-fit
+    // (PORTRAIT_ZOOM) so the UI reads larger on a tall screen, then use the
+    // ample vertical room to show a LONG item list rather than a short centred
+    // band. Zooming makes the visible virtual width narrower than V.W, so
+    // right-anchored content (values, clock) is repositioned to that narrower
+    // right edge via LAYOUT_FIT and left-anchored content is mildly compressed
+    // via LAYOUT_XC -- exactly the narrow-landscape model (cf. 4:3/3:2), which
+    // keeps icons from overlapping. Vertically the focus row is parked ~44% down
+    // the frame so the list runs far below it; the wave/gradient fill the rest.
+    const PORTRAIT_ZOOM = 1.3;
+    scale = (w / V.W) * PORTRAIT_ZOOM;
+    LAYOUT_FIT = 1 / PORTRAIT_ZOOM;                  // visible virtual width / V.W
+    LAYOUT_XC = 1 - (1 - LAYOUT_FIT) * 0.56;          // soften like a narrow frame
+    LAYOUT_VFIT = (h / scale) / V.H;                  // tall: > 1
+    // Park the focus row at 44% of the frame height (slightly above centre) so
+    // more items fit below it -- longer vertical lists.
+    vOffPx = h * 0.44 - V.ITEM_FOCUS_Y * scale;
+    LAYOUT_VOFF = vOffPx / scale;
   } else {
     // LANDSCAPE / square: fill the HEIGHT (uniform), flex horizontally.
     scale = h / V.H;
@@ -6836,14 +6889,18 @@ function drawXMB(now) {
         y = itemSlotY(i, selectedIdx) + yOffset;
       }
 
-      if (y < -80 || y > V.H + 80) continue;
+      // Cull and edge-fade against the FULL visible frame (portrait extends well
+      // past the 1080 band, so the list runs the height of the frame). In
+      // landscape fTop=0 / fBot=V.H, so this is identical to the old behaviour.
+      const fTop = frameTopV(), fBot = fTop + frameHV();
+      if (y < fTop - 80 || y > fBot + 80) continue;
 
       let alpha;
       if (isActive) alpha = V.ALPHA_FOCUS;
       else alpha = V.ALPHA_INACTIVE; // both above and below use uniform inactive alpha
 
-      if (y < 40) alpha *= Math.max(0, y / 40);
-      if (y > V.H - 20) alpha *= Math.max(0, (V.H - y) / 20);
+      if (y < fTop + 40) alpha *= Math.max(0, (y - fTop) / 40);
+      if (y > fBot - 20) alpha *= Math.max(0, (fBot - y) / 20);
       alpha *= alphaMul;
       if (alpha <= 0.01) continue;
 
@@ -7024,7 +7081,7 @@ function drawXMB(now) {
       const ySrc = itemSlotY(i, pIdx);
       const yDst = V.ITEM_FOCUS_Y + (i - pIdx) * V.PARENT_SPACING;
       const y = ySrc + (yDst - ySrc) * t;
-      if (y < -40 || y > V.H + 40) continue;
+      if (y < frameTopV() - 40 || y > frameTopV() + frameHV() + 40) continue;
       // X slides to the breadcrumb (selected) or the faded sibling column.
       const dstX = sel ? V.PARENT_COL_X : SIB_X;
       const cx = srcX + (dstX - srcX) * t;
