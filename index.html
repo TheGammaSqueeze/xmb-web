@@ -1320,6 +1320,23 @@ let aspect = (function () {
   return '16:9';
 })();
 
+// Display orientation. 'landscape' (default) keeps the native XMB shape; in
+// 'portrait' the same aspect ratio is rotated (e.g. 16:9 -> 9:16): the frame is
+// taller than wide, so the layout is scaled to FILL THE WIDTH (never squashed)
+// and the full-height design is centred vertically with the wave/gradient
+// filling the rest of the frame. Toggle with the 'O' key, or set ?orientation=
+// portrait (also ?portrait / ?orientation=p).
+let orientation = (function () {
+  try {
+    const sp = new URLSearchParams(location.search);
+    if (sp.has('portrait')) return 'portrait';
+    const q = (sp.get('orientation') || '').toLowerCase();
+    if (q === 'portrait' || q === 'p') return 'portrait';
+    if (q === 'landscape' || q === 'l') return 'landscape';
+  } catch (e) {}
+  return 'landscape';
+})();
+
 // Cinfo (hover) background state. Tracks the currently focused HOVER_BG-mapped
 // item, dwell start time, and the current bg image. When the cursor leaves an
 // item (or moves to one without a bg) the alpha animates back to 0 and the
@@ -1705,16 +1722,34 @@ let scale = 1, scaleX = 1, scaleY = 1, dpr = window.devicePixelRatio || 1;
 //                cropped). Use XCP()/XCL() for left-anchored x-POSITIONS only;
 //                never apply either to element widths/sizes.
 let LAYOUT_XC = 1, LAYOUT_FIT = 1;
+// Vertical layout factors (mirror of LAYOUT_FIT for the portrait branch).
+//   LAYOUT_VFIT = frame height in virtual units / V.H (1.0 in landscape, >1 in
+//                 portrait where the frame is taller than the 1080 design).
+//   LAYOUT_VOFF = virtual-y offset of the design's top edge so the 1080-tall
+//                 layout is positioned within the taller frame (0 in landscape).
+//                 The frame spans virtual y in [-LAYOUT_VOFF, V.H + (extra)].
+let LAYOUT_VFIT = 1, LAYOUT_VOFF = 0;
 function XCP(x) { return x * LAYOUT_XC; }
 function XCF(x) { return x * LAYOUT_FIT; }
+// Full visible-frame bounds in virtual coords (accounts for the portrait
+// vertical letterbox-less fill). In landscape these are 0 and V.H.
+function frameTopV() { return -LAYOUT_VOFF; }
+function frameHV() { return V.H * LAYOUT_VFIT; }
 // Compress a centred draw's top-left: pass CENTRE and half-width, compress only
 // the centre (keeps the element full size).
 function XCL(centerX, halfW) { return centerX * LAYOUT_XC - halfW; }
 
 function resize() {
   const vw = window.innerWidth, vh = window.innerHeight;
-  // Target display aspect ratio (1:1 / 4:3 / 3:2 / 16:9 / 21:9).
-  const r = ASPECTS[aspect] || 16 / 9;
+  // Target display aspect ratio (1:1 / 4:3 / 3:2 / 16:9 / 21:9). In portrait the
+  // ratio is inverted (e.g. 16:9 -> 9:16) so the frame is taller than wide.
+  const baseR = ASPECTS[aspect] || 16 / 9;
+  // 1:1 is square, so its portrait and landscape frames are identical; always
+  // use the height-fill (fill-the-square) layout for it -- that makes the best
+  // use of the square, whereas the width-fit portrait path would leave vertical
+  // gaps. Portrait re-shaping therefore only applies to non-square ratios.
+  const portrait = (orientation === 'portrait') && (Math.abs(baseR - 1) > 0.001);
+  const r = portrait ? (1 / baseR) : baseR;
   let w, h;
   if (vw / vh > r) { h = vh; w = h * r; } else { w = vw; h = w / r; }
   scr.style.width = w + 'px';
@@ -1725,17 +1760,38 @@ function resize() {
   // frame, so we don't squash it -- instead LAYOUT_XC compresses element
   // POSITIONS (not sizes) so the full-size layout fits the 4:3 frame, exactly
   // like the real PS3 4:3 re-layout.
-  scale = h / V.H;
+  let vOffPx = 0;
+  if (portrait) {
+    // PORTRAIT: the frame is taller than wide. Scale to FILL THE WIDTH (uniform,
+    // never squashed) so icons/text keep true proportions, then centre the
+    // 1080-tall design vertically; the wave/gradient fill the rest of the frame.
+    // No horizontal compression is needed (width fits exactly), so the LAYOUT_FIT
+    // / LAYOUT_XC machinery is a no-op (=1) and every existing x-position stays
+    // put. A small upward bias keeps the category bar near the top third rather
+    // than dead-centre, which reads better and uses the vertical space.
+    scale = w / V.W;
+    LAYOUT_FIT = 1;
+    LAYOUT_XC = 1;
+    LAYOUT_VFIT = (h / scale) / V.H;                 // >= 1
+    const extraV = (h / scale) - V.H;                // virtual headroom
+    LAYOUT_VOFF = extraV * 0.42;                      // bias content slightly up
+    vOffPx = LAYOUT_VOFF * scale;
+  } else {
+    // LANDSCAPE / square: fill the HEIGHT (uniform), flex horizontally.
+    scale = h / V.H;
+    // Frame geometry factor: V.W*LAYOUT_FIT is the frame's right edge in virtual
+    // space (= r / (16/9); 1.0 at 16:9, 0.75 at 4:3, 1.3125 at 21:9).
+    LAYOUT_FIT = (w * V.H) / (h * V.W);
+    // Content position-compression. Narrow frames (<16:9) are softened toward 1.0
+    // (factor 0.56) so the content is slightly less compressed than a pure fit and
+    // overflows/crops on the right like the real PS3 4:3 (gives ~0.86 at 4:3 vs
+    // 0.75 pure-fit). Wide frames just expand to fill (= LAYOUT_FIT).
+    LAYOUT_XC = (LAYOUT_FIT >= 1) ? LAYOUT_FIT : (1 - (1 - LAYOUT_FIT) * 0.56);
+    LAYOUT_VFIT = 1;
+    LAYOUT_VOFF = 0;
+  }
   scaleX = scale;
   scaleY = scale;
-  // Frame geometry factor: V.W*LAYOUT_FIT is the frame's right edge in virtual
-  // space (= r / (16/9); 1.0 at 16:9, 0.75 at 4:3, 1.3125 at 21:9).
-  LAYOUT_FIT = (w * V.H) / (h * V.W);
-  // Content position-compression. Narrow frames (<16:9) are softened toward 1.0
-  // (factor 0.56) so the content is slightly less compressed than a pure fit and
-  // overflows/crops on the right like the real PS3 4:3 (gives ~0.86 at 4:3 vs
-  // 0.75 pure-fit). Wide frames just expand to fill (= LAYOUT_FIT).
-  LAYOUT_XC = (LAYOUT_FIT >= 1) ? LAYOUT_FIT : (1 - (1 - LAYOUT_FIT) * 0.56);
   bgCanvas.width = w * dpr;
   bgCanvas.height = h * dpr;
   xmbCanvas.width = w * dpr;
@@ -1759,8 +1815,10 @@ function resize() {
       fboH = 0;
     }
   }
-  bgCtx.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, 0);
-  ctx.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, 0);
+  // Portrait centres the design vertically via a translate (0 in landscape).
+  const tY = dpr * vOffPx;
+  bgCtx.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, tY);
+  ctx.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, tY);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
   // Crisp text rendering matching PS3 typography
@@ -6509,12 +6567,12 @@ function drawCinfoBg(ctx2) {
   // COVER the full visible frame at the image's true aspect (crop, never
   // stretch). The frame width is XCF(V.W) (wider than V.W in 21:9), so a plain
   // 0..V.W draw would leave the right region uncovered.
-  const fw = Math.max(V.W, XCF(V.W)), fh = V.H, im = entry.img;
+  const fw = Math.max(V.W, XCF(V.W)), fh = frameHV(), im = entry.img;
   const ir = im.width / im.height, fr = fw / fh;
   let sw, sh, sx, sy;
   if (ir > fr) { sh = im.height; sw = sh * fr; sx = (im.width - sw) / 2; sy = 0; }
   else { sw = im.width; sh = sw / fr; sx = 0; sy = (im.height - sh) / 2; }
-  ctx2.drawImage(im, sx, sy, sw, sh, 0, 0, fw, fh);
+  ctx2.drawImage(im, sx, sy, sw, sh, 0, frameTopV(), fw, fh);
   ctx2.restore();
 }
 
@@ -6525,7 +6583,12 @@ function drawXMB(now) {
   // Clear the FULL visible frame width. In wide aspect ratios (21:9) the frame
   // extends past V.W in virtual space (to V.W*LAYOUT_FIT), so a V.W-wide clear
   // would leave the right region uncleared -> smearing/artefacts on scroll.
-  ctx.clearRect(0, 0, Math.max(V.W, XCF(V.W)), V.H);
+  // Clear the FULL visible frame. Width extends past V.W in 21:9 (XCF). In
+  // portrait the frame is taller than the 1080 design (LAYOUT_VFIT > 1) and is
+  // shifted by LAYOUT_VOFF, so clear from the frame's true top for the full
+  // frame height -- otherwise the head/foot bands keep stale content.
+  ctx.clearRect(-2, -LAYOUT_VOFF - 2,
+                Math.max(V.W, XCF(V.W)) + 4, V.H * LAYOUT_VFIT + 4);
 
   // Cinfo hover background (fades in after HOVER_BG_DWELL_MS dwell on a HOVER_BG-mapped item).
   // Drawn on the XMB canvas so it sits above the gradient/wave (z 0/1) but
@@ -8450,12 +8513,12 @@ function drawLanding(ctx2) {
     if (bgEntry.loaded) {
       // COVER the frame at the image's true aspect (crop, never stretch). In
       // 4:3 the frame is XCP(V.W) wide, so the 16:9 wallpaper is centre-cropped.
-      const fw = XCF(V.W), fh = V.H, im = bgEntry.img;
+      const fw = XCF(V.W), fh = frameHV(), im = bgEntry.img;
       const ir = im.width / im.height, fr = fw / fh;
       let sw, sh, sx, sy;
       if (ir > fr) { sh = im.height; sw = sh * fr; sx = (im.width - sw) / 2; sy = 0; }
       else { sw = im.width; sh = sw / fr; sx = 0; sy = (im.height - sh) / 2; }
-      ctx2.drawImage(im, sx, sy, sw, sh, 0, 0, fw, fh);
+      ctx2.drawImage(im, sx, sy, sw, sh, 0, frameTopV(), fw, fh);
       bgPainted = true;
     }
   }
@@ -8473,23 +8536,25 @@ function drawLanding(ctx2) {
     // Gentle vertical ramp around the rendered #3F4A8D mid-tone (darker top,
     // slightly brighter bottom) -- much shallower than the old #143CAF ramp so
     // the field stays at the measured rendered brightness, not near-black at top.
-    const bg = ctx2.createLinearGradient(0, 0, 0, V.H);
+    const bg = ctx2.createLinearGradient(0, frameTopV(), 0, frameTopV() + frameHV());
     bg.addColorStop(0, ramp(0.92));   // top  x0.92
     bg.addColorStop(0.55, ramp(1.06));
     bg.addColorStop(1, ramp(1.18));   // bottom x1.18
     ctx2.fillStyle = bg;
-    ctx2.fillRect(0, 0, XCF(V.W), V.H);
+    ctx2.fillRect(0, frameTopV(), XCF(V.W), frameHV());
   }
 
   // Subtle vignette in the corners for depth. Slightly darker when a bg image
   // is in use so the hero panel and text remain legible against busy imagery.
   const _fw = XCF(V.W);
-  const vig = ctx2.createRadialGradient(_fw / 2, V.H / 2, _fw * 0.35,
-                                        _fw / 2, V.H / 2, _fw * 0.7);
+  const _fcy = frameTopV() + frameHV() / 2;
+  const _fvr = Math.max(_fw, frameHV());
+  const vig = ctx2.createRadialGradient(_fw / 2, _fcy, _fvr * 0.35,
+                                        _fw / 2, _fcy, _fvr * 0.7);
   vig.addColorStop(0, 'rgba(0,0,0,0)');
   vig.addColorStop(1, bgPainted ? 'rgba(0,0,0,0.65)' : 'rgba(0,0,0,0.28)');
   ctx2.fillStyle = vig;
-  ctx2.fillRect(0, 0, XCP(V.W), V.H);
+  ctx2.fillRect(0, frameTopV(), XCF(V.W), frameHV());
 
   // Hero panel on the left: rounded square containing the item icon. If the
   // normal-map icon hasn't finished loading we still draw the placeholder
@@ -9051,6 +9116,11 @@ document.addEventListener('keydown', e => {
           idx = (idx + (e.shiftKey ? n - 1 : 1)) % n;
           aspect = ASPECT_ORDER[idx];
         }
+        resize(); break;
+      case 'o': case 'O':
+        // Toggle portrait / landscape orientation for the current aspect ratio.
+        e.preventDefault();
+        orientation = (orientation === 'portrait') ? 'landscape' : 'portrait';
         resize(); break;
     }
   }
