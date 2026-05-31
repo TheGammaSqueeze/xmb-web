@@ -1935,17 +1935,16 @@ function resize() {
   // frame, so we don't squash it -- instead LAYOUT_XC compresses element
   // POSITIONS (not sizes) so the full-size layout fits the 4:3 frame, exactly
   // like the real PS3 4:3 re-layout.
-  // Readability zoom: enlarge the whole UI on GENUINELY TINY simulated frames so
-  // text stays legible (e.g. ?res=640x480 / 480x800). Only applied when
-  // simulating a resolution -- the live browser window always renders the plain
-  // fit-to-window layout (no zoom). The cutoff is the frame's smaller dimension:
-  // anything >= READ_CUT (540, i.e. qHD 960x540 / Vita 960x544 / 720p / ...) is
-  // treated as a normal resolution and NOT zoomed (so e.g. its clock stays put);
-  // below that it ramps up steeply toward READ_MAX (480 -> ~1.4, <=400 -> 1.85).
-  const READ_CUT = 540, READ_RAMP = 150, READ_MAX = 1.85;
-  const readZoom = (simRes && simRes.w)
-    ? Math.min(READ_MAX, 1 + Math.max(0, READ_CUT - Math.min(w, h)) / READ_RAMP)
-    : 1;
+  // Low-resolution landscape frames render as the NORMAL layout (the standard
+  // 16:9 / 4:3 / etc. design, just at fewer pixels and narrower) -- they are NOT
+  // magnified. A previous "readability zoom" enlarged the whole UI and centred a
+  // taller-than-frame design, which clipped the clock, removed the top/bottom
+  // padding of full-screen dialogs and overlapped the clock with the category
+  // bar. That is removed; readability at low res now comes purely from the
+  // subtitle wrap + DESC_BOOST below. READ_CUT marks "genuinely tiny" frames used
+  // by DESC_BOOST. (Portrait keeps its own PORTRAIT_ZOOM, applied in that branch.)
+  const READ_CUT = 540;
+  const readZoom = 1;
   let vOffPx = 0;
   if (portrait) {
     // PORTRAIT: the frame is taller than wide. We ZOOM IN past a plain width-fit
@@ -1958,7 +1957,13 @@ function resize() {
     // 4:3/3:2), which keeps icons from overlapping. Vertically the focus row is
     // parked ~44% down the frame so the list runs far below it.
     const PORTRAIT_ZOOM = 1.3;
-    scale = (w / V.W) * PORTRAIT_ZOOM * readZoom;
+    // Narrower portrait frames zoom in MORE so the UI stays legible on small
+    // phone-shaped screens (e.g. a 480-wide panel). Ramps from PORTRAIT_ZOOM up
+    // to ~2.0 as the frame narrows; only when simulating a resolution.
+    const pZoom = (simRes && simRes.w)
+      ? Math.max(PORTRAIT_ZOOM, Math.min(2.0, 960 / w))
+      : PORTRAIT_ZOOM;
+    scale = (w / V.W) * pZoom;
     LAYOUT_FIT = (w / scale) / V.W;                   // visible virtual width / V.W
     LAYOUT_XC = 1 - (1 - LAYOUT_FIT) * 0.56;          // soften like a narrow frame
     LAYOUT_VFIT = (h / scale) / V.H;                  // tall: > 1
@@ -1967,9 +1972,9 @@ function resize() {
     vOffPx = h * 0.44 - V.ITEM_FOCUS_Y * scale;
     LAYOUT_VOFF = vOffPx / scale;
   } else {
-    // LANDSCAPE / square: fill the HEIGHT (uniform) x the readability zoom, flex
-    // horizontally. With readZoom=1 (normal frames) this is the original
-    // height-fill layout; on small frames it zooms in and centres vertically.
+    // LANDSCAPE / square: fill the HEIGHT (uniform), flex horizontally. readZoom
+    // is 1 here, so this is the standard height-fill layout (clock at the top,
+    // full dialog padding, no vertical centring) at whatever resolution.
     scale = (h / V.H) * readZoom;
     // Frame geometry factor: V.W*LAYOUT_FIT is the frame's right edge in virtual
     // space (= visible virtual width / V.W; 1.0 at 16:9 with no zoom).
@@ -7415,7 +7420,13 @@ function drawClock(fadeMul) {
 
   // 4:3: the clock is right-anchored. Shift the whole group left so its right
   // edge lands on the 4:3 frame edge, keeping its size (LAYOUT_XC-1 is 0 in 16:9).
-  ctx.translate(V.W * (LAYOUT_FIT - 1), 0);
+  // PORTRAIT: the visible frame extends above the virtual design (frameTopV < 0),
+  // leaving a big gap above the clock's normal y. Raise the clock toward the top
+  // of the frame (its top edge ~40px below the frame top) so it doesn't float in
+  // the middle. In landscape (frameTopV >= 0) the clock keeps its normal y.
+  const clockTopY = 75;                                  // the clock frame's top y
+  const clockDY = (frameTopV() < 0) ? (frameTopV() + 40 - clockTopY) : 0;
+  ctx.translate(V.W * (LAYOUT_FIT - 1), clockDY);
 
   // ---- Drop shadow (whole clock group) ----
   // The real PS3 XMB renders the clock with a subtle dark drop shadow for
