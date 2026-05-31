@@ -8063,11 +8063,17 @@ function drawSidePanel(ctx2, ds, ap) {
   // xmb_plugin.prx and explore_plugin.prx). The XMB stays visible during
   // the animation; only the panel x-offset and alpha change.
 
-  const SP_PANEL_LEFT = 1324;
-  const SP_PANEL_RIGHT = 1697;
-  const SP_PANEL_CORE_X = 1377;            // darkest gradient point
-  const SP_PANEL_WIDTH = SP_PANEL_RIGHT - SP_PANEL_LEFT;  // 373
-  const SP_TEXT_X = 1340;                  // left edge of text labels
+  // In 4:3 the real PS3 side-panel chooser is much WIDER (it starts near the
+  // horizontal centre ~0.55 of the frame and fills to the right edge), versus
+  // the narrow band used in 16:9. Use 4:3-specific panel x metrics (in the same
+  // 1920-wide virtual space, which the anamorphic scaleX then compresses to the
+  // 4:3 frame, so 1056/1920 = 0.55 frac). Measured from the RPCS3 4:3 capture.
+  const _is43 = (typeof aspect !== 'undefined' && aspect === '4:3');
+  const SP_PANEL_LEFT = _is43 ? 1056 : 1324;
+  const SP_PANEL_RIGHT = _is43 ? 1920 : 1697;
+  const SP_PANEL_CORE_X = _is43 ? 1110 : 1377;   // darkest gradient point
+  const SP_PANEL_WIDTH = SP_PANEL_RIGHT - SP_PANEL_LEFT;
+  const SP_TEXT_X = _is43 ? 1110 : 1340;   // left edge of text labels
   const SP_ITEM_PITCH = 40;                // vertical pitch between items
   // Font sizing measured from RPCS3 1080p captures:
   //   non-selected 'O' bounds 84x21 px, stroke width ~3 px, glyph peak ~229
@@ -8079,7 +8085,7 @@ function drawSidePanel(ctx2, ds, ap) {
   const SP_FONT_REG = '400 22px PS3';      // non-selected: Rodin Regular 22px
   const SP_FONT_SEL = '400 26px PS3';      // selected:     Rodin Regular 26px
   const SP_SWATCH_SIZE = 27;               // color swatch px (Color chooser only)
-  const SP_SWATCH_X = 1341;                // swatch left x
+  const SP_SWATCH_X = _is43 ? 1111 : 1341; // swatch left x
   // The option LIST has a fixed top y; selection just changes font weight/size,
   // it does NOT shift the list to anchor the selected item to a focus row.
   // Measured: in theme_chooser, Original (idx 0) is at y=512 and Classic
