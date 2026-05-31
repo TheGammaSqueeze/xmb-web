@@ -1935,14 +1935,16 @@ function resize() {
   // frame, so we don't squash it -- instead LAYOUT_XC compresses element
   // POSITIONS (not sizes) so the full-size layout fits the 4:3 frame, exactly
   // like the real PS3 4:3 re-layout.
-  // Readability zoom: enlarge the whole UI on small frames so text stays legible
-  // at low resolutions (e.g. 640x480, 480x800). 1.0 on normal-size frames
-  // (min dimension >= READ_REF), ramping up to READ_MAX on tiny ones. Zooming in
-  // shows less content but at a larger, readable size; the layout factors below
-  // are derived from the resulting scale so values/clock reflow and the list
-  // crops symmetrically around the focus.
+  // Readability zoom: enlarge the whole UI on small SIMULATED frames so text
+  // stays legible at low resolutions (e.g. ?res=640x480 / 480x800). It is ONLY
+  // applied when simulating a resolution -- the live browser window always
+  // renders the plain fit-to-window layout (no zoom), so a small or part-height
+  // window is never magnified. 1.0 on frames whose min dimension >= READ_REF,
+  // ramping up to READ_MAX on tiny ones.
   const READ_REF = 640, READ_MAX = 1.85;
-  const readZoom = Math.min(READ_MAX, Math.max(1, READ_REF / Math.min(w, h)));
+  const readZoom = (simRes && simRes.w)
+    ? Math.min(READ_MAX, Math.max(1, READ_REF / Math.min(w, h)))
+    : 1;
   let vOffPx = 0;
   if (portrait) {
     // PORTRAIT: the frame is taller than wide. We ZOOM IN past a plain width-fit
@@ -1982,10 +1984,13 @@ function resize() {
   }
   scaleX = scale;
   scaleY = scale;
-  // Subtitle (item description) size boost on small frames so secondary text
-  // stays readable at low resolutions (e.g. 640x480, 480x800, 720x720). 1.0 on
-  // larger frames. Based on the frame's smaller pixel dimension.
-  DESC_BOOST = Math.min(1.5, Math.max(1, 820 / Math.min(w, h)));
+  // Subtitle (item description) size boost on small SIMULATED frames so secondary
+  // text stays readable at low resolutions (e.g. ?res=640x480 / 480x800 /
+  // 720x720). Like readZoom this applies ONLY when simulating a resolution; the
+  // live window keeps the authentic subtitle size. 1.0 on larger frames.
+  DESC_BOOST = (simRes && simRes.w)
+    ? Math.min(1.5, Math.max(1, 820 / Math.min(w, h)))
+    : 1;
   // Shift left-anchored content further LEFT on frames NARROWER than 4:3 (but not
   // 4:3 itself, which is matched to the real PS3) so the active row gets more room
   // on the right for the name, subtitle and value. Ramps from 0 at LAYOUT_FIT 0.75
