@@ -7402,6 +7402,30 @@ function drawXMB(now) {
   drawClock(inBootReveal ? bootIconReveal : 1);
 }
 
+// Clock transition progress [0..1]: 0 = settled on the XMB, 1 = fully gone into a
+// FULLSCREEN menu (System Update etc.) or landing card. Ramps with that menu's
+// own open/close animation so the clock's hand-sweep stays synced to the chrome
+// cross-fade. Side-panel choosers (Theme/Colour) keep the XMB -- and the clock --
+// visible, so they do NOT drive this.
+function clockSweepProgress() {
+  const now = performance.now();
+  if (dialogState && dialogState.template && dialogState.template.panel !== true) {
+    return dialogState.anim ? Math.min(1, (now - dialogState.anim.start) / dialogState.anim.dur) : 1;
+  }
+  if (dialogClosing && dialogClosing.template && dialogClosing.template.panel !== true) {
+    return 1 - Math.min(1, (now - dialogClosing.start) / dialogClosing.dur);
+  }
+  if (landingState) {
+    return landingState.anim ? Math.min(1, (now - landingState.anim.start) / landingState.anim.dur) : 1;
+  }
+  return 0;
+}
+// How far the minute hand winds over a full transition (the hour hand follows at
+// 1/12 that, like a real clock), giving the analog icon its signature sweep as
+// the clock enters/leaves. Tuned to the latest.mp4 menu transition (~one turn
+// over the ~0.3 s cross-fade); refined further against RPCS3/firmware later.
+const CLOCK_SWEEP_TURNS = 1.0;
+
 function drawClock(fadeMul) {
   if (fadeMul === undefined) fadeMul = 1;
   // window.PIN_TIME (epoch ms) pins the clock for frame-accurate comparison
@@ -7555,8 +7579,15 @@ function drawClock(fadeMul) {
   // 12-hour analog convention: the hour hand advances with the minutes.
   const TWO_PI = Math.PI * 2;
   const UP = -Math.PI / 2;
-  const hourAngle = UP + (((h % 12) + minNum / 60) / 12) * TWO_PI;
-  const minAngle = UP + (minNum / 60) * TWO_PI;
+  // Transition sweep: the hands wind around as the clock enters/leaves (a
+  // fullscreen menu, or the boot/XMB-load reveal where fadeMul ramps 0->1). The
+  // minute hand sweeps CLOCK_SWEEP_TURNS turns and the hour hand 1/12 of that, so
+  // the wedge between them winds and collapses just like the real icon.
+  const sweepT = ease(Math.max(clockSweepProgress(), Math.max(0, 1 - fadeMul)));
+  const minSweep = sweepT * TWO_PI * CLOCK_SWEEP_TURNS;
+  const hrSweep = minSweep / 12;
+  const hourAngle = UP + (((h % 12) + minNum / 60) / 12) * TWO_PI + hrSweep;
+  const minAngle = UP + (minNum / 60) * TWO_PI + minSweep;
   // Fill the MINOR arc between the two hands: normalize the signed delta into
   // (-PI, PI] and sweep from the hour hand by that delta.
   let delta = minAngle - hourAngle;
