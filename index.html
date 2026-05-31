@@ -37,6 +37,67 @@ canvas{position:absolute;top:0;left:0;width:100%;height:100%}
 <script>
 "use strict";
 
+// ============================================================================
+// xmb-web -- a browser recreation of the PlayStation 3 XMB. See README.md for
+// the user-facing guide. This header is the developer map of THIS file.
+//
+// WHAT THIS FILE IS
+//   The entire application: markup + CSS (above) and all logic + GLSL shaders
+//   (below). No build step, no dependencies. Assets load from the folders next
+//   to it (icons/, normalmaps/, boot/, backgrounds/, month_bg_*.png, fonts...).
+//
+// PROVENANCE
+//   Visuals are reconstructed from decrypted PS3 firmware and an instrumented
+//   RPCS3 build, NOT eyeballed from video. Constants tagged with a `vaddr 0x..`
+//   are ported from the firmware PRX at that address; constants tagged
+//   "measured" are read off a 1080p RPCS3 capture (the firmware uses dynamic PAF
+//   widget transforms, so absolute pixel coords are not literals in the binary).
+//
+// THE THREE RENDER LAYERS (stacked canvases inside the centred #scr box)
+//   #bg   (z0, WebGL) -- per-month "Original" gradient + HDR tonemap.
+//   #wave (z1, WebGL) -- the wave: firmware-captured clip-space cloth geometry
+//                        (wave_geo.bin / wave_seq*.bin) + ported lines.qrc silk
+//                        shaders, run through an HDR scene-FBO glare/bloom chain.
+//   #xmb  (z2, 2D)    -- category bar, item lists, clock, dialogs, side panels,
+//                        landing cards.
+//   bootCanvas (z3, 2D) -- cold-boot logo/footer + epilepsy warning (intro only).
+//
+// THE FRAME LOOP  (frame() near the very bottom)
+//   1. drawBootIntro() -- firmware cold-boot sequence; gates the XMB UI in/out,
+//      then becomes a no-op once boot is done.
+//   2. drawBG()        -- gradient + wave WebGL pipeline, driven by time-of-day,
+//      calendar month, and a spring-physics impulse that reacts to navigation.
+//   3. drawXMB()       -- the 2D UI for the current state (menu / dialog / card).
+//
+// THE COORDINATE / RESPONSIVE MODEL  (the key to reading the draw code)
+//   All UI is authored in a fixed VIRTUAL space V.W=1920 x V.H=1080. resize()
+//   maps it to the real device and publishes a few globals that the draw code
+//   reads so individual draws never touch device specifics:
+//     scale            virtual -> CSS px (uniform, never anamorphic).
+//     dpr              canvas backing multiplier (devicePixelRatio or ?dpr).
+//     LAYOUT_FIT       frame width / V.W; XCF(x) maps right-anchored/centred x.
+//     LAYOUT_XC        horizontal POSITION compression for left-anchored content;
+//                      XCP(x)/XCL(centre,halfW) apply it (SIZES never compress).
+//     LAYOUT_XSHIFT    extra left shift on sub-4:3 frames (folded into XCP/XCL).
+//     LAYOUT_VFIT/VOFF vertical analogues for portrait; frameTopV()/frameHV()
+//                      give the full visible-frame bounds; frameCenterTY()
+//                      centres the 1080 design in the frame (dialogs/cards).
+//     DESC_BOOST       subtitle font multiplier on small frames.
+//   In plain 16:9 every factor is the identity, so the model is a no-op and the
+//   reference layout is exact. Each screen scenario in the README (4:3 / 21:9 /
+//   portrait / low-res / ?res integer scaling / true-1x) is just a different set
+//   of these values computed in resize() -- resize() is the single source of
+//   truth for sizing and is re-run on every window resize.
+//
+// FILE MAP (jump to the `====` banners):
+//   layout/anim constants . theme+per-month gradient . dialog/landing templates
+//   . cinfo hover backgrounds . menu DATA . STATE . icon cache . month gradient
+//   texture . easing . CANVAS SETUP (resize) . anim helpers . WebGL wave +
+//   shaders . spline pipeline . captured-geometry wave . icon-glass GL .
+//   XMB RENDERING (drawXMB) . dialog/side-panel/landing . NAVIGATION .
+//   INPUT HANDLING . COLDBOOT INTRO . frame() loop.
+// ============================================================================
+
 // =====================================================
 // PS3 XMB LAYOUT / ANIMATION CONSTANTS
 // Values labelled with a vaddr are firmware-verified from
