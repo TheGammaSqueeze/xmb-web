@@ -6506,7 +6506,15 @@ function drawCinfoBg(ctx2) {
   if (!entry.loaded) return;
   ctx2.save();
   ctx2.globalAlpha = cinfoBg.alpha;
-  ctx2.drawImage(entry.img, 0, 0, V.W, V.H);
+  // COVER the full visible frame at the image's true aspect (crop, never
+  // stretch). The frame width is XCF(V.W) (wider than V.W in 21:9), so a plain
+  // 0..V.W draw would leave the right region uncovered.
+  const fw = Math.max(V.W, XCF(V.W)), fh = V.H, im = entry.img;
+  const ir = im.width / im.height, fr = fw / fh;
+  let sw, sh, sx, sy;
+  if (ir > fr) { sh = im.height; sw = sh * fr; sx = (im.width - sw) / 2; sy = 0; }
+  else { sw = im.width; sh = sw / fr; sx = 0; sy = (im.height - sh) / 2; }
+  ctx2.drawImage(im, sx, sy, sw, sh, 0, 0, fw, fh);
   ctx2.restore();
 }
 
@@ -6514,7 +6522,10 @@ function drawCinfoBg(ctx2) {
 // XMB RENDERING
 // =====================================================
 function drawXMB(now) {
-  ctx.clearRect(0, 0, V.W, V.H);
+  // Clear the FULL visible frame width. In wide aspect ratios (21:9) the frame
+  // extends past V.W in virtual space (to V.W*LAYOUT_FIT), so a V.W-wide clear
+  // would leave the right region uncleared -> smearing/artefacts on scroll.
+  ctx.clearRect(0, 0, Math.max(V.W, XCF(V.W)), V.H);
 
   // Cinfo hover background (fades in after HOVER_BG_DWELL_MS dwell on a HOVER_BG-mapped item).
   // Drawn on the XMB canvas so it sits above the gradient/wave (z 0/1) but
