@@ -1791,13 +1791,13 @@ function resize() {
   const realDPR = window.devicePixelRatio || 1;
   const vw = (simRes && simRes.w) ? simRes.w : window.innerWidth;
   const vh = (simRes && simRes.h) ? simRes.h : window.innerHeight;
-  // Render resolution (canvas backing). On real devices we render at the device
-  // pixel ratio so text/icons are pixel-sharp. When simulating a resolution we
-  // render the canvas at the chosen NATIVE pixel size (dpr=1, unless ?dpr
-  // supersamples it) and integer-scale it for display below.
-  dpr = (simRes && simRes.w)
-        ? (simRes.dpr || 1)
-        : (simRes && simRes.dpr ? simRes.dpr : realDPR);
+  // Render resolution (canvas backing). We always render at the DEVICE pixel
+  // ratio so text/icons are pixel-sharp at full physical resolution -- including
+  // when simulating a resolution (on a 2x/HiDPI display the backing is rendered
+  // at 2x the native frame, so it is crisp and high-detail rather than a soft
+  // half-resolution image). ?dpr=N overrides this for explicit super/sub-sampling
+  // (e.g. ?dpr=1 to inspect true low-res native pixels).
+  dpr = (simRes && simRes.dpr) ? simRes.dpr : realDPR;
   // Target display aspect ratio (1:1 / 4:3 / 3:2 / 16:9 / 21:9). In portrait the
   // ratio is inverted (e.g. 16:9 -> 9:16) so the frame is taller than wide.
   const baseR = ASPECTS[aspect] || 16 / 9;
@@ -1822,10 +1822,11 @@ function resize() {
   if (simRes && simRes.w) {
     const kf = Math.min(window.innerWidth / w, window.innerHeight / h);
     const k = (kf >= 1) ? Math.floor(kf) : kf;       // integer up, fractional down
-    // Nearest-neighbour only for a true-native (dpr=1) integer UPSCALE -- that is
-    // the clean NxN pixel block. When ?dpr supersamples (backing > display) we
-    // want a smooth downscale instead, so leave it off.
-    const integer = (kf >= 1) && dpr === 1;
+    // Use nearest-neighbour (crisp NxN blocks) whenever we are integer-UPSCALING
+    // at the physical-pixel level (each backing pixel maps to a whole number of
+    // device pixels: k * realDPR >= dpr). When ?dpr supersamples beyond the
+    // display (backing > shown physical), we are downscaling, so leave it smooth.
+    const integer = (kf >= 1) && (k * realDPR >= dpr - 0.001);
     scr.style.transformOrigin = 'center center';
     scr.style.transform = (Math.abs(k - 1) > 0.0001) ? ('scale(' + k + ')') : '';
     scr.classList.toggle('pixelated', integer);      // crisp nearest-neighbour blocks
