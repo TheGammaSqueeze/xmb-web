@@ -1935,15 +1935,16 @@ function resize() {
   // frame, so we don't squash it -- instead LAYOUT_XC compresses element
   // POSITIONS (not sizes) so the full-size layout fits the 4:3 frame, exactly
   // like the real PS3 4:3 re-layout.
-  // Readability zoom: enlarge the whole UI on small SIMULATED frames so text
-  // stays legible at low resolutions (e.g. ?res=640x480 / 480x800). It is ONLY
-  // applied when simulating a resolution -- the live browser window always
-  // renders the plain fit-to-window layout (no zoom), so a small or part-height
-  // window is never magnified. 1.0 on frames whose min dimension >= READ_REF,
-  // ramping up to READ_MAX on tiny ones.
-  const READ_REF = 640, READ_MAX = 1.85;
+  // Readability zoom: enlarge the whole UI on GENUINELY TINY simulated frames so
+  // text stays legible (e.g. ?res=640x480 / 480x800). Only applied when
+  // simulating a resolution -- the live browser window always renders the plain
+  // fit-to-window layout (no zoom). The cutoff is the frame's smaller dimension:
+  // anything >= READ_CUT (540, i.e. qHD 960x540 / Vita 960x544 / 720p / ...) is
+  // treated as a normal resolution and NOT zoomed (so e.g. its clock stays put);
+  // below that it ramps up steeply toward READ_MAX (480 -> ~1.4, <=400 -> 1.85).
+  const READ_CUT = 540, READ_RAMP = 150, READ_MAX = 1.85;
   const readZoom = (simRes && simRes.w)
-    ? Math.min(READ_MAX, Math.max(1, READ_REF / Math.min(w, h)))
+    ? Math.min(READ_MAX, 1 + Math.max(0, READ_CUT - Math.min(w, h)) / READ_RAMP)
     : 1;
   let vOffPx = 0;
   if (portrait) {
@@ -1984,12 +1985,14 @@ function resize() {
   }
   scaleX = scale;
   scaleY = scale;
-  // Subtitle (item description) size boost on small SIMULATED frames so secondary
-  // text stays readable at low resolutions (e.g. ?res=640x480 / 480x800 /
-  // 720x720). Like readZoom this applies ONLY when simulating a resolution; the
-  // live window keeps the authentic subtitle size. 1.0 on larger frames.
+  // Subtitle (item description) size boost on genuinely tiny SIMULATED frames so
+  // secondary text stays readable (e.g. ?res=640x480 / 480x800). Same cutoff as
+  // readZoom (smaller dimension < READ_CUT 540) so normal resolutions like
+  // 960x544 / 960x540 / 720p keep the authentic subtitle size; only applied when
+  // simulating a resolution. (Wide wrapping of the subtitle, fixed separately,
+  // already keeps it readable on small but non-tiny frames such as 720x720.)
   DESC_BOOST = (simRes && simRes.w)
-    ? Math.min(1.5, Math.max(1, 820 / Math.min(w, h)))
+    ? Math.min(1.5, 1 + Math.max(0, READ_CUT - Math.min(w, h)) / 300)
     : 1;
   // Shift left-anchored content further LEFT on frames NARROWER than 4:3 (but not
   // 4:3 itself, which is matched to the real PS3) so the active row gets more room
@@ -6826,8 +6829,6 @@ function drawXMB(now) {
     itemDescAnim = null;
   }
 
-  const inSubmenu = stack.length > 0;
-
   // Process submenu slide animation
   let slideProgress = null; // null = no animation, 0..1 = animating
   if (submenuAnim) {
@@ -6848,6 +6849,12 @@ function drawXMB(now) {
       releaseInputLock();
     }
   }
+
+  // Snapshot the submenu state AFTER releasing the input lock: releaseInputLock()
+  // may replay a queued enter()/back() that pushes or pops `stack`, so reading it
+  // any earlier would leave inSubmenu out of sync with the stack and crash
+  // drawParentLayer below (stack[len-1] would be undefined).
+  const inSubmenu = stack.length > 0;
 
   // === DRAW CATEGORY ICONS ===
   // PS3 behavior: in submenu the category bar dims/shifts; only the active
@@ -7303,8 +7310,8 @@ function drawXMB(now) {
     drawItemList(submenuAnim.childItems, 0, childShift, t, 0);
     drawBackChevron(t);
   } else {
-    if (inSubmenu) {
-      const parentFrame = stack[stack.length - 1];
+    const parentFrame = stack.length ? stack[stack.length - 1] : null;
+    if (inSubmenu && parentFrame) {
       drawParentLayer(parentFrame.items, parentFrame.pi, 1);
       drawBackChevron(1);
     }
