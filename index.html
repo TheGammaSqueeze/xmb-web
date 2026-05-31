@@ -7579,15 +7579,19 @@ function drawClock(fadeMul) {
   // 12-hour analog convention: the hour hand advances with the minutes.
   const TWO_PI = Math.PI * 2;
   const UP = -Math.PI / 2;
-  // Transition sweep: the hands wind around as the clock enters/leaves (a
-  // fullscreen menu, or the boot/XMB-load reveal where fadeMul ramps 0->1). The
-  // minute hand sweeps CLOCK_SWEEP_TURNS turns and the hour hand 1/12 of that, so
-  // the wedge between them winds and collapses just like the real icon.
+  // Transition sweep (verified against /work/clock.mp4): when the clock enters or
+  // leaves a fullscreen menu -- or the boot/XMB-load reveal (fadeMul 0->1) -- the
+  // analog hands CYCLE ALL THE WAY AROUND the face. Both hands spin
+  // CLOCK_SWEEP_TURNS full turns, AND the minute hand converges onto the hour
+  // hand over the sweep, so the wedge spins a full revolution then winds shut to
+  // a thin line right as the clock fades -- exactly the real icon's motion.
   const sweepT = ease(Math.max(clockSweepProgress(), Math.max(0, 1 - fadeMul)));
-  const minSweep = sweepT * TWO_PI * CLOCK_SWEEP_TURNS;
-  const hrSweep = minSweep / 12;
-  const hourAngle = UP + (((h % 12) + minNum / 60) / 12) * TWO_PI + hrSweep;
-  const minAngle = UP + (minNum / 60) * TWO_PI + minSweep;
+  const spin = sweepT * TWO_PI * CLOCK_SWEEP_TURNS;
+  const baseHour = UP + (((h % 12) + minNum / 60) / 12) * TWO_PI;
+  const baseMin = UP + (minNum / 60) * TWO_PI;
+  const hourAngle = baseHour + spin;
+  let minAngle = baseMin + spin;
+  minAngle = hourAngle + (minAngle - hourAngle) * (1 - sweepT);
   // Fill the MINOR arc between the two hands: normalize the signed delta into
   // (-PI, PI] and sweep from the hour hand by that delta.
   let delta = minAngle - hourAngle;
