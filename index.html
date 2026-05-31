@@ -1340,6 +1340,22 @@ let orientation = (function () {
   return 'landscape';
 })();
 
+// True-1x display mode (toggled with the 'N' key, or ?scale=1x / ?native).
+// When ON together with ?res, the simulated frame is shown at its EXACT native
+// pixel size with NO scaling/magnification (pillar/letterboxed), so it mirrors
+// what the real target screen (e.g. a 480x800 panel) would output pixel-for-
+// pixel. When OFF (default) the frame uses the normal device-pixel-ratio render
+// + integer upscaling.
+let native1x = (function () {
+  try {
+    const sp = new URLSearchParams(location.search);
+    if (sp.has('native')) return true;
+    const q = (sp.get('scale') || '').toLowerCase();
+    if (q === '1x' || q === 'native' || q === '1') return true;
+  } catch (e) {}
+  return false;
+})();
+
 // Resolution simulation. ?res=1280x720 (or a preset like ?res=720p / 1080p /
 // 4k / 480p / 576p) renders the app as if the viewport were exactly that pixel
 // size, regardless of the real window -- the frame is drawn at the simulated
@@ -1797,7 +1813,11 @@ function resize() {
   // at 2x the native frame, so it is crisp and high-detail rather than a soft
   // half-resolution image). ?dpr=N overrides this for explicit super/sub-sampling
   // (e.g. ?dpr=1 to inspect true low-res native pixels).
-  dpr = (simRes && simRes.dpr) ? simRes.dpr : realDPR;
+  // TRUE 1x mode ('N' key): render the simulated frame at its exact native pixel
+  // size (dpr=1) and show it 1:1 with no magnification (below). Only applies when
+  // a ?res target is set.
+  const trueNative = native1x && !!(simRes && simRes.w);
+  dpr = trueNative ? 1 : ((simRes && simRes.dpr) ? simRes.dpr : realDPR);
   // Target display aspect ratio (1:1 / 4:3 / 3:2 / 16:9 / 21:9). In portrait the
   // ratio is inverted (e.g. 16:9 -> 9:16) so the frame is taller than wide.
   const baseR = ASPECTS[aspect] || 16 / 9;
@@ -1820,16 +1840,26 @@ function resize() {
   // fractional fit (you cannot integer-downscale). Recomputed on every resize, so
   // it stays responsive to viewport changes.
   if (simRes && simRes.w) {
-    const kf = Math.min(window.innerWidth / w, window.innerHeight / h);
-    const k = (kf >= 1) ? Math.floor(kf) : kf;       // integer up, fractional down
-    // Use nearest-neighbour (crisp NxN blocks) whenever we are integer-UPSCALING
-    // at the physical-pixel level (each backing pixel maps to a whole number of
-    // device pixels: k * realDPR >= dpr). When ?dpr supersamples beyond the
-    // display (backing > shown physical), we are downscaling, so leave it smooth.
-    const integer = (kf >= 1) && (k * realDPR >= dpr - 0.001);
     scr.style.transformOrigin = 'center center';
-    scr.style.transform = (Math.abs(k - 1) > 0.0001) ? ('scale(' + k + ')') : '';
-    scr.classList.toggle('pixelated', integer);      // crisp nearest-neighbour blocks
+    if (trueNative) {
+      // TRUE 1x: native backing (dpr=1) shown at exactly ONE device pixel per
+      // native pixel. On a HiDPI display the browser would otherwise magnify the
+      // CSS box by realDPR, so we counter-scale by 1/realDPR to keep it a literal
+      // 1:1 target-screen image. Centred -> pill/letterboxed by the black #wrap.
+      const s1 = 1 / realDPR;
+      scr.style.transform = (Math.abs(s1 - 1) > 0.0001) ? ('scale(' + s1 + ')') : '';
+      scr.classList.remove('pixelated');
+    } else {
+      const kf = Math.min(window.innerWidth / w, window.innerHeight / h);
+      const k = (kf >= 1) ? Math.floor(kf) : kf;     // integer up, fractional down
+      // Use nearest-neighbour (crisp NxN blocks) whenever we are integer-UPSCALING
+      // at the physical-pixel level (each backing pixel maps to a whole number of
+      // device pixels: k * realDPR >= dpr). When ?dpr supersamples beyond the
+      // display (backing > shown physical), we are downscaling, so leave it smooth.
+      const integer = (kf >= 1) && (k * realDPR >= dpr - 0.001);
+      scr.style.transform = (Math.abs(k - 1) > 0.0001) ? ('scale(' + k + ')') : '';
+      scr.classList.toggle('pixelated', integer);    // crisp nearest-neighbour blocks
+    }
   } else {
     scr.style.transform = '';
     scr.classList.remove('pixelated');
@@ -9245,6 +9275,13 @@ document.addEventListener('keydown', e => {
         // Toggle portrait / landscape orientation for the current aspect ratio.
         e.preventDefault();
         orientation = (orientation === 'portrait') ? 'landscape' : 'portrait';
+        resize(); break;
+      case 'n': case 'N':
+        // Cycle between TRUE 1x (exact native target-screen pixels, no scaling,
+        // letter/pillarboxed) and NORMAL rendering (device-pixel-ratio + integer
+        // scaling). Only meaningful when a ?res target is set.
+        e.preventDefault();
+        native1x = !native1x;
         resize(); break;
     }
   }
