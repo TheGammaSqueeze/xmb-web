@@ -480,16 +480,18 @@ function monthBaseColor(month, nightBlend, monthTime) {
   // the last/first few days only.
   var m0 = ((month % 12) + 12) % 12;
   var e = MONTH_GRADIENT[m0];
-  var v = e.v * (1 - nightBlend) + e.nv * nightBlend;
-  return hsvToRgb(e.h, e.s, v * MONTH_VALUE_PRECOMP);
+  // TIME-INDEPENDENT base colour: the bottom-of-screen colour is the SAME at all
+  // times of day. The whole day/night look is now the vertical black->colour
+  // ramp in the shader (black extends further down toward night); the base
+  // colour value itself does NOT change with the clock.
+  return hsvToRgb(e.h, e.s, e.v * MONTH_VALUE_PRECOMP);
 }
 // Bottom-of-screen anchor color. Falls back to the top anchor when the month has
 // no vertical-gradient override (so all months except July are unchanged).
 function monthBaseColorBot(month, nightBlend) {
   var m0 = ((month % 12) + 12) % 12;
   var e = MONTH_GRADIENT_BOT[m0] || MONTH_GRADIENT[m0];
-  var v = e.v * (1 - nightBlend) + e.nv * nightBlend;
-  return hsvToRgb(e.h, e.s, v * MONTH_VALUE_PRECOMP);
+  return hsvToRgb(e.h, e.s, e.v * MONTH_VALUE_PRECOMP);
 }
 
 // EXACTLY 12 colours, verified by scrolling the full real EU firmware Colour
@@ -508,7 +510,16 @@ const COLOR_OPTIONS = [
   {key:'magenta',      name:'Magenta',       tint:[0.700, 0.300, 0.800], swatch:'#8D359B'},
   {key:'orange',       name:'Orange',        tint:[1.000, 0.700, 0.150], swatch:'#C39011'},
   {key:'brown',        name:'Brown',         tint:[0.620, 0.430, 0.180], swatch:'#9F6E2E'},
-  {key:'red',          name:'Red',           tint:[0.900, 0.220, 0.220], swatch:'#E63838'}
+  {key:'red',          name:'Red',           tint:[0.900, 0.220, 0.220], swatch:'#E63838'},
+  {key:'black',        name:'Black',         tint:[0.060, 0.060, 0.075], swatch:'#0A0A0C'},
+  {key:'white',        name:'White',         tint:[0.950, 0.950, 0.980], swatch:'#F2F2F5'},
+  {key:'gray',         name:'Gray',          tint:[0.550, 0.570, 0.620], swatch:'#8C8F9E'},
+  {key:'blue',         name:'Blue',          tint:[0.200, 0.450, 0.950], swatch:'#3672F2'},
+  {key:'cyan',         name:'Cyan',          tint:[0.200, 0.850, 0.950], swatch:'#33D9F2'},
+  {key:'lime',         name:'Lime',          tint:[0.550, 0.950, 0.200], swatch:'#8CF233'},
+  {key:'gold',         name:'Gold',          tint:[1.000, 0.780, 0.250], swatch:'#FFC740'},
+  {key:'violet',       name:'Violet',        tint:[0.550, 0.350, 0.950], swatch:'#8C59F2'},
+  {key:'crimson',      name:'Crimson',       tint:[0.800, 0.100, 0.300], swatch:'#CC1A4D'}
 ];
 
 // Background chooser options, verified by RPCS3 capture of the real EU firmware
@@ -526,6 +537,17 @@ const FONT_OPTIONS = [
   {key:'original', name:'Original'},
   {key:'rounded',  name:'Rounded'},
   {key:'pop',      name:'Pop'}
+];
+
+// Day/Night level chooser. 'Auto' follows the time of day (computeNightDayBlend);
+// the rest force a fixed blend (0 = full day .. 1 = full night).
+const DAYNIGHT_OPTIONS = [
+  {key:'auto',    name:'Auto (Time of Day)', blend:-1.0},
+  {key:'day',     name:'Day',                blend:0.0},
+  {key:'morning', name:'Morning',            blend:0.25},
+  {key:'dusk',    name:'Dusk',               blend:0.5},
+  {key:'evening', name:'Evening',            blend:0.75},
+  {key:'night',   name:'Night',              blend:1.0}
 ];
 
 // Classic XMB blue (verified firmware constant at vaddr 0x271630, #143CAF).
@@ -550,10 +572,38 @@ let themeIdx = _loadThemeState('theme',  0, THEME_OPTIONS);       // 0 = Origina
 let colorIdx = _loadThemeState('color',  0, COLOR_OPTIONS);       // 0 = Original
 let bgIdx    = _loadThemeState('bg',     0, BACKGROUND_OPTIONS);  // 0 = Original
 let fontIdx  = _loadThemeState('font',   0, FONT_OPTIONS);        // 0 = Original
+let daynightIdx = _loadThemeState('daynight', 0, DAYNIGHT_OPTIONS); // 0 = Auto
 
-// Returns the c[23] tint vec3 for the currently selected Color.
+// Smoothly-animated theme state, so colour and day/night changes CROSS-FADE
+// instead of snapping (like the boot fading into the settled colour). The
+// displayed values lerp toward the selected targets each frame.
+let dispTint = COLOR_OPTIONS[colorIdx].tint.slice();   // animated gradient/wave hue
+let dispHSV  = (COLOR_OPTIONS[colorIdx].key !== 'original') ? 1.0 : 0.0; // animated rotation strength
+let dispBlend = 0.0;                                   // animated day/night blend
+let _themeFadeInit = false;
+// Advance the theme cross-fade. dt in ms; tau sets the fade speed (~feels like
+// the boot colour settle). blendTarget is the day/night target for this frame.
+function stepThemeFade(dt, blendTarget) {
+  const k = 1.0 - Math.exp(-(dt > 0 ? dt : 16.7) / 220.0);   // ~0.4s fade
+  const tt = COLOR_OPTIONS[colorIdx].tint;
+  if (!_themeFadeInit) {            // first frame: snap (no fade from black)
+    dispTint = tt.slice();
+    dispHSV = (COLOR_OPTIONS[colorIdx].key !== 'original') ? 1.0 : 0.0;
+    dispBlend = blendTarget; _themeFadeInit = true;
+  } else {
+    dispTint[0] += (tt[0] - dispTint[0]) * k;
+    dispTint[1] += (tt[1] - dispTint[1]) * k;
+    dispTint[2] += (tt[2] - dispTint[2]) * k;
+    const hsvTarget = (COLOR_OPTIONS[colorIdx].key !== 'original') ? 1.0 : 0.0;
+    dispHSV += (hsvTarget - dispHSV) * k;
+    dispBlend += (blendTarget - dispBlend) * k;
+  }
+  updateWaveTintConstants();        // wave + particles follow the animated tint
+}
+
+// Returns the ANIMATED c[23] tint vec3 (cross-fades toward the selected Color).
 function currentTintRGB() {
-  return COLOR_OPTIONS[colorIdx].tint;
+  return dispTint;
 }
 
 // Resolves an item's right-side value text. For theme-bound items (Theme,
@@ -567,6 +617,7 @@ function resolveItemValue(it) {
     case 'Colour':     return COLOR_OPTIONS[colorIdx].name;
     case 'Background': return BACKGROUND_OPTIONS[bgIdx].name;
     case 'Font':       return FONT_OPTIONS[fontIdx].name;
+    case 'Day/Night':  return DAYNIGHT_OPTIONS[daynightIdx].name;
   }
   return it.v || null;
 }
@@ -574,30 +625,30 @@ function resolveItemValue(it) {
 // Applies a chooser dialog selection to theme state. Called from the dialog
 // confirm path when the dialog template has a themeKey field. Persists the
 // choice to localStorage so subsequent reloads keep the user's settings.
-function applyThemeSelection(themeKey, selectedIdx) {
+// Apply a theme selection to the LIVE state WITHOUT persisting. Used for
+// immediate hover-preview as the user moves through a chooser.
+function previewThemeSelection(themeKey, selectedIdx) {
   switch (themeKey) {
-    case 'theme':
-      themeIdx = selectedIdx;
-      _saveThemeState('theme', themeIdx);
-      // Classic theme implicitly forces classic background per firmware
-      // sysconf_plugin behavior (Classic theme bundles its own background).
-      // We honor that linkage by checking themeKey in the wave activation
-      // logic; the wave fades out when themeIdx == 'classic'.
-      break;
+    case 'theme': themeIdx = selectedIdx; break;
     case 'color':
       colorIdx = selectedIdx;
-      _saveThemeState('color', colorIdx);
-      // The wave shader picks up the new tint via WAVE_CONSTANTS_FLAT below.
-      updateWaveTintConstants();
+      updateWaveTintConstants();   // wave/particles pick up the new tint live
       break;
-    case 'bg':
-      bgIdx = selectedIdx;
-      _saveThemeState('bg', bgIdx);
-      break;
-    case 'font':
-      fontIdx = selectedIdx;
-      _saveThemeState('font', fontIdx);
-      break;
+    case 'bg':   bgIdx = selectedIdx; break;
+    case 'font': fontIdx = selectedIdx; break;
+    case 'daynight': daynightIdx = selectedIdx; break;
+  }
+}
+
+// Apply AND persist the selection (on confirm).
+function applyThemeSelection(themeKey, selectedIdx) {
+  previewThemeSelection(themeKey, selectedIdx);
+  switch (themeKey) {
+    case 'theme': _saveThemeState('theme', themeIdx); break;
+    case 'color': _saveThemeState('color', colorIdx); break;
+    case 'bg':    _saveThemeState('bg', bgIdx); break;
+    case 'font':  _saveThemeState('font', fontIdx); break;
+    case 'daynight': _saveThemeState('daynight', daynightIdx); break;
   }
 }
 
@@ -607,7 +658,7 @@ function applyThemeSelection(themeKey, selectedIdx) {
 // the RIBBON_BASE_TINT duplicates (all sharing the same value in captures).
 function updateWaveTintConstants() {
   if (typeof WAVE_CONSTANTS_FLAT === 'undefined') return; // not yet declared
-  const t = COLOR_OPTIONS[colorIdx].tint;
+  const t = (typeof dispTint !== 'undefined') ? dispTint : COLOR_OPTIONS[colorIdx].tint;
   const tintIndices = [23, 40, 42, 48, 61];
   for (const i of tintIndices) {
     WAVE_CONSTANTS_FLAT[i*4+0] = t[0];
@@ -1028,6 +1079,14 @@ const DIALOG_TEMPLATES = {
     body:'Sets the font displayed on the XMB\u2122 screen.',
     options:FONT_OPTIONS.map(o => o.name),
     themeKey:'font'
+  },
+  'Day/Night': {
+    type:'chooser',
+    panel:true,
+    title:'Day/Night',
+    body:'Sets the time-of-day lighting of the XMB\u2122 screen.',
+    options:DAYNIGHT_OPTIONS.map(o => o.name),
+    themeKey:'daynight'
   }
 };
 
@@ -1190,7 +1249,8 @@ const DATA = [
           {n:'Theme',i:'xmb_icon_022',action:'dialog',d:'Sets for use of a preset combination of elements such as colour, background or icons.'},
           {n:'Colour',i:'xmb_icon_022',action:'dialog',d:'Sets the colour of the background and options menu.'},
           {n:'Background',i:'xmb_icon_022',action:'dialog',d:'Sets the background of the XMB\u2122 screen.'},
-          {n:'Font',i:'xmb_icon_022',action:'dialog',d:'Sets the font displayed on the XMB\u2122 screen.'}
+          {n:'Font',i:'xmb_icon_022',action:'dialog',d:'Sets the font displayed on the XMB\u2122 screen.'},
+          {n:'Day/Night',i:'xmb_icon_022',action:'dialog',d:'Sets the time-of-day lighting (day, dusk, night or automatic).'}
         ]},
       {n:'Date and Time Settings',i:'xmb_icon_014',d:'Adjusts date and time settings.',ch:[
           {n:'Date and Time',i:'xmb_icon_022',action:'dialog',d:'Sets the date and time for this system.'},
@@ -2568,7 +2628,10 @@ function waveMotionDeltaY(x) {
   // heightScale(0.5) and crest map (*0.6) and the screenY = -p.y direction.
   const moving = 0.09 * Math.cos(x * 2.0 - t * 0.5)          // waveCosAmp travelling
                + 0.25 * Math.sin(x * 0.306 + t * 0.075);      // tension, length, flow
-  return -(moving * 0.5) * 0.6;                               // ~+/-0.10 NDC
+  // EXACT 1:1 match to the wave crest motion: -(totalWave_AC * heightScale) *
+  // crest map (0.6). No amplitude boost - boosting desynced the particles from
+  // the wave (they overshot it). They now ride the wave in perfect lockstep.
+  return -(moving * 0.5) * 0.6;                              // ~+/-0.10 NDC, matches wave
 }
 
 // The real XMB particle field (measured from 120-frame RPCS3 motion analysis)
@@ -2609,7 +2672,9 @@ function spawnParticle(p, aspect) {
     // NARROW vertically so the glitter hugs the wave.
     const k = (Math.random() * _CLOUD_N) | 0, b = k * 3;
     p.hx = PARTICLE_CLOUD[b]     + (Math.random() - 0.5) * 1.6;
-    p.hy = PARTICLE_CLOUD[b + 1] * 0.75 + (Math.random() - 0.5) * 0.35;
+    // hug the wave TIGHTLY: compress the vertical spread hard so the glitter
+    // sits in a thin band right on the wave line.
+    p.hy = PARTICLE_CLOUD[b + 1] * 0.45 + (Math.random() - 0.5) * 0.16;
     p.hz = PARTICLE_CLOUD[b + 2] + (Math.random() - 0.5) * 1.4;
     p.bigScale = 1.0;
   }
@@ -3184,8 +3249,23 @@ void main() {
   // toward black and keeps the lower colored band. Day (uNightDayBlend 0) is a
   // no-op so the daytime fit is untouched.
   {
-    float nightRamp = smoothstep(-0.05, 0.80, screenY); // 0 top -> 1 bottom
-    gradColor *= mix(1.0, nightRamp, uNightDayBlend);
+    // SMOOTH vertical night darkening (screenY 0=top .. 1=bottom). A long, even
+    // top->bottom ramp - NOT a short hard crush. The TOP darkens toward a dark
+    // SHADE of the primary colour (a deep, near-black tint only at FULL night;
+    // at Evening it is merely the darkest shade of the colour, never pure black).
+    // The BOTTOM barely changes with time of day - only slightly dimmer at night.
+    // Black(top) -> colour(bottom) gradient at ALL times of day. The BOTTOM
+    // colour is identical regardless of time (botMul = 1.0); only HOW FAR the
+    // black reaches down the screen changes: a small black cap at the top by day,
+    // progressively extending downward toward night. Controlled by the ramp
+    // exponent (higher = black holds longer before easing into colour).
+    float exillum = mix(1.15, 3.4, uNightDayBlend);      // day shallow -> night deep
+    float v = pow(screenY, exillum);                     // 0 top -> 1 bottom (colour)
+    // Top darkness depends on time: by DAY the top is only mildly darkened (much
+    // less black); toward NIGHT it deepens to ~pure black. Bottom stays full
+    // colour at all times.
+    float topMul = mix(0.30, 0.02, uNightDayBlend);
+    gradColor *= mix(topMul, 1.0, v);
   }
 
   // ---- BOOT LIT EXPOSURE (coldboot scene is the PRIMARY COLOR, brightened) ----
@@ -6346,7 +6426,14 @@ function drawBGWebGL(dt) {
   // reproduces the empirical d01/d15/d28 progression. (back_colours_pipeline.md
   // S1c/S2, replaces the old day/daysInMonth that never reached pure A or B.)
   var monthTime = (nowDate.getDate() - 1) / Math.max(1, (daysInCurMonth - 1));
-  var nightDayBlend = computeNightDayBlend(dayTime);
+  var _blendTarget = computeNightDayBlend(dayTime);
+  // Manual Day/Night override from Theme Settings (Auto = follow the clock).
+  var _dnBlend = DAYNIGHT_OPTIONS[daynightIdx].blend;
+  if (_dnBlend >= 0.0) _blendTarget = _dnBlend;
+  // Cross-fade the colour tint, HSV strength and day/night blend toward their
+  // targets so preview/selection changes glide instead of snapping.
+  stepThemeFade(dt, _blendTarget);
+  var nightDayBlend = dispBlend;            // animated value used downstream
   // Publish for the HDR steady params + wave emission gain (day/night aware).
   currentNightDayBlend = nightDayBlend;
 
@@ -6453,8 +6540,8 @@ function drawBGWebGL(dt) {
   gl.uniform3fv(gl.getUniformLocation(bgShaderProgram, 'uColorTint'),
                 new Float32Array(_manualTint));
   var _rev = (typeof manualColorReveal === 'number') ? Math.min(Math.max(manualColorReveal, 0.0), 1.0) : 1.0;
-  var _isManualColor = (COLOR_OPTIONS[colorIdx].key !== 'original') ? 1.0 : 0.0;
-  gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uHSVStrength'), _isManualColor * _rev);
+  // animated HSV strength (cross-fades Original <-> a manual colour)
+  gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uHSVStrength'), dispHSV * _rev);
   // Boot intro gradient ramp (coldboot1->coldboot2). bootGradientBrightness
   // is 1.0 once the intro is done; during boot it ramps the gradient up from
   // near-black over the fade window (boot_spec.md section 1).
@@ -7847,6 +7934,9 @@ function navDialog(dir) {
     if (!n) return;
     dialogState.sel = (dialogState.sel + dir + n) % n;
     playCursor();
+    // Immediate hover-preview: apply (without saving) so the user sees the
+    // colour/theme/background change the instant they move onto it.
+    if (t.themeKey) previewThemeSelection(t.themeKey, dialogState.sel);
   } else if (t.type === 'confirm') {
     dialogState.sel = dialogState.sel === 0 ? 1 : 0;
     playCursor();
@@ -9385,11 +9475,13 @@ function enter() {
     else if (tpl.themeKey === 'color') initialSel = colorIdx;
     else if (tpl.themeKey === 'bg')    initialSel = bgIdx;
     else if (tpl.themeKey === 'font')  initialSel = fontIdx;
+    else if (tpl.themeKey === 'daynight') initialSel = daynightIdx;
     dialogState = {
       item: it,
       iconId: it.i,                         // PS3 dialogs show the item icon top-left
       template: tpl,
       sel: initialSel,
+      origSel: initialSel,                  // for revert if the chooser is cancelled
       // Live-wave dialogs (System Update) use the fast ~100ms cross-fade
       // measured from the RPCS3 capture (4-5 flips @ 60fps). Others keep the
       // 250ms firmware default.
@@ -9437,6 +9529,11 @@ function enter() {
 function back() {
   // Dialog and landing close immediately on Circle / Back.
   if (dialogState) {
+    // Cancelled chooser: revert the live hover-preview to the original pick.
+    const _t = dialogState.template;
+    if (_t && _t.themeKey && (_t.type === 'chooser' || _t.type === 'chooser_illust')) {
+      previewThemeSelection(_t.themeKey, dialogState.origSel);
+    }
     // Live-wave dialogs (System Update) animate an exit cross-fade: the dialog
     // fades out while the XMB chrome fades back in over the continuous wave.
     if (isLiveWaveDlg(dialogState.template)) {
