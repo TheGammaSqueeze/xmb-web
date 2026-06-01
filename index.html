@@ -7412,7 +7412,13 @@ function drawXMB(now) {
 // exactly on the current time.
 let _clkMenuSig = null, _clkSpinStart = -1e9;
 const CLOCK_SPIN_MS = 620;        // duration of the hand cycle
-const CLOCK_SWEEP_TURNS = 1;      // full revolutions per spin (integer -> ends on the time)
+// Per-spin revolutions for each hand. Both are integers so the hands always
+// land back exactly on the current time, and they DIFFER by one so the minute
+// hand laps the hour hand exactly once -- the two hands cross into a single
+// overlapping line midway through the cycle (the real icon's "spin -> hands
+// align into a line -> settle" detail).
+const CLOCK_MIN_TURNS = 2;        // minute hand: two full revolutions
+const CLOCK_HOUR_TURNS = 1;       // hour hand: one (laps -> one crossing)
 function clockSpinProgress() {
   const now = performance.now();
   const sig = stack.length + '|'
@@ -7569,9 +7575,9 @@ function drawClock(fadeMul) {
   // settle back on the current time. The boot/XMB-load reveal (fadeMul 0->1) also
   // spins the hands in.
   const spinT = ease(Math.max(clockSpinProgress(), Math.max(0, 1 - fadeMul)));
-  const spin = spinT * TWO_PI * CLOCK_SWEEP_TURNS;
-  const hourAngle = UP + (((h % 12) + minNum / 60) / 12) * TWO_PI + spin;
-  const minAngle = UP + (minNum / 60) * TWO_PI + spin;
+  const spin = spinT * TWO_PI;
+  const hourAngle = UP + (((h % 12) + minNum / 60) / 12) * TWO_PI + spin * CLOCK_HOUR_TURNS;
+  const minAngle = UP + (minNum / 60) * TWO_PI + spin * CLOCK_MIN_TURNS;
 
   // ---- Clock FACE: ring + two hands (pixel-matched to the 4K RPCS3 capture) ----
   //   ring stroke ~2.6 px, hands ~4 px (iconR*0.25) uniform width, hour hand to
