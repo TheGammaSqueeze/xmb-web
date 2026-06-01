@@ -34,6 +34,7 @@ canvas{position:absolute;top:0;left:0;width:100%;height:100%}
   <span style="font-family:'PS3';font-weight:300">PS3RodinPreload</span>
 </div>
 
+<script src="particle_cloud.js"></script>
 <script>
 "use strict";
 
@@ -2066,7 +2067,33 @@ function animProgress(anim, now) {
 const FW_PERTURBATION = 0.1;
 const FW_SPEC_POWER = 35.3;
 const FW_SPEC_COEFF = 74.74;
-const BG_NUM_PARTICLES = 2800;
+// Firmware-derived steady-state count: emit_per_frame(16.65) * emit_prob(0.479)
+// ~= 8 emitted/frame, lifetime 1/aging_speed(0.00285) ~= 350 frames -> ~2800.
+// Firmware steady-state pool is ~2800, but most are sub-visible dust; the
+// visible field measured from RPCS3 is far sparser, so we render a smaller
+// pool tuned to the measured on-screen density.
+const BG_NUM_PARTICLES = 1400;
+
+// === PS3 XMB PARTICLE SYSTEM (1:1 port of lines.qrc PARTICLES.mnu) ===
+// Decompiled from particles.elf (SPU) + PARTICLES.mnu / HDR.mnu / BACKGROUND.mnu.
+// Glitter mechanism: each particle carries a spinning unit normal; the Phong
+// specular pow(dot(N,H),35.3)*74.74 spikes >>1 only when the normal momentarily
+// aligns with the half-vector -> sparse bright flashes = twinkle. At night the
+// higher HDR exposure + glare amplify the spikes into glitter. Cone emission
+// directions use sincos (confirmed @particles.elf 0x44d0/0x45b0).
+const FW_PART = {
+  emitVelMin: 0.15064, emitVelMul: 0.19, emitVelVar: 0.282567,
+  coneAngle: 51.8695, emitNegProb: 0.173899,
+  agingSpeed: 0.00285223, agingVar: 0.493003, friction: 0.030551,
+  spinTimeScale: 2.74, deltaTime: 0.0088883, gravity: -6.8e-5,
+  brownianScale: 0.225311,
+  spotPos: [4.16, 2.63, -7.6],
+  specPower: 35.2904, specCoeff: 74.74, lambertCoeff: 8.0,
+  exposure: 0.0390458, fresnel: 1.33319, iridescentExp: 1.0, globalAlpha: 1.0,
+  sizeMiddle: 0.0536233, sizeNear: 0.0772033, sizeFar: 0.874062,
+  glare: 0.159705, glareScale: 5.44386,
+  fovy: 71.846,
+};
 
 let waveT = 0;
 let wavePerturbX = 0;
@@ -2512,26 +2539,97 @@ const ICON_MATERIAL_DAY = {
   glassMix:   1.0,                        // unused in new shader, kept for compat
 };
 
-// Particle state - concentrated along wave bands, not at screen center
-// Wave bands at screen y=29% (NDC -0.33) and y=58-68% (NDC 0.30-0.52)
-// Particle y is in [0,1] where 0 = NDC -1, 0.5 = NDC 0, 1 = NDC +1
+// Particle state - 3D model ported from particles.elf / PARTICLES.mnu.
+// Camera at origin looking -Z, FOVY 71.8. Particles live in a frustum slab;
+// each carries a spinning unit normal that drives the specular glitter.
+// pos[3], vel[3], age[0..1], spin[3] (orientation), spinRate[3].
+const PART_ASPECT_DEFAULT = 16 / 9;
+const _focalY = 1.0 / Math.tan((FW_PART.fovy * Math.PI / 180) / 2);
+
+// EXACT firmware particle projection matrix (RPCS3 VP constants c[256..259] of
+// the particle draw call 36). clip = M * eye; NDC = clip.xy / clip.w.
+// Validated: projecting the captured eye-space cloud lands the points exactly
+// on the real particles in the framebuffer.
+const PART_PROJ = { fx: 1.12820041, fy: 2.00568986, wz: -1.0, ww: 2.0 };
+function projectEye(ex, ey, ez) {
+  const w = PART_PROJ.wz * ez + PART_PROJ.ww;   // = -ez + 2
+  if (w <= 0.001) return null;
+  return [ (PART_PROJ.fx * ex) / w, (PART_PROJ.fy * ey) / w, w ];
+}
+
+// VERTICAL MOTION of the wave at screen-x = ndcX (NDC), using the SAME analytic
+// terms as the wave vertex shader (uTime = waveT, LINE1 settings), with the
+// static/DC base removed -> this is the pure undulation. Added on top of each
+// particle's validated cloud position so the band sits ON the wave AND moves in
+// lockstep with it (not an independent loop, not an absolute mis-placed crest).
+function waveMotionDeltaY(x) {
+  const t = (typeof waveT === 'number') ? waveT : (_partTime * 0.4);
+  // time-varying wave terms only (cos + tension sin), mapped through the same
+  // heightScale(0.5) and crest map (*0.6) and the screenY = -p.y direction.
+  const moving = 0.09 * Math.cos(x * 2.0 - t * 0.5)          // waveCosAmp travelling
+               + 0.25 * Math.sin(x * 0.306 + t * 0.075);      // tension, length, flow
+  return -(moving * 0.5) * 0.6;                               // ~+/-0.10 NDC
+}
+
+// The real XMB particle field (measured from 120-frame RPCS3 motion analysis)
+// is NOT a uniform full-screen starfield. It is a band coupled to the wave:
+// densest in the lower-LEFT, drifting rightward and fading out, nearly empty
+// above the wave crest. Particles are emitted along the left of the wave band
+// and carried right by the flow, so steady-state density falls left->right.
+let _partTime = 0;
+// NDC y of the wave-band center at a given NDC x. Wave crest sweeps ~41-61%
+// screen height and rises toward the right; center ~52%, gentle curve + drift.
+const _CLOUD_N = (typeof PARTICLE_CLOUD !== 'undefined') ? (PARTICLE_CLOUD.length / 3) | 0 : 0;
+// Per-slot motion measured from the firmware: only ~1/3 of active particles move
+// on a given frame, by ~0.5-1.2 world units, near-isotropic (NOT directional
+// flow - that guess was wrong). So each particle hovers around an eye-space HOME
+// sampled from the firmware-extracted cloud, with a small bounded random walk.
+function spawnParticle(p, aspect) {
+  // Sample a cloud home, but with a LARGE random offset so the 1400 particles
+  // don't pile onto the 800 captured points (that caused visible clumping).
+  // The offset spreads them while keeping the overall band shape.
+  // EDGE PARTICLES: a fraction live at the far LEFT and RIGHT ends of the wave,
+  // bigger, with reflective gold/silver/white glitter (a flashlight-reflection
+  // look - strong specular flash in a metallic tint).
+  p.edge = Math.random() < 0.12;
+  if (p.edge) {
+    const side = (Math.random() < 0.5) ? -1 : 1;
+    // eye-x chosen so it projects near the screen edge (|ndcX| ~ 0.85-1.05),
+    // near the wave crest; a bit nearer in depth so perspective makes them larger.
+    p.hx = side < 0 ? (-5.6 - Math.random() * 1.1) : (5.1 + Math.random() * 1.1);
+    p.hy = (Math.random() - 0.5) * 0.7;
+    p.hz = -4.8 - Math.random() * 1.4;
+    const r = Math.random();
+    p.tintR = r < 0.34 ? 1.00 : (r < 0.67 ? 0.86 : 1.00);   // gold / silver / white
+    p.tintG = r < 0.34 ? 0.80 : (r < 0.67 ? 0.89 : 1.00);
+    p.tintB = r < 0.34 ? 0.38 : (r < 0.67 ? 0.97 : 1.00);
+    p.bigScale = 1.9 + Math.random() * 1.5;
+  } else {
+    // Sample a cloud home, with a large offset to avoid clumping; keep the band
+    // NARROW vertically so the glitter hugs the wave.
+    const k = (Math.random() * _CLOUD_N) | 0, b = k * 3;
+    p.hx = PARTICLE_CLOUD[b]     + (Math.random() - 0.5) * 1.6;
+    p.hy = PARTICLE_CLOUD[b + 1] * 0.75 + (Math.random() - 0.5) * 0.35;
+    p.hz = PARTICLE_CLOUD[b + 2] + (Math.random() - 0.5) * 1.4;
+    p.bigScale = 1.0;
+  }
+  p.ex = p.hx; p.ey = p.hy; p.ez = p.hz;          // live eye-space position
+  p.vx = 0; p.vy = 0; p.vz = 0;                   // velocity (smooth, friction-damped)
+  // vertical lane within the wave-following band (NDC offset from the crest);
+  // narrow, biased BELOW the crest (particles hug the wave, trail downward).
+  p.bandOff = (Math.random() - 0.62) * 0.38;
+  p.age = Math.random();
+  // spinning normal -> the per-quad specular twinkle (the glitter/glare pass)
+  p.sx0 = Math.random() * Math.PI * 2;
+  p.sx1 = Math.random() * Math.PI * 2;
+  p.rr0 = (0.5 + Math.random()) * FW_PART.spinTimeScale;
+  p.rr1 = (0.5 + Math.random()) * FW_PART.spinTimeScale;
+}
 const particles = [];
 for (let i = 0; i < BG_NUM_PARTICLES; i++) {
-  // From RPCS3: particles are scattered across the entire screen
-  // with higher density in the wave area (y=20-80%)
-  const y = Math.random() < 0.7
-    ? 0.1 + Math.random() * 0.8  // 70% in wave area (y=10-90%)
-    : Math.random();              // 30% anywhere
-  particles.push({
-    x: Math.random(),
-    y: y,
-    vx: (Math.random() - 0.5) * 0.00006,
-    vy: (Math.random() - 0.5) * 0.00003,
-    age: Math.random(),
-    size: 0.046 + (Math.random() - 0.5) * (0.077 - 0.046),
-    phase: Math.random() * Math.PI * 2,
-    specAngle: Math.random() * Math.PI * 2
-  });
+  const p = {};
+  spawnParticle(p, PART_ASPECT_DEFAULT);
+  particles.push(p);
 }
 
 // ------ SHADER SOURCES ------
@@ -3757,59 +3855,49 @@ void main() {
   gl_FragColor = vec4(finalColor, 1.0);
 }`;
 
+// Particle vertex/fragment: per-particle brightness + color are computed
+// CPU-side (the spinning-normal Phong specular, exactly as in the firmware /
+// the validated sim) and passed as attributes. The VS sizes the point sprite
+// (bright glints get a wider glow halo = the threshold glare bloom); the FS
+// draws a core+halo profile and outputs premultiplied additive color.
 const VS_PARTICLE = `
-attribute vec2 aPos;
-attribute float aSize;
-attribute float aSpec;
-attribute float aAge;
-uniform float uAspect;
-varying float vSpec;
-varying float vAge;
-varying float vScreenY;
+attribute vec2 aPos;     // NDC position
+attribute float aSize;   // point size in pixels (incl. glint glow)
+attribute float aBright; // HDR brightness
+attribute vec3 aColor;   // tint (iridescent)
+attribute float aSpark;  // diffraction-spike sparkle amount
+varying float vBright;
+varying vec3 vColor;
+varying float vSpark;
 void main() {
-  vSpec = aSpec;
-  vAge = aAge;
-  vScreenY = aPos.y; // pass NDC Y to fragment for gradient fade
+  vBright = aBright;
+  vColor = aColor;
+  vSpark = aSpark;
   gl_Position = vec4(aPos, 0.0, 1.0);
-  gl_PointSize = 1.5;
+  gl_PointSize = aSize;
 }`;
 
 const FS_PARTICLE = `
 precision mediump float;
-varying float vSpec;
-varying float vAge;
-varying float vScreenY;
-uniform float uSpecPower;
-uniform float uSpecCoeff;
-uniform sampler2D uFresnelLUT;
+varying float vBright;
+varying vec3 vColor;
+varying float vSpark;
 void main() {
   vec2 pc = gl_PointCoord * 2.0 - 1.0;
-  float dist = dot(pc, pc);
-  if (dist > 1.0) discard;
-
-  // Age-based fade: fade in, hold, fade out
-  float ageFade = smoothstep(0.0, 0.05, vAge) * smoothstep(1.0, 0.85, vAge);
-
-  // Firmware: specular_power=35.3, specular_coeff=74.74, exposure=0.039
-  // Specular creates sharp point highlight (white glint)
-  float specular = pow(max(1.0 - dist, 0.0), uSpecPower) * uSpecCoeff;
-
-  // Fresnel from firmware lookup
-  float fres = texture2D(uFresnelLUT, vec2(sqrt(dist), 0.5)).r;
-  specular *= (0.3 + 0.7 * fres);
-
-  // Firmware: global_alpha=0, only specular visible.
-  // vSpec encodes the specular angle. With pow(35.3), only particles
-  // where vSpec > 0.98 produce meaningful output.
-  // This means ~2% of particles are bright at any time (glitter effect).
-  // pow(12) makes only ~5% of particles visible (specular glint).
-  float specVal = pow(max(vSpec, 0.0), 10.0);
-  // Discard particles below bottom of screen
-  if (vScreenY < -0.6) discard;
-  float alpha = ageFade * specVal * 0.8;
-
-  // Particles are near-white with subtle color from environment
-  gl_FragColor = vec4(alpha, alpha * 0.95, alpha * 0.9, alpha);
+  float d2 = dot(pc, pc);
+  if (d2 > 1.0) discard;                                    // ROUND spec
+  // round glitter spec: tight SHARP bright core + soft round glow (HDR bloom).
+  float core = exp(-d2 * 9.0);                              // sharp round core
+  float glow = exp(-d2 * 1.8) * 0.40;                       // soft round bloom
+  // diffraction-spike sparkle (4-point cross), scaled per-particle by aSpark so
+  // larger/brighter specs get a crisp shiny sparkle (kept sharp, not blurred).
+  float cross = (exp(-pc.y*pc.y*70.0) + exp(-pc.x*pc.x*70.0)) * exp(-d2*1.2);
+  float spark = cross * vSpark * 0.7;
+  float a = (core + glow + spark) * vBright;
+  // bright glints blow out toward white (HDR highlight desaturation)
+  float hot = clamp(vBright * 0.6 - 0.6, 0.0, 1.0);
+  vec3 col = mix(vColor, vec3(1.0), hot);
+  gl_FragColor = vec4(col * a, a);                          // premultiplied additive
 }`;
 
 // Bloom: horizontal/vertical Gaussian blur
@@ -5998,47 +6086,155 @@ function uploadSplineDisplacement(timeSec) {
 
 // ------ PARTICLE UPDATE ------
 
-function updateParticles(dt) {
-  const dtSec = dt * 0.001;
+// Firmware per-frame integration (particles.elf): brownian + gravity + friction,
+// pos += vel, aging, spin. dt-normalized to a 60fps reference step so motion
+// speed is framerate-independent (the SPU runs one step per displayed frame).
+// FIXED-TIMESTEP accumulator: the firmware particle sim runs at 60Hz (one step
+// per RSX flip). The web canvas can render much slower (heavy WebGL), so we must
+// advance the sim in fixed 1/60s steps and apply the EXACT measured per-step
+// motion - NOT scale a single update by dt (that made motion ~5x too fast at low
+// fps, and scaled a random walk linearly instead of by sqrt(t)).
+let _partAccum = 0;
+const PART_DT = 1000 / 60;                     // 16.667 ms fixed step
+// per-step motion. The firmware particles are dominantly STATIC (the "movers"
+// measured by 3D NN tracking are partly NN mismatches in dense regions); the
+// real on-screen motion is a very gentle drift. So: only a small fraction jitter
+// a tiny amount each 1/60s step, lightly centered on the cloud home.
+const _gJ = () => (Math.random() + Math.random() + Math.random() - 1.5) * 0.08;
+function stepParticles() {
   for (const p of particles) {
-    // Brownian motion
-    p.vx += (Math.random() - 0.5) * 0.225 * 0.001;
-    p.vy += (Math.random() - 0.5) * 0.225 * 0.001;
-    // Damping
-    p.vx *= 0.995;
-    p.vy *= 0.995;
-    p.x += p.vx;
-    p.y += p.vy;
-    p.age += 0.00285;
-    p.phase += 0.003;
-
-    // Respawn when aged out
-    if (p.age > 1.0 || p.x < -0.05 || p.x > 1.05 || p.y < -0.05 || p.y > 1.05) {
-      // Emit near wave lines
-      const nearWave = Math.random() < 0.48;
-      p.x = Math.random();
-      p.y = nearWave ? 0.38 + Math.random() * 0.3 : Math.random();
-      p.vx = (Math.random() - 0.5) * 0.00008;
-      p.vy = (Math.random() - 0.5) * 0.00005;
-      p.age = 0;
-      p.specAngle = Math.random() * Math.PI * 2;
-    }
+    // SMOOTH damped Brownian (velocity + friction), NOT per-frame position
+    // jitter (which looked like erratic "microscope organisms"). Friction
+    // 0.0306 from PARTICLES.mnu makes velocity persist -> gentle gliding.
+    // Impulse is scaled by depth (w=-ez+2) so NEAR (big) particles don't jitter
+    // more on screen than far ones (perspective amplifies small-w world motion).
+    const w = -p.ez + 2.0;
+    const imp = 0.013 * (w / 8.0);
+    p.vx += _gJ() * imp; p.vy += _gJ() * imp; p.vz += _gJ() * imp;
+    p.vx *= 0.969; p.vy *= 0.969; p.vz *= 0.969;     // friction damping
+    p.ex += p.vx + (p.hx - p.ex) * 0.012;            // glide + gentle re-centering
+    p.ey += p.vy + (p.hy - p.ey) * 0.012;
+    p.ez += p.vz + (p.hz - p.ez) * 0.012;
+    p.age += FW_PART.agingSpeed * 0.9 * (1.0 + (Math.random() - 0.5) * FW_PART.agingVar);
+    // Slow normal spin: the specular pow(35) is extremely sensitive, so a fast
+    // spin makes EVERY particle's brightness flicker each frame -> the whole
+    // field shimmers = reads as "too fast". Slow it so each particle's glint
+    // evolves over ~seconds (gentle twinkle).
+    // normal spin -> the reflective glint rate. Tuned so each spec sweeps
+    // through a bright flash every ~2-4s (matches the measured firmware twinkle
+    // ~1 flash/1-2s). The earlier "fast shimmer" was the size-pulsing + square
+    // shape (now fixed: stable size, round spec), NOT the spin rate.
+    p.sx0 += p.rr0 * FW_PART.deltaTime * 0.7;
+    p.sx1 += p.rr1 * FW_PART.deltaTime * 0.7;
+    if (p.age > 1.0) { spawnParticle(p, _partAspect); p.age = 0.0; }
   }
 }
+function updateParticles(dt) {
+  _partTime += dt * 0.001;
+  _partAccum += dt;
+  let n = 0;
+  while (_partAccum >= PART_DT && n < 2) { _partAccum -= PART_DT; stepParticles(); n++; }
+  if (_partAccum > PART_DT) _partAccum = 0;     // never batch many steps into one slow frame
+}
 
-function buildParticleData(aspect) {
-  const data = []; // x, y, size, spec, age
+let _partAspect = PART_ASPECT_DEFAULT;
+// Build the GPU buffer. Particles live in EYE SPACE (firmware cloud) and are
+// projected with the EXACT firmware VP matrix; on-screen size comes purely from
+// perspective (1/w) as in the firmware. Specular glitter from a spinning normal.
+// Layout: [ndcX, ndcY, sizePx, bright, r,g,b].
+function buildParticleData(aspect, canvasH, nightBlend) {
+  _partAspect = aspect;
+  const nb = (typeof nightBlend === 'number') ? nightBlend : 0.0;
+  // body = soft-square base so every active particle is faintly visible;
+  // glint = specular spike (FW exposure 0.039 -> spec 74 ~= 2.9, blooms).
+  const bodyLevel = 0.05 + 0.11 * nb;          // brighter/glittery at night
+  const glintExpo = FW_PART.exposure * (0.7 + 0.9 * nb);
+  // spot light direction (eye space) from c[264-266]: spotPos (4.16,2.63,-7.6)
+  const lx0 = 4.16, ly0 = 2.63, lz0 = -7.6, ll0 = Math.hypot(lx0, ly0, lz0);
+  const lx = lx0 / ll0, ly = ly0 / ll0, lz = lz0 / ll0;
+  const data = new Float32Array(particles.length * 8);   // +spark
+  let o = 0;
+  const Hs = canvasH / 720;
+  const FOCUS_Z = 5.8;            // eye-space depth in sharp focus (cloud median)
   for (const p of particles) {
-    // Convert to NDC
-    const x = p.x * 2.0 - 1.0;
-    const y = 1.0 - p.y * 2.0;
-    // Specular intensity varies with viewing angle simulation
-    const spec = 0.3 + 0.7 * Math.pow(Math.abs(Math.sin(p.phase + p.specAngle)), 2.0);
-    // Point size in pixels, scaled for canvas size
-    const sz = p.size * aspect * 0.5;
-    data.push(x, y, sz, spec, p.age);
+    const pr = projectEye(p.ex, p.ey, p.ez);
+    if (!pr) { data[o + 3] = 0; o += 8; continue; }
+    const w = pr[2];
+    const ndcX = pr[0];                       // horizontal from the cloud projection
+    // VERTICAL: validated cloud position (sits on the wave) + the wave's exact
+    // undulation, so the band rides the wave in lockstep as it moves.
+    const ndcY = pr[1] + waveMotionDeltaY(ndcX);
+    if (Math.abs(ndcX) > 1.15 || Math.abs(ndcY) > 1.15) { data[o + 3] = 0; o += 8; continue; }
+    // view dir from particle toward camera (eye space, camera at origin)
+    const pl = Math.hypot(p.ex, p.ey, p.ez) || 1;
+    const vx = -p.ex / pl, vy = -p.ey / pl, vz = -p.ez / pl;
+    let hxv = lx + vx, hyv = ly + vy, hzv = lz + vz;
+    const hl = Math.hypot(hxv, hyv, hzv) || 1; hxv /= hl; hyv /= hl; hzv /= hl;
+    // spinning unit normal -> the twinkle (per-particle, evolves over time)
+    const c0 = Math.sin(p.sx0);
+    const nx = c0 * Math.cos(p.sx1), ny = c0 * Math.sin(p.sx1), nz = Math.cos(p.sx0);
+    let ndh = nx * hxv + ny * hyv + nz * hzv; if (ndh < 0) ndh = 0;
+    let ndv = nx * vx + ny * vy + nz * vz; if (ndv < 0) ndv = 0;
+    const spec = Math.pow(ndh, FW_PART.specPower) * FW_PART.specCoeff;
+    const fres = Math.pow(1.0 - ndv, FW_PART.fresnel);
+    // Prominent FADE IN/OUT over the lifetime (continuous turnover, not a static
+    // loop): smooth fade-in over the first ~12% of life, long hold, fade-out over
+    // the last ~25%. Each particle has its own random phase so the field is
+    // always partly appearing/disappearing.
+    const a = p.age;
+    const ageF = (a < 0.12 ? a / 0.12 : (a > 0.75 ? (1 - a) / 0.25 : 1.0));
+    // DEPTH OF FIELD: defocus = distance from the focus plane (firmware focus_pow
+    // 2.47/1.83, darkness 6.24/13.9). Out-of-focus -> bigger soft DIM bokeh; in
+    // focus -> small sharp bright. This is the "field of depth".
+    const depthDist = -p.ez;                     // positive eye-space depth
+    // far side blurs more than near (firmware far darkness 13.9 > near 6.24)
+    const dd = depthDist - FOCUS_Z;
+    let defocus = (dd >= 0 ? dd / 1.2 : -dd / 1.6);
+    if (defocus > 1.0) defocus = 1.0;
+    const dofDark = 1.0 / (1.0 + defocus * defocus * 2.4);   // out-of-focus dims
+    // fade the whole glitter IN with the boot animation (matches the wave's
+    // bootWaveBrightness), so it doesn't pop in before the fade-in.
+    const bootFade = (typeof bootWaveActive !== 'undefined' && bootWaveActive)
+                   ? (typeof bootWaveBrightness === 'number' ? bootWaveBrightness : 1.0) : 1.0;
+    // edge particles reflect a "flashlight" -> stronger specular glint and a
+    // higher visible body, so they read as bright metallic reflections.
+    const edge = p.edge === true;
+    const glintGain = edge ? 2.4 : 1.0;
+    const bodyGain = edge ? 2.2 : 1.0;
+    let bright = (bodyLevel * bodyGain + fres * 0.04 + spec * glintExpo * glintGain)
+                 * ageF * dofDark * bootFade;
+    if (bright < 0) bright = 0;
+    // base perspective size; edge particles are BIGGER; gentle DoF growth.
+    let sizePx = (FW_PART.sizeNear * 90.0 / w) * Hs * (p.bigScale || 1.0);
+    sizePx *= (1.0 + defocus * 1.5);
+    if (sizePx < 1.0) sizePx = 1.0;
+    const glow = Math.min(bright, 2.0) * (FW_PART.glare * 2.0);
+    sizePx = sizePx + glow;
+    if (sizePx > (edge ? 22 : 12)) sizePx = edge ? 22 : 12;
+    // SPARKLE: larger/brighter specs get diffraction-spike sparkle; edge specs
+    // sparkle harder (the shiny flashlight glint).
+    let spark = Math.min(1.0, (sizePx - 3.0) / 5.0) * 0.6 + Math.min(1.0, bright * 0.5) * 0.7;
+    if (edge) spark += 0.4;
+    if (spark < 0) spark = 0; else if (spark > 1.4) spark = 1.4;
+    let r, g, b;
+    if (edge) {
+      // metallic gold/silver/white tint; the reflection brightens it toward its
+      // tint as the glint fires (flashlight reflecting off the spec).
+      const refl = 0.5 + Math.min(1.0, spec * glintExpo * 0.6);
+      r = p.tintR * refl; g = p.tintG * refl; b = p.tintB * refl;
+    } else {
+      // subtle iridescent tint (firmware c[466] iridescent exp = 1)
+      const t = ndh * 6.2832 * FW_PART.iridescentExp;
+      r = 0.86 + 0.14 * (0.5 + 0.5 * Math.cos(t));
+      g = 0.88 + 0.12 * (0.5 + 0.5 * Math.cos(t + 2.094));
+      b = 0.92 + 0.08 * (0.5 + 0.5 * Math.cos(t + 4.188));
+    }
+    data[o] = ndcX; data[o + 1] = ndcY; data[o + 2] = sizePx;
+    data[o + 3] = bright; data[o + 4] = r; data[o + 5] = g; data[o + 6] = b;
+    data[o + 7] = spark;
+    o += 8;
   }
-  return new Float32Array(data);
+  return data;
 }
 
 // ------ DRAW FULLSCREEN QUAD ------
@@ -6545,45 +6741,46 @@ function drawBGWebGL(dt) {
   gl.uniform1f(gl.getUniformLocation(compositeShaderProgram, 'uBootWhiteout'), bootWhiteout);
   drawQuad(compositeShaderProgram);
 
-  // === PASS 5: Particles (disabled) ===
-  if (false) {
+  // === PASS 5: Particles (1:1 firmware glitter, drawn over the composite) ===
+  // The wave fade gates particles too (they hide with the wave on Classic /
+  // dialogs / hover). waveAlpha already encodes that envelope.
+  if (waveAlpha > 0.01) {
   gl.enable(gl.BLEND);
-  gl.blendFunc(gl.SRC_ALPHA, gl.ONE); // additive with alpha control
+  gl.blendFunc(gl.ONE, gl.ONE); // premultiplied additive (HDR glints over scene)
   gl.useProgram(particleShaderProgram);
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, fresnelTex);
-  gl.uniform1i(gl.getUniformLocation(particleShaderProgram, 'uFresnelLUT'), 0);
-  gl.uniform1f(gl.getUniformLocation(particleShaderProgram, 'uSpecPower'), FW_SPEC_POWER);
-  gl.uniform1f(gl.getUniformLocation(particleShaderProgram, 'uSpecCoeff'), FW_SPEC_COEFF);
-  gl.uniform1f(gl.getUniformLocation(particleShaderProgram, 'uAspect'), cw / ch);
 
-  const pData = buildParticleData(ch);
+  const pData = buildParticleData(cw / ch, ch, currentNightDayBlend);
   gl.bindBuffer(gl.ARRAY_BUFFER, particleVBO);
   gl.bufferData(gl.ARRAY_BUFFER, pData, gl.DYNAMIC_DRAW);
 
   const aPosP = gl.getAttribLocation(particleShaderProgram, 'aPos');
-  const aSize = gl.getAttribLocation(particleShaderProgram, 'aSize');
-  const aSpec = gl.getAttribLocation(particleShaderProgram, 'aSpec');
-  const aAge = gl.getAttribLocation(particleShaderProgram, 'aAge');
-
+  const aSizeP = gl.getAttribLocation(particleShaderProgram, 'aSize');
+  const aBrightP = gl.getAttribLocation(particleShaderProgram, 'aBright');
+  const aColorP = gl.getAttribLocation(particleShaderProgram, 'aColor');
+  const aSparkP = gl.getAttribLocation(particleShaderProgram, 'aSpark');
+  const ST = 32; // 8 floats * 4 bytes
   gl.enableVertexAttribArray(aPosP);
-  gl.enableVertexAttribArray(aSize);
-  gl.enableVertexAttribArray(aSpec);
-  gl.enableVertexAttribArray(aAge);
-  gl.vertexAttribPointer(aPosP, 2, gl.FLOAT, false, 20, 0);
-  gl.vertexAttribPointer(aSize, 1, gl.FLOAT, false, 20, 8);
-  gl.vertexAttribPointer(aSpec, 1, gl.FLOAT, false, 20, 12);
-  gl.vertexAttribPointer(aAge, 1, gl.FLOAT, false, 20, 16);
+  gl.enableVertexAttribArray(aSizeP);
+  gl.enableVertexAttribArray(aBrightP);
+  gl.enableVertexAttribArray(aColorP);
+  if (aSparkP >= 0) gl.enableVertexAttribArray(aSparkP);
+  gl.vertexAttribPointer(aPosP, 2, gl.FLOAT, false, ST, 0);
+  gl.vertexAttribPointer(aSizeP, 1, gl.FLOAT, false, ST, 8);
+  gl.vertexAttribPointer(aBrightP, 1, gl.FLOAT, false, ST, 12);
+  gl.vertexAttribPointer(aColorP, 3, gl.FLOAT, false, ST, 16);
+  if (aSparkP >= 0) gl.vertexAttribPointer(aSparkP, 1, gl.FLOAT, false, ST, 28);
 
   gl.drawArrays(gl.POINTS, 0, BG_NUM_PARTICLES);
 
   gl.disableVertexAttribArray(aPosP);
-  gl.disableVertexAttribArray(aSize);
-  gl.disableVertexAttribArray(aSpec);
-  gl.disableVertexAttribArray(aAge);
+  gl.disableVertexAttribArray(aSizeP);
+  gl.disableVertexAttribArray(aBrightP);
+  gl.disableVertexAttribArray(aColorP);
+  if (aSparkP >= 0) gl.disableVertexAttribArray(aSparkP);
 
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); // restore default
-  } // end particles disabled
+  gl.disable(gl.BLEND);
+  } // end particles
 }
 
 // ------ CANVAS FALLBACK (original drawBG) ------
