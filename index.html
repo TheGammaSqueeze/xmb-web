@@ -8800,30 +8800,30 @@ const TIMEZONES = ['GMT-12:00','GMT-11:00','GMT-10:00','GMT-09:00','GMT-08:00','
 // longitude so the globe rotates to show that location. Mirrors the PS3
 // sysconf time-zone list (offset-ordered, multiple cities per offset).
 const TZ_LIST = [
-  {label:'GMT-11:00 Samoa', lon:-171}, {label:'GMT-10:00 Hawaii', lon:-157},
-  {label:'GMT-09:00 Alaska', lon:-150},
-  {label:'GMT-08:00 Pacific Time (US & Canada)', lon:-120}, {label:'GMT-08:00 Tijuana', lon:-117},
-  {label:'GMT-07:00 Mountain Time (US & Canada)', lon:-105}, {label:'GMT-07:00 Chihuahua', lon:-106},
-  {label:'GMT-06:00 Central Time (US & Canada)', lon:-90}, {label:'GMT-06:00 Mexico City', lon:-99},
-  {label:'GMT-05:00 Eastern Time (US & Canada)', lon:-75}, {label:'GMT-05:00 Bogota', lon:-74}, {label:'GMT-05:00 Lima', lon:-77},
-  {label:'GMT-04:00 Atlantic (Canada)', lon:-60}, {label:'GMT-04:00 Caracas', lon:-67}, {label:'GMT-04:00 Santiago', lon:-71},
-  {label:'GMT-03:30 Newfoundland', lon:-53},
-  {label:'GMT-03:00 Sao Paulo', lon:-47}, {label:'GMT-03:00 Buenos Aires', lon:-58},
-  {label:'GMT-01:00 Azores', lon:-25},
-  {label:'GMT+00:00 London', lon:0}, {label:'GMT+00:00 Dublin', lon:-6}, {label:'GMT+00:00 Lisbon', lon:-9},
-  {label:'GMT+00:00 Reykjavik', lon:-22}, {label:'GMT+00:00 Casablanca', lon:-8},
-  {label:'GMT+01:00 Paris', lon:2}, {label:'GMT+01:00 Amsterdam', lon:5}, {label:'GMT+01:00 Berlin', lon:13},
-  {label:'GMT+01:00 Rome', lon:12}, {label:'GMT+01:00 Madrid', lon:-4}, {label:'GMT+01:00 Stockholm', lon:18},
-  {label:'GMT+02:00 Cairo', lon:31}, {label:'GMT+02:00 Athens', lon:24}, {label:'GMT+02:00 Johannesburg', lon:28}, {label:'GMT+02:00 Helsinki', lon:25},
-  {label:'GMT+03:00 Moscow', lon:38}, {label:'GMT+03:00 Istanbul', lon:29}, {label:'GMT+03:00 Nairobi', lon:37},
-  {label:'GMT+03:30 Tehran', lon:51},
-  {label:'GMT+04:00 Dubai', lon:55}, {label:'GMT+04:30 Kabul', lon:69},
-  {label:'GMT+05:00 Karachi', lon:67}, {label:'GMT+05:30 New Delhi', lon:77}, {label:'GMT+05:45 Kathmandu', lon:85},
-  {label:'GMT+06:00 Dhaka', lon:90}, {label:'GMT+07:00 Bangkok', lon:100}, {label:'GMT+07:00 Jakarta', lon:106},
-  {label:'GMT+08:00 Beijing', lon:116}, {label:'GMT+08:00 Singapore', lon:103}, {label:'GMT+08:00 Hong Kong', lon:114},
-  {label:'GMT+09:00 Tokyo', lon:139}, {label:'GMT+09:00 Seoul', lon:126}, {label:'GMT+09:30 Adelaide', lon:138},
-  {label:'GMT+10:00 Sydney', lon:151}, {label:'GMT+10:00 Guam', lon:144},
-  {label:'GMT+11:00 Solomon Islands', lon:160}, {label:'GMT+12:00 Auckland', lon:174}, {label:'GMT+13:00 Samoa', lon:-171},
+  {label:'GMT-11:00 Samoa', lat:-13.8, lon:-171.8}, {label:'GMT-10:00 Hawaii', lat:21.3, lon:-157.9},
+  {label:'GMT-09:00 Alaska', lat:61.2, lon:-149.9},
+  {label:'GMT-08:00 Pacific Time (US & Canada)', lat:34.1, lon:-118.2}, {label:'GMT-08:00 Tijuana', lat:32.5, lon:-117.0},
+  {label:'GMT-07:00 Mountain Time (US & Canada)', lat:39.7, lon:-104.99}, {label:'GMT-07:00 Chihuahua', lat:28.6, lon:-106.1},
+  {label:'GMT-06:00 Central Time (US & Canada)', lat:41.9, lon:-87.6}, {label:'GMT-06:00 Mexico City', lat:19.4, lon:-99.1},
+  {label:'GMT-05:00 Eastern Time (US & Canada)', lat:40.7, lon:-74.0}, {label:'GMT-05:00 Bogota', lat:4.7, lon:-74.1}, {label:'GMT-05:00 Lima', lat:-12.0, lon:-77.0},
+  {label:'GMT-04:00 Atlantic (Canada)', lat:44.6, lon:-63.6}, {label:'GMT-04:00 Caracas', lat:10.5, lon:-66.9}, {label:'GMT-04:00 Santiago', lat:-33.4, lon:-70.6},
+  {label:'GMT-03:30 Newfoundland', lat:47.6, lon:-52.7},
+  {label:'GMT-03:00 Sao Paulo', lat:-23.5, lon:-46.6}, {label:'GMT-03:00 Buenos Aires', lat:-34.6, lon:-58.4},
+  {label:'GMT-01:00 Azores', lat:37.7, lon:-25.7},
+  {label:'GMT+00:00 London', lat:51.5, lon:-0.1}, {label:'GMT+00:00 Dublin', lat:53.3, lon:-6.3}, {label:'GMT+00:00 Lisbon', lat:38.7, lon:-9.1},
+  {label:'GMT+00:00 Reykjavik', lat:64.1, lon:-21.9}, {label:'GMT+00:00 Casablanca', lat:33.6, lon:-7.6},
+  {label:'GMT+01:00 Paris', lat:48.9, lon:2.4}, {label:'GMT+01:00 Amsterdam', lat:52.4, lon:4.9}, {label:'GMT+01:00 Berlin', lat:52.5, lon:13.4},
+  {label:'GMT+01:00 Rome', lat:41.9, lon:12.5}, {label:'GMT+01:00 Madrid', lat:40.4, lon:-3.7}, {label:'GMT+01:00 Stockholm', lat:59.3, lon:18.1},
+  {label:'GMT+02:00 Cairo', lat:30.0, lon:31.2}, {label:'GMT+02:00 Athens', lat:38.0, lon:23.7}, {label:'GMT+02:00 Johannesburg', lat:-26.2, lon:28.0}, {label:'GMT+02:00 Helsinki', lat:60.2, lon:24.9},
+  {label:'GMT+03:00 Moscow', lat:55.8, lon:37.6}, {label:'GMT+03:00 Istanbul', lat:41.0, lon:28.9}, {label:'GMT+03:00 Nairobi', lat:-1.3, lon:36.8},
+  {label:'GMT+03:30 Tehran', lat:35.7, lon:51.4},
+  {label:'GMT+04:00 Dubai', lat:25.2, lon:55.3}, {label:'GMT+04:30 Kabul', lat:34.5, lon:69.2},
+  {label:'GMT+05:00 Karachi', lat:24.9, lon:67.0}, {label:'GMT+05:30 New Delhi', lat:28.6, lon:77.2}, {label:'GMT+05:45 Kathmandu', lat:27.7, lon:85.3},
+  {label:'GMT+06:00 Dhaka', lat:23.8, lon:90.4}, {label:'GMT+07:00 Bangkok', lat:13.8, lon:100.5}, {label:'GMT+07:00 Jakarta', lat:-6.2, lon:106.8},
+  {label:'GMT+08:00 Beijing', lat:39.9, lon:116.4}, {label:'GMT+08:00 Singapore', lat:1.35, lon:103.8}, {label:'GMT+08:00 Hong Kong', lat:22.3, lon:114.2},
+  {label:'GMT+09:00 Tokyo', lat:35.7, lon:139.7}, {label:'GMT+09:00 Seoul', lat:37.6, lon:127.0}, {label:'GMT+09:30 Adelaide', lat:-34.9, lon:138.6},
+  {label:'GMT+10:00 Sydney', lat:-33.9, lon:151.2}, {label:'GMT+10:00 Guam', lat:13.4, lon:144.8},
+  {label:'GMT+11:00 Solomon Islands', lat:-9.4, lon:159.9}, {label:'GMT+12:00 Auckland', lat:-36.8, lon:174.8}, {label:'GMT+13:00 Samoa', lat:-13.8, lon:-171.8},
 ];
 const ONOFF = ['On','Off'], OFFON = ['Off','On'];
 const ENDIS = ['Enabled','Disabled'], DISEN = ['Disabled','Enabled'];
@@ -9308,8 +9308,9 @@ function wizEnterScreen(id, initial) {
     if (cur < 0) cur = ws._zones.findIndex(z => z.label.indexOf('London') >= 0);
     if (cur < 0) cur = 0;
     ws.sel = cur;
-    const sp = (ws._zones[cur].lon) * Math.PI / 180;
-    tzGlobe = {lon: sp, target: sp};
+    const z = ws._zones[cur];
+    const lo = z.lon * Math.PI / 180, la = z.lat * Math.PI / 180;
+    tzGlobe = {lon: lo, lat: la, targetLon: lo, targetLat: la};
     ws._tzFadeStart = performance.now();    // XMB -> globe cross-fade
     initGlobe();
   }
@@ -9688,7 +9689,10 @@ function wizNavItem(dir) {
   } else if (s.kind === 'tzglobe') {
     const n = (ws._zones || []).length; if (!n) return;
     ws.sel = (ws.sel + dir + n) % n;
-    if (tzGlobe) tzGlobe.target = ws._zones[ws.sel].lon * Math.PI / 180;
+    if (tzGlobe) {
+      tzGlobe.targetLon = ws._zones[ws.sel].lon * Math.PI / 180;
+      tzGlobe.targetLat = ws._zones[ws.sel].lat * Math.PI / 180;
+    }
     playCursor();
   } else if (s.kind === 'confirm') {
     ws.sel = ws.sel === 0 ? 1 : 0; playCursor();
@@ -10259,10 +10263,11 @@ function initGlobe() {
   const vs = 'attribute vec2 p; void main(){ gl_Position=vec4(p,0.,1.); }';
   const fs = [
    'precision highp float;',
-   'uniform vec2 uRes; uniform vec2 uCenter; uniform float uR; uniform float uSpin;',
+   'uniform vec2 uRes; uniform vec2 uCenter; uniform float uR; uniform float uLon; uniform float uLat;',
    'uniform sampler2D uDay, uNight, uClouds;',
    'const float PI=3.14159265;',
    'mat3 rotY(float a){ float s=sin(a),c=cos(a); return mat3(c,0.,-s, 0.,1.,0., s,0.,c); }',
+   'mat3 rotX(float a){ float s=sin(a),c=cos(a); return mat3(1.,0.,0., 0.,c,s, 0.,-s,c); }',
    'void main(){',
    '  vec2 fc=vec2(gl_FragCoord.x, uRes.y-gl_FragCoord.y);',
    '  vec2 d=(fc-uCenter)/uR;',
@@ -10276,7 +10281,7 @@ function initGlobe() {
    '  }',
    '  float z=sqrt(max(0.,1.0-r2));',
    '  vec3 N=vec3(d.x,-d.y,z);',
-   '  vec3 G=rotY(uSpin)*N;',
+   '  vec3 G=rotY(uLon)*rotX(-uLat)*N;',   // bring (uLat,uLon) to front-centre
    '  float lat=asin(clamp(G.y,-1.,1.));',
    '  float lon=atan(G.x,G.z);',
    '  vec2 tuv=vec2(lon/(2.0*PI)+0.5, 0.5 - lat/PI);',
@@ -10327,7 +10332,8 @@ function renderGlobe() {
   gl.uniform2f(gl.getUniformLocation(globeProg,'uRes'),W,H);
   gl.uniform2f(gl.getUniformLocation(globeProg,'uCenter'),0.43*W,0.49*H);
   gl.uniform1f(gl.getUniformLocation(globeProg,'uR'),0.50*H);
-  gl.uniform1f(gl.getUniformLocation(globeProg,'uSpin'),tzGlobe.lon);
+  gl.uniform1f(gl.getUniformLocation(globeProg,'uLon'),tzGlobe.lon);
+  gl.uniform1f(gl.getUniformLocation(globeProg,'uLat'),tzGlobe.lat);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,globeTex.day);    gl.uniform1i(gl.getUniformLocation(globeProg,'uDay'),0);
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,globeTex.night);  gl.uniform1i(gl.getUniformLocation(globeProg,'uNight'),1);
   gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D,globeTex.clouds); gl.uniform1i(gl.getUniformLocation(globeProg,'uClouds'),2);
@@ -10337,10 +10343,11 @@ function renderGlobe() {
 // Per-frame: ease the globe rotation toward the focused zone (shortest path).
 function tzGlobeTick() {
   if (!tzGlobe) return;
-  let diff = tzGlobe.target - tzGlobe.lon;
-  while (diff > Math.PI) diff -= 2*Math.PI;
-  while (diff < -Math.PI) diff += 2*Math.PI;
-  tzGlobe.lon += diff * 0.12;          // eased spin
+  let dLon = tzGlobe.targetLon - tzGlobe.lon;
+  while (dLon > Math.PI) dLon -= 2*Math.PI;     // shortest path around the globe
+  while (dLon < -Math.PI) dLon += 2*Math.PI;
+  tzGlobe.lon += dLon * 0.12;                    // eased longitude spin
+  tzGlobe.lat += (tzGlobe.targetLat - tzGlobe.lat) * 0.12;  // eased latitude tilt
   renderGlobe();
 }
 
