@@ -1321,10 +1321,10 @@ const DATA = [
           {n:'Delete Registered Device',i:'xmb_icon_022',action:'dialog'}
         ]},
       {n:'Network Settings',i:'xmb_icon_006',d:'Adjusts settings for the Internet connection.',ch:[
-          {n:'Settings and Connection Status List',i:'xmb_icon_022',action:'dialog',d:'Displays current network settings and connection status.'},
+          {n:'Settings and Connection Status List',i:'xmb_icon_022',action:'netwiz',wiz:'status_list',d:'Displays current network settings and connection status.'},
           {n:'Internet Connection',i:'xmb_icon_022',v:'Enabled',d:'Sets whether or not to connect this system to the Internet. Select this option if you want to temporarily disable the Internet connection.'},
-          {n:'Internet Connection Settings',i:'xmb_icon_022',action:'dialog',d:'Sets the method for connecting the system to the Internet. Select this option to connect to a wireless LAN or to change the settings.'},
-          {n:'Internet Connection Test',i:'xmb_icon_022',action:'dialog',d:'Tests the Internet connection and displays the results.'},
+          {n:'Internet Connection Settings',i:'xmb_icon_022',action:'netwiz',wiz:'wiz_intro',d:'Sets the method for connecting the system to the Internet. Select this option to connect to a wireless LAN or to change the settings.'},
+          {n:'Internet Connection Test',i:'xmb_icon_022',action:'netwiz',wiz:'test_confirm',d:'Tests the Internet connection and displays the results.'},
           {n:'Media Server Connection',i:'xmb_icon_022',v:'Disabled',d:'Sets whether or not to connect to media servers.'}
         ]}
     ]
@@ -8716,9 +8716,946 @@ function drawDialogClosing(ctx2, p) {
   dialogState = saved;
 }
 
-// =====================================================
-// SIDE PANEL CHOOSER (Theme / Color / Background)
-// =====================================================
+// ============================================================================
+// NETWORK SETTINGS: INTERNET CONNECTION WIZARD (netconf_plugin reproduction)
+// ============================================================================
+// Full multi-step wizard reproducing the PS3 firmware netconf_plugin flow.
+// Every screen, branch, validation rule and error string is taken VERBATIM
+// from the firmware UI text dumped out of vsh/resource/netconf_plugin.rco
+// (English block: xmb-ref/netconf/netconf_strings_en.txt). The screen graph,
+// flows and permutations were reconstructed from that string corpus and
+// cross-checked against live RPCS3 captures in xmb-ref/netconf/rpcs3/ (the
+// intro is a single-OK info dialog; choosers/lists sit over the LIVE wave with
+// only a dim wash; the OSK darkens the background more). See the netconf
+// research notes for provenance.
+//
+// State machine kinds: info | chooser | confirm | scan_list | text_entry |
+// progress | result | status. Navigation: UP/DOWN move focus, X/Enter confirms,
+// O/Back pops the wizard stack (closes at the root). text_entry screens open the
+// PS3 on-screen keyboard (OSK) for SSID / keys / IP / etc.
+
+let wizState = null;
+function isWizardActive() { return !!wizState; }
+
+// Simulated access points for the Wi-Fi scan list (firmware has no live radio
+// in RPCS3; the web app simulates a realistic multi-AP environment). `sec` maps
+// to the firmware WLAN security options. `priv` => "%1 (Private Networks Only)".
+const WIZ_AP_LIST = [
+  {ssid:'PS3-HOME-NET',     signal:96, sec:'WPA2-PSK (AES)'},
+  {ssid:'Buffalo-A1B2C3',   signal:78, sec:'WPA-PSK (TKIP)'},
+  {ssid:'MyHome_5GHz',      signal:83, sec:'WPA-PSK / WPA2-PSK', priv:true},
+  {ssid:'ATERM-5F3C2A-G',   signal:61, sec:'WPA2-PSK (TKIP)'},
+  {ssid:'linksys',          signal:54, sec:'WEP'},
+  {ssid:'NETGEAR-Guest',    signal:47, sec:'None'},
+  {ssid:'corp-eap',         signal:66, sec:'EAP Authentication'},
+  {ssid:'FON_FREE_INTERNET',signal:28, sec:'None'},
+];
+
+// WLAN security chooser options (firmware str 228,112,113-117,121).
+const WIZ_SECURITY_OPTS = ['None','WEP','WPA-PSK (TKIP)','WPA-PSK (AES)',
+  'WPA2-PSK (TKIP)','WPA2-PSK (AES)','WPA-PSK / WPA2-PSK','EAP Authentication'];
+
+// ---- Screen descriptors (rendering metadata; navigation lives in wizNext) ----
+// title/body may be strings or fn(v). `kind` selects the renderer.
+const NETCONF = {
+  status_list: {kind:'status', title:'Settings and Connection Status List'},
+
+  wiz_intro: {kind:'info', title:'Internet Connection Settings',
+    body:'Adjust settings for connection to the Internet.\nIf making a wired connection, you must have an Ethernet cable connected.',
+    foot:'enter-cancel'},
+
+  wiz_method: {kind:'chooser', title:'Internet Connection Settings',
+    body:'Select a setting method.', options:['Easy','Custom']},
+
+  conn_method: {kind:'chooser', title:'Internet Connection Settings',
+    body:'Select a connection method.', options:['Wired Connection','Wireless']},
+
+  easy_wired_check: {kind:'progress', title:'Internet Connection Settings',
+    body:'Checking network configuration...\nPlease wait.', autoMs:2600, next:'easy_settings_list'},
+
+  wired_opmode: {kind:'chooser', title:'Internet Connection Settings',
+    body:'Select the operation mode of the network device.\nIn most cases, select Auto-Detect.',
+    options:['Auto-Detect','Speed and Duplex']},
+
+  wired_speedduplex: {kind:'chooser', title:'Internet Connection Settings',
+    body:'Select the operation mode of the network device.',
+    options:['10BASE-T Half-Duplex','10BASE-T Full-Duplex','100BASE-TX Half-Duplex',
+             '100BASE-TX Full-Duplex','1000BASE-T Half-Duplex','1000BASE-T Full-Duplex']},
+
+  ip_setting: {kind:'chooser', title:'Internet Connection Settings',
+    body:'IP Address Setting', options:['Automatic','Manual','PPPoE']},
+
+  ip_manual_addr:   {kind:'text_entry', title:'IP Address Setting', label:'IP Address',     field:'ipAddr',  fmt:'ip'},
+  ip_manual_subnet: {kind:'text_entry', title:'IP Address Setting', label:'Subnet Mask',    field:'subnet',  fmt:'ip'},
+  ip_manual_router: {kind:'text_entry', title:'IP Address Setting', label:'Default Router', field:'router',  fmt:'ip'},
+  ip_manual_pdns:   {kind:'text_entry', title:'IP Address Setting', label:'Primary DNS',    field:'pdns',    fmt:'ip'},
+  ip_manual_sdns:   {kind:'text_entry', title:'IP Address Setting', label:'Secondary DNS',  field:'sdns',    fmt:'ip', optional:true},
+
+  pppoe_user: {kind:'text_entry', title:'PPPoE', label:'PPPoE User Name', field:'pppoeUser', fmt:'ascii',
+    hint:'If you do not know your PPPoE user name and password, contact your Internet service provider.'},
+  pppoe_pass: {kind:'text_entry', title:'PPPoE', label:'PPPoE Password', field:'pppoePass', fmt:'ascii', mask:true},
+
+  dhcp_hostname: {kind:'chooser', title:'Internet Connection Settings',
+    body:'Set the DHCP host name.\nIn most cases this setting does not need to be changed.',
+    options:['Do Not Set','Set']},
+  dhcp_hostname_entry: {kind:'text_entry', title:'DHCP Host Name', label:'DHCP Host Name', field:'dhcpHost', fmt:'ascii'},
+
+  dns_setting: {kind:'chooser', title:'Internet Connection Settings',
+    body:'DNS Setting\nIn most cases, select [Automatic].', options:['Automatic','Manual']},
+  dns_manual_pdns: {kind:'text_entry', title:'DNS Setting', label:'Primary DNS',   field:'pdns', fmt:'ip'},
+  dns_manual_sdns: {kind:'text_entry', title:'DNS Setting', label:'Secondary DNS', field:'sdns', fmt:'ip', optional:true},
+
+  mtu_setting: {kind:'chooser', title:'Internet Connection Settings', body:'MTU', options:['Automatic','Manual']},
+  mtu_entry:   {kind:'text_entry', title:'MTU', label:'MTU', field:'mtuVal', fmt:'num'},
+
+  proxy_setting: {kind:'chooser', title:'Internet Connection Settings', body:'Proxy Server', options:['Do Not Use','Use']},
+  proxy_addr: {kind:'text_entry', title:'Proxy Server', label:'Address',     field:'proxyAddr', fmt:'ascii'},
+  proxy_port: {kind:'text_entry', title:'Proxy Server', label:'Port Number', field:'proxyPort', fmt:'port'},
+
+  upnp_setting: {kind:'chooser', title:'Internet Connection Settings', body:'UPnP', options:['Enable','Disable']},
+
+  wlan_settings: {kind:'chooser', title:'WLAN Settings', body:'WLAN Settings',
+    options:['Scan','Enter Manually','Automatic'],
+    helps:['The PS3™ system will scan for the SSID of the access point. Select this option if you don\'t know the SSID.',
+           'Manually enter the SSID of the access point.',
+           'Automatic setup by access point type. Select when using an access point that supports wireless LAN automatic setup.']},
+
+  wlan_scanning: {kind:'progress', title:'WLAN Settings', body:'Scanning...\nPlease wait.', autoMs:2500, next:'wlan_ap_list'},
+  wlan_ap_list:  {kind:'scan_list', title:'WLAN Settings', body:'Select the access point to be used.'},
+  wlan_ssid_entry: {kind:'text_entry', title:'SSID', label:'SSID', field:'ssid', fmt:'ascii', maxLen:32},
+
+  wlan_security: {kind:'chooser', title:'WLAN Security Setting', body:'Security', options:WIZ_SECURITY_OPTS},
+  wep_key: {kind:'text_entry', title:'WLAN Security Setting', label:'WEP Key', field:'key', fmt:'wep'},
+  wpa_key: {kind:'text_entry', title:'WLAN Security Setting', label:'WPA Key', field:'key', fmt:'wpa', mask:true},
+
+  eap_auth_setting: {kind:'chooser', title:'Authentication Setting', body:'Authentication', options:['EAP-MD5']},
+  eap_user: {kind:'text_entry', title:'EAP Authentication', label:'User Name', field:'eapUser', fmt:'ascii'},
+  eap_pass: {kind:'text_entry', title:'EAP Authentication', label:'Password',  field:'eapPass', fmt:'ascii', mask:true},
+
+  wlan_auto_choose: {kind:'chooser', title:'WLAN Settings', body:'Automatic setup by access point type.',
+    options:['AOSS','Rakuraku WLAN Start'],
+    helps:['AOSS (AirStation One-Touch Secure System) is a technology developed by Buffalo, Inc. It is possible to make wireless LAN settings with simple, one-touch operation.',
+           'Rakuraku WLAN Start is a technology developed by NEC Access Technica, Inc. It is possible to make wireless LAN settings by using the Rakuraku Start Button of the Aterm series.']},
+
+  aoss_prompt: {kind:'info', title:'AOSS',
+    body:'Press and hold the "AOSS Button" of the access point until the AOSS indicator starts blinking.\nIf you don\'t press the button within 2 minutes, the operation will be canceled.',
+    foot:'enter-cancel', next:'aoss_wait'},
+  aoss_wait: {kind:'progress', title:'AOSS',
+    body:'It will take about 10 seconds for the access point to be ready.\nPlease wait...', autoMs:4200, next:'aoss_done'},
+
+  rakuraku_prompt1: {kind:'progress', title:'Rakuraku WLAN Start', body:'Preparing...\nPlease wait.', autoMs:1800, next:'rakuraku_prompt2'},
+  rakuraku_prompt2: {kind:'info', title:'Rakuraku WLAN Start',
+    body:'Press and hold the "Rakuraku Start Button" of the access point until the "POWER" LED blinks in [Green].\nIf you don\'t press the button within 1 minute, the operation will be canceled.',
+    foot:'enter-cancel', next:'rakuraku_prompt3'},
+  rakuraku_prompt3: {kind:'info', title:'Rakuraku WLAN Start',
+    body:'Press the "Rakuraku Start Button" again. Press and hold until the "POWER" LED turns [Orange].\nIf you don\'t press the button within 30 seconds, the operation will be canceled.',
+    foot:'enter-cancel', next:'aoss_done'},
+
+  aoss_done: {kind:'result', title:'WLAN Settings',
+    body:'Save completed.\nIt may take 1 minute or longer to restart the access point.',
+    status:'ok', foot:'enter', next:'test_confirm'},
+
+  easy_settings_list: {kind:'confirm', title:'Internet Connection Settings',
+    body:'Do you want to perform advanced settings?'},
+
+  settings_list: {kind:'status', title:'Settings List', review:true, foot:'enter'},
+
+  save_complete: {kind:'result', title:'Internet Connection Settings',
+    body:'Internet connection settings have been completed.\n\nSave completed.', status:'ok', foot:'enter', next:'test_confirm'},
+
+  test_confirm: {kind:'confirm', title:'Internet Connection Test',
+    body:'If you perform a connection test, the current connection will be terminated and the system will be disconnected.\nDo you want to continue?'},
+  test_run: {kind:'test', title:'Internet Connection Test', next:'test_results'},
+  test_results: {kind:'result', title:'Internet Connection Test',
+    body:'Connection test completed.', status:'ok', foot:'ok', results:true},
+
+  cancel_confirm: {kind:'confirm', title:'Internet Connection Settings',
+    body:'Do you want to cancel?\nThe settings you have made so far will not be saved if you cancel.'},
+};
+
+// OSK character sets (PS3 system keyboard layout from RPCS3 capture 12).
+const WIZ_OSK_ROWS = {
+  lower: ['1234567890','qwertyuiop','asdfghjkl','zxcvbnm.-_'],
+  upper: ['1234567890','QWERTYUIOP','ASDFGHJKL','ZXCVBNM.-_'],
+  sym:   ['1234567890','!@#$%^&*()','-_=+[]{}','.,:;/?~|'],
+};
+
+function wizCur() { return wizState ? NETCONF[wizState.id] : null; }
+
+function openWizard(startId) {
+  wizState = {
+    id: startId,
+    stack: [],
+    sel: 0, scroll: 0,
+    values: {},
+    anim: {start: performance.now(), dur: 110},
+    t0: performance.now(),
+    osk: null,
+    openAnim: performance.now(),     // brief XMB->wizard backdrop cross-fade
+    _trans: null, _out: null,
+  };
+  wizEnterScreen(startId, true);
+  // No slide on the first screen: it appears with the backdrop cross-fade only
+  // (the slide is reserved for screen-to-screen navigation).
+  playNav2();
+}
+function closeWizard() { wizState = null; playNav(); }
+
+// Called when a screen becomes active: initialise per-kind transient state.
+function wizEnterScreen(id, initial) {
+  const ws = wizState; if (!ws) return;
+  const s = NETCONF[id];
+  ws.id = id;
+  ws.sel = 0; ws.scroll = 0;
+  ws.t0 = performance.now();
+  ws.anim = {start: performance.now(), dur: initial ? 110 : 90};
+  ws.osk = null;
+  // Pre-select chooser defaults that mirror firmware "most cases" highlights.
+  if (s.kind === 'chooser') {
+    // Scan path: pre-select the AP's detected security on the security screen.
+    if (id === 'wlan_security' && ws.values._apSec) {
+      const idx = s.options.indexOf(ws.values._apSec);
+      if (idx >= 0) ws.sel = idx;
+    }
+  }
+  if (s.kind === 'confirm') ws.sel = (id === 'cancel_confirm' || id === 'easy_settings_list') ? 1 : 0;
+  if (s.kind === 'test') { ws.testPhase = 0; ws.testStart = performance.now(); }
+  if (s.kind === 'text_entry') {
+    const existing = ws.values[s.field] || '';
+    ws.osk = {buf: existing, set:'lower', row:1, col:0, err:null, errAt:0};
+  }
+}
+
+// Advance to nextId, pushing the current screen onto the back stack.
+function wizGo(nextId, opts) {
+  const ws = wizState; if (!ws) return;
+  if (nextId === '__close__') { closeWizard(); return; }
+  const push = !opts || opts.push !== false;
+  ws._out = wizSnapshot(ws);
+  if (push) ws.stack.push(ws.id);
+  wizEnterScreen(nextId, false);
+  ws._trans = {dir: 1, start: performance.now(), dur: 240};
+  if (!opts || !opts.silent) playNav2();
+}
+
+function wizBack() {
+  const ws = wizState; if (!ws) return;
+  if (ws.stack.length === 0) { closeWizard(); return; }
+  // Skip any progress/test screens left on the stack (not user-resumable).
+  let prev;
+  do { prev = ws.stack.pop(); } while (prev && NETCONF[prev] &&
+        (NETCONF[prev].kind === 'progress' || NETCONF[prev].kind === 'test') && ws.stack.length);
+  ws._out = wizSnapshot(ws);
+  wizEnterScreen(prev, false);
+  ws._trans = {dir: -1, start: performance.now(), dur: 240};   // reverse slide
+  playNav();
+}
+
+// Branch table. Returns the next screen id given the current screen + the
+// chosen option label (for choosers/confirms) or null (info/result/text).
+function wizNext(id, choice) {
+  const v = wizState.values;
+  const afterAuth = () => (v.method === 'Easy') ? 'easy_settings_list' : 'ip_setting';
+  switch (id) {
+    case 'wiz_intro':   return 'wiz_method';
+    case 'wiz_method':
+      v.method = choice;
+      return 'conn_method';
+    case 'conn_method':
+      v.conn = choice;
+      if (choice === 'Wired Connection') {
+        if (v.method === 'Easy') { wizSetEasyDefaults(v); return 'easy_wired_check'; }
+        return 'wired_opmode';
+      }
+      return 'wlan_settings';                    // Wireless (both Easy & Custom)
+    case 'wired_opmode':
+      v.opmode = choice;
+      return (choice === 'Speed and Duplex') ? 'wired_speedduplex' : 'ip_setting';
+    case 'wired_speedduplex':
+      v.speedduplex = choice; return 'ip_setting';
+    case 'ip_setting':
+      v.ip = choice;
+      if (choice === 'Automatic') return 'dhcp_hostname';
+      if (choice === 'Manual')    return 'ip_manual_addr';
+      return 'pppoe_user';                        // PPPoE
+    case 'ip_manual_addr':   return 'ip_manual_subnet';
+    case 'ip_manual_subnet': return 'ip_manual_router';
+    case 'ip_manual_router': return 'ip_manual_pdns';
+    case 'ip_manual_pdns':   return 'ip_manual_sdns';
+    case 'ip_manual_sdns':   return 'mtu_setting';
+    case 'pppoe_user': return 'pppoe_pass';
+    case 'pppoe_pass': return 'dns_setting';
+    case 'dhcp_hostname':
+      return (choice === 'Set') ? 'dhcp_hostname_entry' : 'dns_setting';
+    case 'dhcp_hostname_entry': return 'dns_setting';
+    case 'dns_setting':
+      v.dns = choice;
+      return (choice === 'Manual') ? 'dns_manual_pdns' : 'mtu_setting';
+    case 'dns_manual_pdns': return 'dns_manual_sdns';
+    case 'dns_manual_sdns': return 'mtu_setting';
+    case 'mtu_setting':
+      v.mtu = choice;
+      return (choice === 'Manual') ? 'mtu_entry' : 'proxy_setting';
+    case 'mtu_entry': return 'proxy_setting';
+    case 'proxy_setting':
+      v.proxy = choice;
+      return (choice === 'Use') ? 'proxy_addr' : 'upnp_setting';
+    case 'proxy_addr': return 'proxy_port';
+    case 'proxy_port': return 'upnp_setting';
+    case 'upnp_setting': v.upnp = choice; return 'settings_list';
+    case 'wlan_settings':
+      if (choice === 'Scan')          return 'wlan_scanning';
+      if (choice === 'Enter Manually')return 'wlan_ssid_entry';
+      return 'wlan_auto_choose';                  // Automatic (AOSS / Rakuraku)
+    case 'wlan_ssid_entry': return 'wlan_security';
+    case 'wlan_security':
+      v.security = choice;
+      if (choice === 'None') return afterAuth();
+      if (choice === 'WEP')  return 'wep_key';
+      if (choice === 'EAP Authentication') return 'eap_auth_setting';
+      return 'wpa_key';
+    case 'wep_key': return afterAuth();
+    case 'wpa_key': return afterAuth();
+    case 'eap_auth_setting': return 'eap_user';
+    case 'eap_user': return 'eap_pass';
+    case 'eap_pass': return afterAuth();
+    case 'wlan_auto_choose':
+      return (choice === 'AOSS') ? 'aoss_prompt' : 'rakuraku_prompt1';
+    case 'easy_settings_list':
+      return (choice === 'Yes') ? 'ip_setting' : 'settings_list';
+    case 'settings_list': return 'save_complete';
+    case 'save_complete': return 'test_confirm';
+    case 'test_confirm':
+      return (choice === 'Yes') ? 'test_run' : '__close__';
+    case 'test_results': return '__close__';
+    case 'cancel_confirm':
+      return (choice === 'Yes') ? '__close__' : '__back2__';
+    case 'status_list': return '__close__';
+    default: return '__close__';
+  }
+}
+
+function wizSetEasyDefaults(v) {
+  v.opmode = 'Auto-Detect'; v.ip = 'Automatic'; v.dns = 'Automatic';
+  v.mtu = 'Automatic'; v.proxy = 'Do Not Use'; v.upnp = 'Enable';
+}
+
+// ---- Input ----------------------------------------------------------------
+function wizConfirm() {
+  const ws = wizState; if (!ws) return;
+  const s = NETCONF[ws.id];
+  if (s.kind === 'text_entry') return;            // commit handled by OSK Enter key
+  let choice = null;
+  if (s.kind === 'chooser') {
+    const opts = wizOptions(s, ws);
+    choice = opts[ws.sel];
+  } else if (s.kind === 'confirm') {
+    choice = (ws.sel === 0) ? 'Yes' : 'No';
+  } else if (s.kind === 'scan_list') {
+    const ap = WIZ_AP_LIST[ws.sel];
+    ws.values.ssid = ap.ssid; ws.values._apSec = ap.sec; ws.values.security = ap.sec; ws.values.signal = ap.signal;
+    if (ap.sec === 'None')                  return wizGo((ws.values.method==='Easy')?'easy_settings_list':'ip_setting');
+    if (ap.sec === 'WEP')                   return wizGo('wep_key');
+    if (ap.sec === 'EAP Authentication')    return wizGo('eap_auth_setting');
+    return wizGo('wpa_key');
+  } else if (s.kind === 'progress' || s.kind === 'test') {
+    return;                                        // auto-advances
+  }
+  const nx = wizNext(ws.id, choice);
+  if (nx === '__back2__') { wizBack(); return; }
+  wizGo(nx);
+}
+
+function wizOptions(s, ws) {
+  return (typeof s.options === 'function') ? s.options(ws.values) : (s.options || []);
+}
+
+function wizCommitText() {
+  const ws = wizState; if (!ws) return;
+  const s = NETCONF[ws.id];
+  const val = ws.osk.buf;
+  const err = wizValidate(s, val);
+  if (err) { ws.osk.err = err; ws.osk.errAt = performance.now(); return; }
+  ws.values[s.field] = val;
+  const nx = wizNext(ws.id, null);
+  wizGo(nx);
+}
+
+function wizValidate(s, val) {
+  if (s.optional && val.length === 0) return null;
+  if (val.length === 0) return 'The value you entered is not valid.';
+  switch (s.fmt) {
+    case 'ip': {
+      const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(val);
+      if (!m || m.slice(1).some(n => +n > 255)) return 'The value you entered is not valid.';
+      return null;
+    }
+    case 'num': return /^\d+$/.test(val) ? null : 'The value you entered is not valid.';
+    case 'port': {
+      if (!/^\d+$/.test(val)) return 'The port number is invalid.\nEnter a number from 1 to 65535.';
+      const n = +val; return (n >= 1 && n <= 65535) ? null : 'The port number is invalid.\nEnter a number from 1 to 65535.';
+    }
+    case 'wep': {
+      const hex = /^[0-9a-fA-F]+$/.test(val);
+      if (hex && (val.length === 10 || val.length === 26)) return null;
+      if (val.length === 5 || val.length === 13) return null;
+      return 'The characters you entered are not valid.\nFor hexadecimal: use 10 or 26 characters (0-9, a-f, A-F).\nFor ASCII: use 5 or 13 characters.';
+    }
+    case 'wpa': {
+      const hex = /^[0-9a-fA-F]+$/.test(val);
+      if (hex && val.length === 64) return null;
+      if (val.length >= 8 && val.length <= 63) return null;
+      return 'The characters you entered are not valid.\nFor hexadecimal: use 64 characters (0-9, a-f, A-F).\nFor ASCII: use from 8 to 63 characters.';
+    }
+    case 'ascii':
+      return /^[\x20-\x7e]*$/.test(val) ? null
+        : 'The characters you entered are not valid. Only ASCII characters can be used here.';
+    default: return null;
+  }
+}
+
+// OSK key handling: arrows move the highlight, X presses the focused key,
+// physical typing also fills the buffer for convenience.
+function wizOskNav(dir, axis) {
+  const ws = wizState; const osk = ws && ws.osk; if (!osk) return;
+  const rows = WIZ_OSK_ROWS[osk.set];
+  const FN_ROW = 4;                               // function row index
+  if (axis === 'v') {
+    osk.row = (osk.row + dir + 5) % 5;
+    if (osk.row < FN_ROW) osk.col = Math.min(osk.col, rows[osk.row].length - 1);
+    else osk.col = Math.min(osk.col, 4);
+  } else {
+    if (osk.row < FN_ROW) {
+      const len = rows[osk.row].length;
+      osk.col = (osk.col + dir + len) % len;
+    } else {
+      osk.col = (osk.col + dir + 5) % 5;          // 5 function keys
+    }
+  }
+  playCursor();
+}
+
+function wizOskPress() {
+  const ws = wizState; const osk = ws && ws.osk; if (!osk) return;
+  const s = NETCONF[ws.id];
+  const rows = WIZ_OSK_ROWS[osk.set];
+  if (osk.row < 4) {
+    const ch = rows[osk.row][osk.col];
+    if (!s.maxLen || osk.buf.length < s.maxLen) { osk.buf += ch; osk.err = null; }
+    playCursor();
+  } else {
+    // Function row: [Shift] [Sym] [Space] [Delete] [Enter]
+    switch (osk.col) {
+      case 0: osk.set = (osk.set === 'upper') ? 'lower' : 'upper'; playCursor(); break;
+      case 1: osk.set = (osk.set === 'sym') ? 'lower' : 'sym'; playCursor(); break;
+      case 2: if (!s.maxLen || osk.buf.length < s.maxLen) osk.buf += ' '; playCursor(); break;
+      case 3: osk.buf = osk.buf.slice(0, -1); osk.err = null; playCursor(); break;
+      case 4: wizCommitText(); break;
+    }
+  }
+}
+
+// Raw printable-character typing into the OSK (physical keyboard convenience).
+function wizOskRawKey(e) {
+  const ws = wizState; const osk = ws && ws.osk; if (!osk) return false;
+  const s = NETCONF[ws.id];
+  // Backspace deletes a character (rather than backing out of the wizard).
+  if (e.key === 'Backspace') { osk.buf = osk.buf.slice(0,-1); osk.err = null; e.preventDefault(); return true; }
+  // Enter/Escape/arrows fall through to the normal handlers (Enter presses the
+  // focused on-screen key via wizOskPress; Escape backs out).
+  if (e.key === 'Enter' || e.key === 'Escape' || e.key.startsWith('Arrow')) return false;
+  if (e.key.length === 1 && e.key.charCodeAt(0) >= 0x20 && e.key.charCodeAt(0) <= 0x7e) {
+    if (!s.maxLen || osk.buf.length < s.maxLen) { osk.buf += e.key; osk.err = null; }
+    e.preventDefault(); return true;
+  }
+  return false;
+}
+
+function wizNavItem(dir) {
+  const ws = wizState; if (!ws) return;
+  const s = NETCONF[ws.id];
+  if (s.kind === 'text_entry') { wizOskNav(dir, 'v'); return; }
+  if (s.kind === 'chooser') {
+    const n = wizOptions(s, ws).length; if (!n) return;
+    ws.sel = (ws.sel + dir + n) % n; playCursor();
+  } else if (s.kind === 'scan_list') {
+    const n = WIZ_AP_LIST.length;
+    ws.sel = (ws.sel + dir + n) % n; playCursor();
+  } else if (s.kind === 'confirm') {
+    ws.sel = ws.sel === 0 ? 1 : 0; playCursor();
+  }
+}
+function wizNavCat(dir) {
+  const ws = wizState; if (!ws) return;
+  const s = NETCONF[ws.id];
+  if (s.kind === 'text_entry') { wizOskNav(dir, 'h'); return; }
+  if (s.kind === 'confirm') { ws.sel = ws.sel === 0 ? 1 : 0; playCursor(); }
+}
+
+// Per-frame tick: drives progress spinners + connection-test sequencing.
+function wizTick(now) {
+  const ws = wizState; if (!ws) return;
+  const s = NETCONF[ws.id];
+  if (s.kind === 'progress' && s.autoMs) {
+    if (now - ws.t0 >= s.autoMs) wizGo(s.next, {push:false, silent:true});
+  } else if (s.kind === 'test') {
+    // 4 sequential steps (Obtain IP -> Internet -> PSN -> finalize), ~900ms each.
+    const STEP = 900;
+    const phase = Math.floor((now - ws.testStart) / STEP);
+    ws.testPhase = Math.min(phase, 4);
+    if (phase >= 4) {
+      wizComputeResults(ws.values);
+      wizGo(s.next, {push:false, silent:true});
+    }
+  }
+}
+
+function wizComputeResults(v) {
+  // Simulated successful connection test result (firmware-faithful labels).
+  v._result = {
+    ip: 'Succeeded', net: 'Succeeded', psn: 'Succeeded',
+    nat: 'Type 2', upnp: 'Available',
+    down: (60 + Math.floor((v.signal||90) * 0.4)) + '.' + (1+ (v.signal||0)%9) + ' Mbps',
+    up: '12.' + (1 + (v.signal||0)%9) + ' Mbps',
+    bssid: '00:1A:EF:' + ((v.signal||90)%90+10) + ':C3:7B',
+    dhcp: (v.ip === 'PPPoE') ? 'Not Available' : 'Available',
+  };
+}
+
+// ---- Rendering ------------------------------------------------------------
+// Reuses drawDialog's chrome (live-wave dim backdrop, header strip, hairline
+// dividers, footer hints) so the wizard is pixel-consistent with the rest of
+// the dialog system. Per-screen body drawn by kind.
+function drawWizard(ctx2) {
+  const ws = wizState; if (!ws) return;
+  const s = NETCONF[ws.id];
+  const now = performance.now();
+  // Wizard-open / close cross-fade with the XMB (only at the very edges). Once
+  // the wizard is up, the backdrop stays fully opaque so the XMB never flashes
+  // through between screens; screen-to-screen motion is a horizontal slide.
+  const ap = ws.openAnim ? Math.min(1, (now - ws.openAnim) / 160) : 1;
+  const isOsk = (s.kind === 'text_entry');
+
+  ctx2.save();
+  ctx2.setTransform(1, 0, 0, 1, 0, 0);
+  const cw = xmbCanvas.width, ch = xmbCanvas.height;
+  // Backdrop: blur the live wave into the small offscreen canvas and upscale it
+  // OPAQUELY over the 2D canvas. That opaque draw fully covers the XMB menu
+  // (icons, item labels, clock) so nothing ghosts through, then a strong dark
+  // overlay darkens the whole frame for the wizard. The OSK darkens further.
+  if (waveCanvas && waveCanvas.width > 0 && waveCanvas.height > 0) {
+    dialogBlurCtx.setTransform(1, 0, 0, 1, 0, 0);
+    dialogBlurCtx.globalAlpha = 1;
+    dialogBlurCtx.globalCompositeOperation = 'copy';
+    dialogBlurCtx.imageSmoothingEnabled = true;
+    dialogBlurCtx.imageSmoothingQuality = 'low';
+    try { dialogBlurCtx.drawImage(waveCanvas, 0, 0, DIALOG_BLUR_W, DIALOG_BLUR_H); } catch (e) {}
+    dialogBlurCtx.globalCompositeOperation = 'source-over';
+  } else {
+    dialogBlurCtx.setTransform(1, 0, 0, 1, 0, 0);
+    dialogBlurCtx.fillStyle = '#101018';
+    dialogBlurCtx.fillRect(0, 0, DIALOG_BLUR_W, DIALOG_BLUR_H);
+  }
+  ctx2.globalAlpha = ap;
+  ctx2.filter = 'blur(18px)';
+  ctx2.imageSmoothingEnabled = true;
+  ctx2.imageSmoothingQuality = 'high';
+  ctx2.drawImage(dialogBlurCanvas, 0, 0, DIALOG_BLUR_W, DIALOG_BLUR_H, 0, 0, cw, ch);
+  ctx2.filter = 'none';
+  ctx2.fillStyle = 'rgba(0,0,0,' + ((isOsk ? 0.74 : 0.6) * ap).toFixed(3) + ')';
+  ctx2.fillRect(0, 0, cw, ch);
+
+  ctx2.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, frameCenterTY());
+  ctx2.globalAlpha = ap;
+
+  const HEADER_DIV_Y = 199, FOOTER_DIV_Y = 880;
+  // Fixed frame chrome (dividers) stays put; only the content slides.
+  ctx2.save();
+  ctx2.shadowColor = 'rgba(0,0,0,0)'; ctx2.shadowBlur = 0; ctx2.shadowOffsetY = 0;
+  ctx2.strokeStyle = 'rgba(255,255,255,0.55)'; ctx2.lineWidth = 1;
+  ctx2.beginPath();
+  ctx2.moveTo(0, HEADER_DIV_Y); ctx2.lineTo(XCF(V.W), HEADER_DIV_Y);
+  ctx2.moveTo(0, FOOTER_DIV_Y); ctx2.lineTo(XCF(V.W), FOOTER_DIV_Y);
+  ctx2.stroke();
+  ctx2.restore();
+
+  // Horizontal slide between screens (PowerPoint-style). Forward (dir=+1): the
+  // new screen enters from the right while the old exits to the left; Back
+  // reverses it. Outside a transition the current screen sits at offset 0.
+  const tr = ws._trans;
+  let p = 1, dir = 1;
+  if (tr) { dir = tr.dir; p = easeOutCubic(Math.min(1, (now - tr.start) / tr.dur)); }
+  if (tr && p < 1 && ws._out) {
+    drawWizSlide(ctx2, ws._out, -dir * V.W * p, now, HEADER_DIV_Y, FOOTER_DIV_Y);
+  }
+  drawWizSlide(ctx2, ws, dir * V.W * (1 - p), now, HEADER_DIV_Y, FOOTER_DIV_Y);
+  if (p >= 1) { ws._trans = null; ws._out = null; }
+
+  drawWizFooter(ctx2, s, ws);
+  ctx2.restore();
+}
+
+// Draws one screen's content (icon + title + body) translated horizontally by
+// `offX` virtual pixels. `view` is the live wizState or a snapshot of the
+// outgoing screen ({id, sel, scroll, osk, testPhase, values}).
+function drawWizSlide(ctx2, view, offX, now, yT, yB) {
+  const s = NETCONF[view.id];
+  ctx2.save();
+  ctx2.translate(offX, 0);
+  ctx2.shadowColor = 'rgba(0,0,0,0.5)'; ctx2.shadowBlur = 3; ctx2.shadowOffsetX = 0; ctx2.shadowOffsetY = 1;
+  const ic = getIcon('xmb_icon_022');
+  if (ic && (ic.loaded || ic.normalMapReady)) drawIconAt(ctx2, ic, 'xmb_icon_022', 130 - 18, 175 - 18, 36, 36);
+  ctx2.fillStyle = '#fff'; ctx2.textAlign = 'left'; ctx2.textBaseline = 'alphabetic';
+  ctx2.font = '28px PS3';
+  ctx2.fillText(wizText(s.title, view.values), 160, 187);
+  switch (s.kind) {
+    case 'info':      drawWizInfo(ctx2, s, view, yT, yB); break;
+    case 'chooser':   drawWizChooser(ctx2, s, view, yT, yB); break;
+    case 'confirm':   drawWizConfirm(ctx2, s, view, yT, yB); break;
+    case 'scan_list': drawWizScanList(ctx2, s, view, yT, yB); break;
+    case 'text_entry':drawWizTextEntry(ctx2, s, view, yT, yB, now); break;
+    case 'progress':  drawWizProgress(ctx2, s, view, yT, yB, now); break;
+    case 'test':      drawWizTest(ctx2, s, view, yT, yB, now); break;
+    case 'result':    drawWizResult(ctx2, s, view, yT, yB); break;
+    case 'status':    drawWizStatus(ctx2, s, view, yT, yB); break;
+  }
+  ctx2.restore();
+}
+
+function wizSnapshot(ws) {
+  return {id: ws.id, sel: ws.sel, scroll: ws.scroll, osk: ws.osk,
+          testPhase: ws.testPhase, t0: ws.t0, values: ws.values};
+}
+
+function wizText(t, v) { return (typeof t === 'function') ? t(v) : (t || ''); }
+
+function wizText(t, v) { return (typeof t === 'function') ? t(v) : (t || ''); }
+
+function drawWizInfo(ctx2, s, ws, yT, yB) {
+  ctx2.font = '26px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.95)'; ctx2.textAlign = 'center';
+  const lines = wrapLines(ctx2, wizText(s.body, ws.values), (V.W - 400) * LAYOUT_FIT);
+  const lh = 36; let ty = (yT + yB) / 2 - (lines.length - 1) * lh / 2;
+  for (const ln of lines) { ctx2.fillText(ln, XCF(V.W/2), ty); ty += lh; }
+}
+
+function drawWizChooser(ctx2, s, ws, yT, yB) {
+  ctx2.font = '24px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.95)'; ctx2.textAlign = 'center';
+  const bodyLines = wrapLines(ctx2, wizText(s.body, ws.values), (V.W - 400) * LAYOUT_FIT);
+  let ty = yT + 95; for (const ln of bodyLines) { ctx2.fillText(ln, XCF(V.W/2), ty); ty += 32; }
+  const opts = wizOptions(s, ws);
+  const optTop = yT + 230, optSpacing = 46;
+  const availH = yB - optTop - 90;
+  const visible = Math.max(3, Math.floor(availH / optSpacing));
+  let first = 0, last = opts.length - 1;
+  if (opts.length > visible) {
+    first = Math.max(0, Math.min(opts.length - visible, ws.sel - Math.floor(visible/2)));
+    last = first + visible - 1;
+  }
+  for (let i = first; i <= last; i++)
+    drawDialogOption(ctx2, opts[i], XCF(V.W/2), optTop + (i-first)*optSpacing, i === ws.sel, 'center');
+  if (first > 0) { ctx2.fillStyle='rgba(255,255,255,0.5)'; ctx2.font='20px PS3'; ctx2.fillText('▲', XCF(V.W/2), optTop-18); }
+  if (last < opts.length-1) { ctx2.fillStyle='rgba(255,255,255,0.5)'; ctx2.font='20px PS3'; ctx2.fillText('▼', XCF(V.W/2), optTop+visible*optSpacing+6); }
+  if (s.helps && s.helps[ws.sel]) {
+    ctx2.font = '21px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.82)'; ctx2.textAlign = 'center';
+    const hl = wrapLines(ctx2, s.helps[ws.sel], (V.W - 520) * LAYOUT_FIT);
+    let hy = yB - 26 - (hl.length - 1) * 28;
+    for (const ln of hl) { ctx2.fillText(ln, XCF(V.W/2), hy); hy += 28; }
+  }
+}
+
+function drawWizConfirm(ctx2, s, ws, yT, yB) {
+  ctx2.font = '26px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.95)'; ctx2.textAlign = 'center';
+  const lines = wrapLines(ctx2, wizText(s.body, ws.values), (V.W - 400) * LAYOUT_FIT);
+  const lh = 36; let ty = (yT + yB) / 2 - (lines.length - 1) * lh / 2 - 50;
+  for (const ln of lines) { ctx2.fillText(ln, XCF(V.W/2), ty); ty += lh; }
+  const bx = XCF(V.W/2) - 110, by = ty + 30;
+  drawDialogOption(ctx2, 'Yes', bx, by, ws.sel === 0, 'center');
+  drawDialogOption(ctx2, 'No',  bx + 220, by, ws.sel === 1, 'center');
+}
+
+function drawWizScanList(ctx2, s, ws, yT, yB) {
+  ctx2.font = '24px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.95)'; ctx2.textAlign = 'center';
+  ctx2.fillText(wizText(s.body, ws.values), XCF(V.W/2), yT + 70);
+  const rowX = XCF(V.W * 0.18), valX = XCF(V.W * 0.78);
+  ctx2.font = '18px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx2.textAlign = 'left';  ctx2.fillText('SSID', rowX, yT + 118);
+  ctx2.textAlign = 'right'; ctx2.fillText('Signal Strength', valX + XCF(70), yT + 118);
+  const top = yT + 150, pitch = 56;
+  const n = WIZ_AP_LIST.length;
+  const avail = yB - top - 20;
+  const visible = Math.max(3, Math.floor(avail / pitch));
+  let first = Math.max(0, Math.min(n - visible, ws.sel - Math.floor(visible/2)));
+  if (n <= visible) first = 0;
+  for (let i = first; i < Math.min(n, first + visible); i++) {
+    const ap = WIZ_AP_LIST[i];
+    const y = top + (i - first) * pitch;
+    const sel = (i === ws.sel);
+    if (sel) {
+      ctx2.save(); ctx2.shadowColor='rgba(0,0,0,0)';
+      ctx2.fillStyle = 'rgba(255,255,255,0.14)';
+      roundRect(ctx2, rowX - XCF(20), y - 24, XCF(V.W*0.66), 46, 8); ctx2.fill();
+      ctx2.restore();
+    }
+    ctx2.textAlign = 'left'; ctx2.textBaseline = 'middle';
+    ctx2.font = sel ? 'bold 24px PS3' : '23px PS3';
+    ctx2.fillStyle = sel ? '#fff' : 'rgba(255,255,255,0.85)';
+    let name = ap.ssid + (ap.priv ? '  (Private Networks Only)' : '');
+    let nx = rowX;
+    if (ap.sec !== 'None') { drawWizLock(ctx2, rowX + 8, y, sel); nx = rowX + 30; }
+    ctx2.fillText(name, nx, y);
+    drawWizSignalBars(ctx2, valX, y, ap.signal);
+    ctx2.textBaseline = 'alphabetic';
+  }
+  if (first > 0) { ctx2.fillStyle='rgba(255,255,255,0.5)'; ctx2.textAlign='center'; ctx2.font='20px PS3'; ctx2.fillText('▲', XCF(V.W/2), top-22); }
+  if (first + visible < n) { ctx2.fillStyle='rgba(255,255,255,0.5)'; ctx2.textAlign='center'; ctx2.font='20px PS3'; ctx2.fillText('▼', XCF(V.W/2), top+visible*pitch-2); }
+}
+
+function drawWizSignalBars(ctx2, cx, cy, signal) {
+  const bars = Math.max(1, Math.round(signal / 25));
+  const bw = XCF(8), gap = XCF(4), base = cy + 10;
+  ctx2.save(); ctx2.shadowColor = 'rgba(0,0,0,0)';
+  for (let i = 0; i < 4; i++) {
+    const h = 6 + i * 6;
+    ctx2.fillStyle = (i < bars) ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.25)';
+    ctx2.fillRect(cx + i * (bw + gap), base - h, bw, h);
+  }
+  ctx2.restore();
+}
+
+function drawWizLock(ctx2, cx, cy, sel) {
+  ctx2.save(); ctx2.shadowColor = 'rgba(0,0,0,0)';
+  ctx2.strokeStyle = sel ? '#fff' : 'rgba(255,255,255,0.8)';
+  ctx2.fillStyle = sel ? '#fff' : 'rgba(255,255,255,0.8)';
+  ctx2.lineWidth = 2;
+  const w = 12, h = 9, x = cx - w/2, y = cy - 2;
+  ctx2.fillRect(x, y, w, h);
+  ctx2.beginPath(); ctx2.arc(cx, y, 4, Math.PI, 0); ctx2.stroke();
+  ctx2.restore();
+}
+
+function drawWizTextEntry(ctx2, s, ws, yT, yB, now) {
+  const osk = ws.osk;
+  ctx2.font = '24px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.95)'; ctx2.textAlign = 'left';
+  const fx = XCF(V.W * 0.18);
+  ctx2.fillText(wizText(s.label, ws.values), fx, yT + 64);
+  const boxX = fx, boxY = yT + 84, boxW = XCF(V.W * 0.64), boxH = 44;
+  ctx2.save(); ctx2.shadowColor='rgba(0,0,0,0)';
+  ctx2.fillStyle = 'rgba(0,0,0,0.45)'; roundRect(ctx2, boxX, boxY, boxW, boxH, 6); ctx2.fill();
+  ctx2.strokeStyle = 'rgba(255,255,255,0.6)'; ctx2.lineWidth = 1.5; ctx2.stroke();
+  ctx2.restore();
+  let shown = s.mask ? '•'.repeat(osk.buf.length) : osk.buf;
+  ctx2.font = '24px PS3'; ctx2.fillStyle = '#fff'; ctx2.textBaseline = 'middle';
+  const caretOn = (Math.floor(now / 500) % 2) === 0;
+  ctx2.fillText(shown + (caretOn ? '|' : ''), boxX + 12, boxY + boxH/2 + 1);
+  ctx2.textBaseline = 'alphabetic';
+  if (s.hint) {
+    ctx2.font = '20px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.7)';
+    const hl = wrapLines(ctx2, s.hint, boxW); let hy = boxY + boxH + 30;
+    for (const ln of hl) { ctx2.fillText(ln, boxX, hy); hy += 26; }
+  }
+  if (osk.err) {
+    ctx2.font = '20px PS3'; ctx2.fillStyle = 'rgba(255,120,120,0.95)'; ctx2.textAlign = 'left';
+    const el = wrapLines(ctx2, osk.err, boxW); let ey = boxY + boxH + (s.hint ? 96 : 30);
+    for (const ln of el) { ctx2.fillText(ln, boxX, ey); ey += 26; }
+  }
+  drawWizOsk(ctx2, s, ws, yB);
+}
+
+function drawWizOsk(ctx2, s, ws, yB) {
+  const osk = ws.osk;
+  const rows = WIZ_OSK_ROWS[osk.set];
+  const keyW = XCF(48), keyH = 42, gap = XCF(8);
+  const startY = yB - 4 * (keyH + gap) - 70;
+  ctx2.save(); ctx2.shadowColor = 'rgba(0,0,0,0)';
+  for (let r = 0; r < 4; r++) {
+    const chars = rows[r];
+    const rowW = chars.length * keyW + (chars.length - 1) * gap;
+    const startX = XCF(V.W/2) - rowW/2;
+    for (let c = 0; c < chars.length; c++) {
+      const x = startX + c * (keyW + gap), y = startY + r * (keyH + gap);
+      const sel = (osk.row === r && osk.col === c);
+      drawWizKey(ctx2, x, y, keyW, keyH, chars[c], sel);
+    }
+  }
+  const fnLabels = [osk.set === 'upper' ? 'a/A▲' : 'a/A', '@#:', 'Space', 'Delete', 'Enter'];
+  const fnW = [keyW*1.3, keyW*1.3, keyW*3, keyW*1.6, keyW*1.8];
+  const totalW = fnW.reduce((a,b)=>a+b,0) + 4*gap;
+  let fx = XCF(V.W/2) - totalW/2;
+  const fy = startY + 4 * (keyH + gap);
+  for (let c = 0; c < 5; c++) {
+    const sel = (osk.row === 4 && osk.col === c);
+    drawWizKey(ctx2, fx, fy, fnW[c], keyH, fnLabels[c], sel, true);
+    fx += fnW[c] + gap;
+  }
+  ctx2.restore();
+}
+
+function drawWizKey(ctx2, x, y, w, h, label, sel, fn) {
+  ctx2.fillStyle = sel ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.12)';
+  roundRect(ctx2, x, y, w, h, 6); ctx2.fill();
+  if (!sel) { ctx2.strokeStyle = 'rgba(255,255,255,0.25)'; ctx2.lineWidth = 1; ctx2.stroke(); }
+  ctx2.fillStyle = sel ? '#111' : 'rgba(255,255,255,0.92)';
+  ctx2.font = (fn ? '19px PS3' : '22px PS3');
+  ctx2.textAlign = 'center'; ctx2.textBaseline = 'middle';
+  ctx2.fillText(label, x + w/2, y + h/2 + 1);
+  ctx2.textAlign = 'left'; ctx2.textBaseline = 'alphabetic';
+}
+
+function drawWizProgress(ctx2, s, ws, yT, yB, now) {
+  drawWizSpinner(ctx2, XCF(V.W/2), (yT + yB)/2 - 50, now);
+  ctx2.font = '26px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.95)'; ctx2.textAlign = 'center';
+  const lines = wrapLines(ctx2, wizText(s.body, ws.values), (V.W - 400) * LAYOUT_FIT);
+  let ty = (yT + yB)/2 + 40; for (const ln of lines) { ctx2.fillText(ln, XCF(V.W/2), ty); ty += 34; }
+}
+
+function drawWizSpinner(ctx2, cx, cy, now) {
+  ctx2.save(); ctx2.shadowColor = 'rgba(0,0,0,0)';
+  const R = 26, segs = 12, ang = (now / 1000) * Math.PI * 2;
+  for (let i = 0; i < segs; i++) {
+    const a = ang + i * (Math.PI * 2 / segs);
+    const alpha = 0.15 + 0.85 * (i / segs);
+    ctx2.strokeStyle = 'rgba(255,255,255,' + alpha.toFixed(2) + ')';
+    ctx2.lineWidth = 4; ctx2.lineCap = 'round';
+    ctx2.beginPath();
+    ctx2.moveTo(cx + Math.cos(a) * (R - 8), cy + Math.sin(a) * (R - 8));
+    ctx2.lineTo(cx + Math.cos(a) * R, cy + Math.sin(a) * R);
+    ctx2.stroke();
+  }
+  ctx2.restore();
+}
+
+function drawWizTest(ctx2, s, ws, yT, yB, now) {
+  const steps = [
+    {label:'Obtain IP Address'},
+    {label:'Internet Connection'},
+    {label:'PlayStation™Network'},
+  ];
+  const labX = XCF(V.W * 0.30), statX = XCF(V.W * 0.70);
+  const top = yT + 130, pitch = 70;
+  ctx2.textBaseline = 'middle';
+  for (let i = 0; i < steps.length; i++) {
+    const y = top + i * pitch;
+    ctx2.font = '25px PS3'; ctx2.textAlign = 'left';
+    const active = (i === ws.testPhase);
+    ctx2.fillStyle = (i <= ws.testPhase) ? '#fff' : 'rgba(255,255,255,0.5)';
+    ctx2.fillText(steps[i].label, labX, y);
+    ctx2.textAlign = 'right';
+    if (i < ws.testPhase) { ctx2.fillStyle = '#7fe07f'; ctx2.fillText('Succeeded', statX, y); }
+    else if (active)      { ctx2.fillStyle = 'rgba(255,255,255,0.9)'; ctx2.fillText('Checking...', statX, y); }
+    else                  { ctx2.fillStyle = 'rgba(255,255,255,0.35)'; ctx2.fillText('—', statX, y); }
+  }
+  ctx2.textBaseline = 'alphabetic';
+}
+
+function drawWizResult(ctx2, s, ws, yT, yB) {
+  const cx = XCF(V.W/2);
+  if (s.results && ws.values._result) {
+    const R = ws.values._result;
+    ctx2.font = '24px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.95)'; ctx2.textAlign = 'center';
+    ctx2.fillText(wizText(s.body, ws.values), cx, yT + 56);
+    const rows = [
+      ['Obtain IP Address', R.ip], ['Internet Connection', R.net],
+      ['PlayStation™Network', R.psn], ['NAT Type', R.nat],
+      ['UPnP', R.upnp], ['Connection Speed (Download)*', R.down],
+      ['Connection Speed (Upload)*', R.up], ['BSSID', R.bssid], ['DHCP', R.dhcp],
+    ];
+    const labX = XCF(V.W * 0.30), valX = XCF(V.W * 0.70);
+    let y = yT + 110; ctx2.textBaseline = 'middle';
+    for (const [k, val] of rows) {
+      ctx2.font = '22px PS3'; ctx2.textAlign = 'left'; ctx2.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx2.fillText(k, labX, y);
+      ctx2.textAlign = 'right';
+      ctx2.fillStyle = (val === 'Succeeded') ? '#7fe07f' : '#fff';
+      ctx2.fillText(val, valX, y);
+      y += 50;
+    }
+    ctx2.textBaseline = 'alphabetic';
+    ctx2.font = '18px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.6)'; ctx2.textAlign = 'center';
+    ctx2.fillText('* Connection speed results are estimates and are provided as a reference only.', cx, y + 4);
+    return;
+  }
+  drawWizCheck(ctx2, cx, yT + 150, s.status !== 'fail');
+  ctx2.font = '26px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.95)'; ctx2.textAlign = 'center';
+  const lines = wrapLines(ctx2, wizText(s.body, ws.values), (V.W - 400) * LAYOUT_FIT);
+  let ty = yT + 260; for (const ln of lines) { ctx2.fillText(ln, cx, ty); ty += 36; }
+}
+
+function drawWizCheck(ctx2, cx, cy, ok) {
+  ctx2.save(); ctx2.shadowColor = 'rgba(0,0,0,0)';
+  ctx2.strokeStyle = ok ? '#7fe07f' : '#ff7f7f'; ctx2.lineWidth = 6; ctx2.lineCap = 'round';
+  ctx2.beginPath(); ctx2.arc(cx, cy, 40, 0, Math.PI*2); ctx2.stroke();
+  ctx2.beginPath();
+  if (ok) { ctx2.moveTo(cx-18, cy+2); ctx2.lineTo(cx-4, cy+16); ctx2.lineTo(cx+20, cy-14); }
+  else    { ctx2.moveTo(cx-15, cy-15); ctx2.lineTo(cx+15, cy+15); ctx2.moveTo(cx+15, cy-15); ctx2.lineTo(cx-15, cy+15); }
+  ctx2.stroke(); ctx2.restore();
+}
+
+function drawWizStatus(ctx2, s, ws, yT, yB) {
+  const v = ws.values;
+  let rows;
+  if (s.review) {
+    rows = [];
+    rows.push(['Connection Method', v.conn || 'Wired Connection']);
+    if (v.conn === 'Wireless') { rows.push(['SSID', v.ssid || '-']); rows.push(['Security', v.security || 'None']); }
+    else if (v.opmode) rows.push(['Speed and Duplex', v.opmode === 'Auto-Detect' ? 'Auto-Detect' : (v.speedduplex||'Auto-Detect')]);
+    rows.push(['IP Address Setting', v.ip || 'Automatic']);
+    if (v.ip === 'Manual') {
+      rows.push(['IP Address', v.ipAddr||'-']); rows.push(['Subnet Mask', v.subnet||'-']);
+      rows.push(['Default Router', v.router||'-']);
+    }
+    rows.push(['Primary DNS', v.pdns || 'Automatic']);
+    rows.push(['Secondary DNS', v.sdns || 'Automatic']);
+    rows.push(['MTU', v.mtu === 'Manual' ? (v.mtuVal||'-') : 'Automatic']);
+    rows.push(['Proxy Server', v.proxy || 'Do Not Use']);
+    rows.push(['UPnP', v.upnp || 'Enable']);
+  } else {
+    rows = [
+      ['Internet Connection','Enabled'], ['Connection Method','Wired Connection'],
+      ['Speed and Duplex','Auto-Detect'], ['IP Address Setting','Automatic'],
+      ['IP Address','192.168.1.10'], ['Subnet Mask','255.255.255.0'],
+      ['Default Router','192.168.1.1'], ['Primary DNS','192.168.1.1'],
+      ['Secondary DNS','0.0.0.0'], ['MAC Address','00:1A:EF:5A:C3:7B'],
+      ['MTU','Automatic'], ['Proxy Server','Do Not Use'], ['UPnP','Enabled'],
+    ];
+  }
+  const labX = XCF(V.W * 0.32), valX = XCF(V.W * 0.68);
+  const pitch = Math.min(44, (yB - yT - 80) / rows.length);
+  let y = yT + 60; ctx2.textBaseline = 'middle';
+  for (const [k, val] of rows) {
+    ctx2.font = '22px PS3'; ctx2.textAlign = 'left'; ctx2.fillStyle = 'rgba(255,255,255,0.78)';
+    ctx2.fillText(k, labX, y);
+    ctx2.textAlign = 'right'; ctx2.fillStyle = '#fff'; ctx2.fillText(val, valX, y);
+    y += pitch;
+  }
+  ctx2.textBaseline = 'alphabetic';
+}
+
+function drawWizFooter(ctx2, s, ws) {
+  const HINT_Y = 909;
+  ctx2.font = '22px PS3'; ctx2.textBaseline = 'middle'; ctx2.fillStyle = 'rgba(255,255,255,0.95)';
+  const ENTER_CX = Math.round(XCF(V.W * 0.401)), CANCEL_CX = Math.round(XCF(V.W * 0.629));
+  const R = 12, GAP = 12;
+  function hint(slotCX, kind, label) {
+    const tw = ctx2.measureText(label).width;
+    const groupW = R*2 + GAP + tw, left = slotCX - groupW/2, gcx = left + R;
+    if (kind === 'cross') drawCrossHint(ctx2, gcx, HINT_Y, R); else drawCircleGlyph(ctx2, gcx, HINT_Y, R);
+    ctx2.textBaseline = 'middle'; ctx2.textAlign = 'left';
+    ctx2.fillText(label, left + R*2 + GAP, HINT_Y);
+  }
+  const foot = s.foot || defaultFoot(s.kind);
+  if (foot === 'ok')         { hint(CANCEL_CX, 'circle', 'OK'); }
+  else if (foot === 'cancel'){ hint(CANCEL_CX, 'circle', 'Back'); }
+  else if (foot === 'enter') { hint(ENTER_CX, 'cross', 'Enter'); hint(CANCEL_CX, 'circle', 'Back'); }
+  else if (foot === 'osk')   { hint(ENTER_CX, 'cross', 'Select'); hint(CANCEL_CX, 'circle', 'Back'); }
+  else                       { hint(ENTER_CX, 'cross', 'Enter'); hint(CANCEL_CX, 'circle', 'Back'); }
+}
+function defaultFoot(kind) {
+  if (kind === 'progress' || kind === 'test') return 'cancel';
+  if (kind === 'text_entry') return 'osk';
+  if (kind === 'status') return 'ok';
+  return 'enter-cancel';
+}
+
 // PS3 firmware renders simple option choosers (Theme, Color, Background and
 // other lightweight settings) as a SIDE PANEL anchored to the right of the
 // screen rather than as a fullscreen dialog. The XMB stays fully visible
@@ -9280,6 +10217,8 @@ function queueOrLock(lockMs) {
 }
 
 function navCat(dir, fromRepeat) {
+  // Network wizard: LEFT/RIGHT moves Yes/No or OSK column.
+  if (wizState) { wizNavCat(dir); return; }
   // Dialog: LEFT/RIGHT moves between options for chooser, or between
   // Yes/No for confirm. info dialogs have a single button; ignore.
   if (dialogState) {
@@ -9376,6 +10315,8 @@ function navCat(dir, fromRepeat) {
 }
 
 function navItem(dir, fromRepeat) {
+  // Network wizard: UP/DOWN moves option focus / OSK row.
+  if (wizState) { wizNavItem(dir); return; }
   // Dialog: UP/DOWN moves between options for chooser. For confirm/info
   // dialogs we just consume the input.
   if (dialogState) {
@@ -9438,6 +10379,8 @@ function navItem(dir, fromRepeat) {
 }
 
 function enter() {
+  // Network wizard: Cross confirms. On the OSK it presses the focused key.
+  if (wizState) { if (wizState.osk) wizOskPress(); else wizConfirm(); return; }
   // Dialog: Cross confirms. For theme-bound chooser dialogs the current
   // selection is applied to the theme state before closing (so the user's
   // pick actually takes effect). Other dialogs simply close without backend
@@ -9464,6 +10407,7 @@ function enter() {
 
   // Item-level actions: dialog overlay or fullscreen landing card.
   const it = items[ii];
+  if (it.action === 'netwiz') { openWizard(it.wiz); return; }
   if (it.action === 'dialog') {
     const tpl = DIALOG_TEMPLATES[it.n] || {
       type:'info', title: it.n, body:'This feature is not yet implemented.'
@@ -9527,6 +10471,8 @@ function enter() {
 }
 
 function back() {
+  // Network wizard: Circle pops the wizard stack (closes at the root).
+  if (wizState) { wizBack(); return; }
   // Dialog and landing close immediately on Circle / Back.
   if (dialogState) {
     // Cancelled chooser: revert the live hover-preview to the original pick.
@@ -9639,6 +10585,16 @@ const KEY_ACCEL_FACTOR = V.INPUT_ACCEL_MULT;         // firmware: 1.4x accelerat
 // firmware-derived processKeyRepeat schedule can drive chained motion without
 // the inputLock clamping it down to the animation duration.
 function getKeyAction(key, fromRepeat) {
+  // Network wizard owns all D-pad input while active.
+  if (wizState) {
+    switch (key) {
+      case 'ArrowLeft':  return () => wizNavCat(-1);
+      case 'ArrowRight': return () => wizNavCat(1);
+      case 'ArrowUp':    return () => wizNavItem(-1);
+      case 'ArrowDown':  return () => wizNavItem(1);
+      default: return null;
+    }
+  }
   switch (key) {
     case 'ArrowLeft':  return () => {
       // When a modal is up, LEFT/RIGHT belongs to navDialog (via navCat),
@@ -9673,6 +10629,8 @@ document.addEventListener('keydown', e => {
     e.preventDefault();
     return;
   }
+  // OSK raw typing: printable chars + Backspace fill/edit the field directly.
+  if (wizState && wizState.osk && wizOskRawKey(e)) return;
   const action = getKeyAction(e.key, /*fromRepeat=*/false);
   if (action) {
     e.preventDefault();
@@ -9776,12 +10734,15 @@ function pollGP() {
 
     // D-pad: 12=up, 13=down, 14=left, 15=right
     if (jp(14)) {
-      if (dialogState || landingState) navCat(-1);
+      if (wizState) navCat(-1);                 // wizard owns L/R (no XMB back)
+      else if (dialogState || landingState) navCat(-1);
       else if (stack.length) back();
       else navCat(-1);
     }
     if (jp(15)) {
-      if (dialogState || landingState) {
+      if (wizState) {
+        navCat(1);
+      } else if (dialogState || landingState) {
         navCat(1);
       } else if (stack.length) {
         const items = curItems();
@@ -9804,12 +10765,15 @@ function pollGP() {
     const lyKey = 'axis_ly_' + gp.index;
     if (Math.abs(lx) > deadzone && !gpPrev[lxKey]) {
       if (lx < -deadzone) {
-        if (dialogState || landingState) navCat(-1);
+        if (wizState) navCat(-1);
+        else if (dialogState || landingState) navCat(-1);
         else if (stack.length) back();
         else navCat(-1);
       }
       if (lx > deadzone) {
-        if (dialogState || landingState) {
+        if (wizState) {
+          navCat(1);
+        } else if (dialogState || landingState) {
           navCat(1);
         } else if (stack.length) {
           const items = curItems();
@@ -10859,7 +11823,10 @@ function frame(now) {
   // Modal overlays render last so they sit on top of the XMB. The landing
   // page is a full opaque replacement; the dialog is a translucent panel.
   if (landingState) drawLanding(ctx);
-  if (dialogState) {
+  if (wizState) { wizTick(now); }
+  if (wizState) {
+    drawWizard(ctx);
+  } else if (dialogState) {
     drawDialog(ctx);
   } else if (dialogClosing) {
     // Exit cross-fade: keep drawing the (live-wave) dialog at decreasing
