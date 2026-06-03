@@ -18,6 +18,7 @@ canvas{position:absolute;top:0;left:0;width:100%;height:100%}
 #scr.pixelated canvas{image-rendering:pixelated;image-rendering:crisp-edges}
 #bg{z-index:0}
 #wave{z-index:1}
+#globe{z-index:1; display:none}
 #xmb{z-index:2}
 </style>
 </head>
@@ -25,6 +26,7 @@ canvas{position:absolute;top:0;left:0;width:100%;height:100%}
 <div id="wrap"><div id="scr">
 <canvas id="bg"></canvas>
 <canvas id="wave"></canvas>
+<canvas id="globe"></canvas>
 <canvas id="xmb"></canvas>
 </div></div>
 <!-- Force the browser to load the PS3 Rodin fonts before canvas renders text -->
@@ -8794,6 +8796,35 @@ const AUDIO_LANGS = ['English','Japanese','French','German','Spanish','Italian',
 const TIMEZONES = ['GMT-12:00','GMT-11:00','GMT-10:00','GMT-09:00','GMT-08:00','GMT-07:00','GMT-06:00',
   'GMT-05:00','GMT-04:00','GMT-03:00','GMT-02:00','GMT-01:00','GMT','GMT+01:00','GMT+02:00','GMT+03:00',
   'GMT+04:00','GMT+05:00','GMT+05:30','GMT+06:00','GMT+07:00','GMT+08:00','GMT+09:00','GMT+10:00','GMT+11:00','GMT+12:00'];
+// Firmware Time Zone list (GMT offset + city), each with the city's real
+// longitude so the globe rotates to show that location. Mirrors the PS3
+// sysconf time-zone list (offset-ordered, multiple cities per offset).
+const TZ_LIST = [
+  {label:'GMT-11:00 Samoa', lon:-171}, {label:'GMT-10:00 Hawaii', lon:-157},
+  {label:'GMT-09:00 Alaska', lon:-150},
+  {label:'GMT-08:00 Pacific Time (US & Canada)', lon:-120}, {label:'GMT-08:00 Tijuana', lon:-117},
+  {label:'GMT-07:00 Mountain Time (US & Canada)', lon:-105}, {label:'GMT-07:00 Chihuahua', lon:-106},
+  {label:'GMT-06:00 Central Time (US & Canada)', lon:-90}, {label:'GMT-06:00 Mexico City', lon:-99},
+  {label:'GMT-05:00 Eastern Time (US & Canada)', lon:-75}, {label:'GMT-05:00 Bogota', lon:-74}, {label:'GMT-05:00 Lima', lon:-77},
+  {label:'GMT-04:00 Atlantic (Canada)', lon:-60}, {label:'GMT-04:00 Caracas', lon:-67}, {label:'GMT-04:00 Santiago', lon:-71},
+  {label:'GMT-03:30 Newfoundland', lon:-53},
+  {label:'GMT-03:00 Sao Paulo', lon:-47}, {label:'GMT-03:00 Buenos Aires', lon:-58},
+  {label:'GMT-01:00 Azores', lon:-25},
+  {label:'GMT+00:00 London', lon:0}, {label:'GMT+00:00 Dublin', lon:-6}, {label:'GMT+00:00 Lisbon', lon:-9},
+  {label:'GMT+00:00 Reykjavik', lon:-22}, {label:'GMT+00:00 Casablanca', lon:-8},
+  {label:'GMT+01:00 Paris', lon:2}, {label:'GMT+01:00 Amsterdam', lon:5}, {label:'GMT+01:00 Berlin', lon:13},
+  {label:'GMT+01:00 Rome', lon:12}, {label:'GMT+01:00 Madrid', lon:-4}, {label:'GMT+01:00 Stockholm', lon:18},
+  {label:'GMT+02:00 Cairo', lon:31}, {label:'GMT+02:00 Athens', lon:24}, {label:'GMT+02:00 Johannesburg', lon:28}, {label:'GMT+02:00 Helsinki', lon:25},
+  {label:'GMT+03:00 Moscow', lon:38}, {label:'GMT+03:00 Istanbul', lon:29}, {label:'GMT+03:00 Nairobi', lon:37},
+  {label:'GMT+03:30 Tehran', lon:51},
+  {label:'GMT+04:00 Dubai', lon:55}, {label:'GMT+04:30 Kabul', lon:69},
+  {label:'GMT+05:00 Karachi', lon:67}, {label:'GMT+05:30 New Delhi', lon:77}, {label:'GMT+05:45 Kathmandu', lon:85},
+  {label:'GMT+06:00 Dhaka', lon:90}, {label:'GMT+07:00 Bangkok', lon:100}, {label:'GMT+07:00 Jakarta', lon:106},
+  {label:'GMT+08:00 Beijing', lon:116}, {label:'GMT+08:00 Singapore', lon:103}, {label:'GMT+08:00 Hong Kong', lon:114},
+  {label:'GMT+09:00 Tokyo', lon:139}, {label:'GMT+09:00 Seoul', lon:126}, {label:'GMT+09:30 Adelaide', lon:138},
+  {label:'GMT+10:00 Sydney', lon:151}, {label:'GMT+10:00 Guam', lon:144},
+  {label:'GMT+11:00 Solomon Islands', lon:160}, {label:'GMT+12:00 Auckland', lon:174}, {label:'GMT+13:00 Samoa', lon:-171},
+];
 const ONOFF = ['On','Off'], OFFON = ['Off','On'];
 const ENDIS = ['Enabled','Disabled'], DISEN = ['Disabled','Enabled'];
 
@@ -9057,6 +9088,9 @@ const NETCONF = {
   item_text: {kind:'text_entry', title: v => v._title || 'Edit', label: v => v._label || '',
     field:'_text', fmt:'ascii', maxLen:16},
 
+  // Time Zone: 3D Earth globe background + zone list (see drawWizTzGlobe).
+  tz_globe: {kind:'tzglobe', title:'Time Zone', foot:'enter'},
+
   // ===================== SYSTEM INFORMATION =====================
   sysinfo: {kind:'status', title:'System Information', sysinfo:true, foot:'ok'},
 
@@ -9242,7 +9276,11 @@ function openWizard(startId) {
   // (the slide is reserved for screen-to-screen navigation).
   playNav2();
 }
-function closeWizard() { wizState = null; playNav(); }
+function closeWizard() {
+  wizState = null;
+  if (tzGlobe) { tzGlobe = null; globeCanvas.style.display = 'none'; }
+  playNav();
+}
 
 // Called when a screen becomes active: initialise per-kind transient state.
 function wizEnterScreen(id, initial) {
@@ -9264,6 +9302,17 @@ function wizEnterScreen(id, initial) {
   if (s.kind === 'confirm') ws.sel = (id === 'cancel_confirm' || id === 'easy_settings_list' || id === 'bt_delete_confirm') ? 1 : 0;
   if (s.kind === 'test') { ws.testPhase = 0; ws.testStart = performance.now(); }
   if (s.kind === 'checklist') { ws.checks = new Set(s.checked || []); ws.sel = 0; }
+  if (s.kind === 'tzglobe') {
+    ws._zones = TZ_LIST;
+    let cur = ws._zones.findIndex(z => z.label === ws.values._tzVal);
+    if (cur < 0) cur = ws._zones.findIndex(z => z.label.indexOf('London') >= 0);
+    if (cur < 0) cur = 0;
+    ws.sel = cur;
+    const sp = (ws._zones[cur].lon) * Math.PI / 180;
+    tzGlobe = {lon: sp, target: sp};
+    ws._tzFadeStart = performance.now();    // XMB -> globe cross-fade
+    initGlobe();
+  }
   // Reaching "Register completed." adds the device to the registered list.
   if (id === 'bt_register_done' && ws.values._btDev) {
     if (!BT_REGISTERED.some(d => d.name === ws.values._btDev.name)) BT_REGISTERED.push(ws.values._btDev);
@@ -9502,6 +9551,11 @@ function wizConfirm() {
       wizGo(s.next);
     }
     return;
+  } else if (s.kind === 'tzglobe') {
+    const zone = ws._zones[ws.sel].label;
+    if (ws.values._bindItem) { ws.values._bindItem.v = zone; saveSetting('Time Zone', zone); }
+    closeWizard();
+    return;
   } else if (s.kind === 'progress' || s.kind === 'test') {
     return;                                        // auto-advances
   }
@@ -9631,6 +9685,11 @@ function wizNavItem(dir) {
   } else if (s.kind === 'checklist') {
     const n = (s.items || []).length + 1;   // +1 for the Finish row
     ws.sel = (ws.sel + dir + n) % n; playCursor();
+  } else if (s.kind === 'tzglobe') {
+    const n = (ws._zones || []).length; if (!n) return;
+    ws.sel = (ws.sel + dir + n) % n;
+    if (tzGlobe) tzGlobe.target = ws._zones[ws.sel].lon * Math.PI / 180;
+    playCursor();
   } else if (s.kind === 'confirm') {
     ws.sel = ws.sel === 0 ? 1 : 0; playCursor();
   }
@@ -9689,6 +9748,34 @@ function drawWizard(ctx2) {
   ctx2.save();
   ctx2.setTransform(1, 0, 0, 1, 0, 0);
   const cw = xmbCanvas.width, ch = xmbCanvas.height;
+  // Time Zone globe screen: no opaque backdrop -- clear the 2D layer to
+  // transparent so the WebGL globe canvas behind shows through; draw only the
+  // chrome + zone list on top.
+  if (s.kind === 'tzglobe') {
+    // Cross-fade: the XMB menu is already on this canvas underneath. Render the
+    // globe offscreen, then composite it over the XMB at the fade alpha so the
+    // XMB fades out as the globe fades in; the list/chrome fade in together.
+    renderGlobe();
+    const fp = ws._tzFadeStart ? Math.min(1, (now - ws._tzFadeStart) / 360) : 1;
+    const fa = fp * fp * (3 - 2 * fp);     // smoothstep
+    ctx2.globalAlpha = fa;
+    try { if (globeCanvas.width > 1) ctx2.drawImage(globeCanvas, 0, 0, cw, ch); } catch (e) {}
+    ctx2.globalAlpha = 1;
+    ctx2.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, frameCenterTY());
+    ctx2.globalAlpha = fa;
+    const HDV = 199, FDV = 880;
+    const ic0 = getIcon('xmb_icon_022');
+    if (ic0 && (ic0.loaded || ic0.normalMapReady)) drawIconAt(ctx2, ic0, 'xmb_icon_022', 130-18, 175-18, 36, 36);
+    ctx2.fillStyle = '#fff'; ctx2.textAlign = 'left'; ctx2.textBaseline = 'alphabetic'; ctx2.font = '28px PS3';
+    ctx2.save(); ctx2.shadowColor='rgba(0,0,0,0.6)'; ctx2.shadowBlur=4; ctx2.shadowOffsetY=1;
+    ctx2.fillText('Time Zone', 160, 187); ctx2.restore();
+    ctx2.strokeStyle = 'rgba(255,255,255,0.45)'; ctx2.lineWidth = 1;
+    ctx2.beginPath(); ctx2.moveTo(0, HDV); ctx2.lineTo(XCF(V.W), HDV); ctx2.moveTo(0, FDV); ctx2.lineTo(XCF(V.W), FDV); ctx2.stroke();
+    drawWizTzGlobe(ctx2, s, ws, HDV, FDV);
+    drawWizFooter(ctx2, s, ws);
+    ctx2.restore();
+    return;
+  }
   // Backdrop: blur the live wave into the small offscreen canvas and upscale it
   // OPAQUELY over the 2D canvas. That opaque draw fully covers the XMB menu
   // (icons, item labels, clock) so nothing ghosts through, then a strong dark
@@ -9764,6 +9851,7 @@ function drawWizSlide(ctx2, view, offX, now, yT, yB) {
     case 'confirm':   drawWizConfirm(ctx2, s, view, yT, yB); break;
     case 'scan_list': drawWizScanList(ctx2, s, view, yT, yB); break;
     case 'checklist': drawWizChecklist(ctx2, s, view, yT, yB); break;
+    case 'tzglobe':   drawWizTzGlobe(ctx2, s, view, yT, yB); break;
     case 'text_entry':drawWizTextEntry(ctx2, s, view, yT, yB, now); break;
     case 'progress':  drawWizProgress(ctx2, s, view, yT, yB, now); break;
     case 'test':      drawWizTest(ctx2, s, view, yT, yB, now); break;
@@ -10137,6 +10225,152 @@ function drawWizStatus(ctx2, s, ws, yT, yB) {
     ctx2.textAlign = 'right'; ctx2.fillStyle = '#fff'; ctx2.fillText(val, valX, y);
     y += pitch;
   }
+  ctx2.textBaseline = 'alphabetic';
+}
+
+// ============================================================================
+// TIME ZONE GLOBE  (Settings > Date and Time > Time Zone)
+// ============================================================================
+// The PS3 renders a 3D Earth that rotates about the polar axis by longitude as
+// the focused time zone changes (~15 degrees per GMT hour), lit by a fixed sun
+// with a blue atmosphere rim and a day/night terminator. Geometry/motion are
+// measured from RPCS3 captures (xmb-ref/timezone/rpcs3/): globe centre ~(0.43W,
+// 0.49H), radius ~0.50H, clipped top/bottom. The surface is the NASA Blue
+// Marble (Reto Stockli, NASA Earth Observatory) -- the exact source credited in
+// the firmware (sysconf_plugin "Graphics of Earth ... Credit: NASA Earth
+// Observatory"); day/clouds/night maps in images/globe/.
+const globeCanvas = document.getElementById('globe');
+let globeGL = null, globeProg = null, globeBuf = null, globeTex = {}, globeReady = false, globeInit = false;
+let tzGlobe = null;                  // {lon, target} (radians) while the screen is active
+
+function tzSpin(zone) {               // GMT string -> globe spin angle (radians)
+  if (zone === 'GMT') return 0;
+  const m = /GMT([+-])(\d{2}):(\d{2})/.exec(zone);
+  if (!m) return 0;
+  const h = (+m[2]) + (+m[3]) / 60;
+  return (m[1] === '-' ? -1 : 1) * h * 15 * Math.PI / 180;
+}
+
+function initGlobe() {
+  if (globeInit) return; globeInit = true;
+  const gl = globeCanvas.getContext('webgl', {alpha:true, premultipliedAlpha:false, antialias:true, preserveDrawingBuffer:true});
+  if (!gl) return;
+  globeGL = gl;
+  const vs = 'attribute vec2 p; void main(){ gl_Position=vec4(p,0.,1.); }';
+  const fs = [
+   'precision highp float;',
+   'uniform vec2 uRes; uniform vec2 uCenter; uniform float uR; uniform float uSpin;',
+   'uniform sampler2D uDay, uNight, uClouds;',
+   'const float PI=3.14159265;',
+   'mat3 rotY(float a){ float s=sin(a),c=cos(a); return mat3(c,0.,-s, 0.,1.,0., s,0.,c); }',
+   'void main(){',
+   '  vec2 fc=vec2(gl_FragCoord.x, uRes.y-gl_FragCoord.y);',
+   '  vec2 d=(fc-uCenter)/uR;',
+   '  float r2=dot(d,d);',
+   '  vec3 L=normalize(vec3(-0.55,-0.32,0.77));',
+   '  if(r2>1.0){',
+   '     float g=smoothstep(1.30,1.0,sqrt(r2));',
+   '     float lit=clamp(dot(normalize(vec3(d.x,-d.y,0.001)),vec3(-0.7,0.4,0.))*0.5+0.5,0.,1.);',
+   '     vec3 space=vec3(0.012,0.022,0.05);',           // opaque near-black space
+   '     gl_FragColor=vec4(space + vec3(0.27,0.5,0.92)*g*0.6*lit, 1.0); return;',
+   '  }',
+   '  float z=sqrt(max(0.,1.0-r2));',
+   '  vec3 N=vec3(d.x,-d.y,z);',
+   '  vec3 G=rotY(uSpin)*N;',
+   '  float lat=asin(clamp(G.y,-1.,1.));',
+   '  float lon=atan(G.x,G.z);',
+   '  vec2 tuv=vec2(lon/(2.0*PI)+0.5, 0.5 - lat/PI);',
+   '  vec3 day=texture2D(uDay,tuv).rgb;',
+   '  vec3 night=texture2D(uNight,tuv).rgb;',
+   '  float cloud=texture2D(uClouds,tuv).r;',
+   '  float diff=dot(N,L);',
+   '  float dayAmt=smoothstep(-0.18,0.22,diff);',
+   '  day=mix(day, vec3(1.0), cloud*0.55*clamp(dayAmt+0.15,0.,1.));',
+   '  vec3 col=mix(night*1.3, day*(0.32+0.9*clamp(diff,0.,1.)), dayAmt);',
+   '  float fres=pow(1.0-z,3.0);',
+   '  col += vec3(0.27,0.5,0.92)*fres*clamp(dayAmt+0.12,0.,1.)*0.9;',
+   '  gl_FragColor=vec4(col,1.0);',
+   '}'].join('\n');
+  function sh(t,src){ const o=gl.createShader(t); gl.shaderSource(o,src); gl.compileShader(o);
+    if(!gl.getShaderParameter(o,gl.COMPILE_STATUS)) console.error('globe shader',gl.getShaderInfoLog(o)); return o; }
+  const pr=gl.createProgram(); gl.attachShader(pr,sh(gl.VERTEX_SHADER,vs)); gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,fs)); gl.linkProgram(pr); globeProg=pr;
+  globeBuf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,globeBuf);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]),gl.STATIC_DRAW);
+  function loadTex(url){
+    const t=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,t);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([8,16,36,255]));
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    const img=new Image();
+    img.onload=()=>{ gl.bindTexture(gl.TEXTURE_2D,t); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
+      gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,img); globeReady=true; };
+    img.src=url; return t;
+  }
+  globeTex.day=loadTex('images/globe/earth_day.jpg');
+  globeTex.night=loadTex('images/globe/earth_night.jpg');
+  globeTex.clouds=loadTex('images/globe/earth_clouds.jpg');
+}
+
+function renderGlobe() {
+  if (!tzGlobe) return;
+  initGlobe();
+  const gl=globeGL; if(!gl||!globeProg) return;
+  if(globeCanvas.width!==xmbCanvas.width||globeCanvas.height!==xmbCanvas.height){ globeCanvas.width=xmbCanvas.width; globeCanvas.height=xmbCanvas.height; }
+  const W=gl.drawingBufferWidth, H=gl.drawingBufferHeight;
+  gl.viewport(0,0,W,H);
+  gl.clearColor(0.012,0.022,0.05,1.0); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.useProgram(globeProg);
+  gl.bindBuffer(gl.ARRAY_BUFFER,globeBuf);
+  const lp=gl.getAttribLocation(globeProg,'p'); gl.enableVertexAttribArray(lp); gl.vertexAttribPointer(lp,2,gl.FLOAT,false,0,0);
+  gl.uniform2f(gl.getUniformLocation(globeProg,'uRes'),W,H);
+  gl.uniform2f(gl.getUniformLocation(globeProg,'uCenter'),0.43*W,0.49*H);
+  gl.uniform1f(gl.getUniformLocation(globeProg,'uR'),0.50*H);
+  gl.uniform1f(gl.getUniformLocation(globeProg,'uSpin'),tzGlobe.lon);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,globeTex.day);    gl.uniform1i(gl.getUniformLocation(globeProg,'uDay'),0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,globeTex.night);  gl.uniform1i(gl.getUniformLocation(globeProg,'uNight'),1);
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D,globeTex.clouds); gl.uniform1i(gl.getUniformLocation(globeProg,'uClouds'),2);
+  gl.drawArrays(gl.TRIANGLES,0,6);
+}
+
+// Per-frame: ease the globe rotation toward the focused zone (shortest path).
+function tzGlobeTick() {
+  if (!tzGlobe) return;
+  let diff = tzGlobe.target - tzGlobe.lon;
+  while (diff > Math.PI) diff -= 2*Math.PI;
+  while (diff < -Math.PI) diff += 2*Math.PI;
+  tzGlobe.lon += diff * 0.12;          // eased spin
+  renderGlobe();
+}
+
+// The Time Zone screen: globe background + right-aligned zone list + caption.
+function drawWizTzGlobe(ctx2, s, ws, yT, yB) {
+  const zones = ws._zones || [];
+  ctx2.font = '24px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.95)'; ctx2.textAlign = 'left';
+  ctx2.save(); ctx2.shadowColor='rgba(0,0,0,0.6)'; ctx2.shadowBlur=4; ctx2.shadowOffsetY=1;
+  ctx2.fillText('Select a time zone.', XCF(V.W*0.04), yT + 56); ctx2.restore();
+  // Right-aligned scrolling list, each row = "GMT+hh:mm  City".
+  const rx = XCF(V.W*0.965), top = yT + 36, pitch = 33;
+  const avail = yB - top - 24, vis = Math.max(6, Math.floor(avail/pitch));
+  let first = Math.max(0, Math.min(zones.length - vis, ws.sel - Math.floor(vis/2)));
+  if (zones.length <= vis) first = 0;
+  ctx2.textBaseline = 'middle';
+  for (let i = first; i < Math.min(zones.length, first+vis); i++) {
+    const y = top + (i-first)*pitch, sel = (i===ws.sel);
+    ctx2.textAlign = 'right';
+    if (sel) {
+      ctx2.save(); ctx2.shadowColor='rgba(255,255,255,0.85)'; ctx2.shadowBlur=16;
+      ctx2.font='bold 24px PS3'; ctx2.fillStyle='#fff'; ctx2.fillText(zones[i].label, rx, y); ctx2.restore();
+      ctx2.fillStyle='#fff'; ctx2.font='bold 24px PS3'; ctx2.fillText(zones[i].label, rx, y);
+    } else {
+      ctx2.font='21px PS3'; ctx2.fillStyle='rgba(255,255,255,0.72)';
+      ctx2.save(); ctx2.shadowColor='rgba(0,0,0,0.65)'; ctx2.shadowBlur=3; ctx2.shadowOffsetY=1;
+      ctx2.fillText(zones[i].label, rx, y); ctx2.restore();
+    }
+  }
+  if (first>0){ctx2.fillStyle='rgba(255,255,255,0.5)';ctx2.textAlign='right';ctx2.font='18px PS3';ctx2.fillText('▲',rx,top-18);}
+  if (first+vis<zones.length){ctx2.fillStyle='rgba(255,255,255,0.5)';ctx2.textAlign='right';ctx2.font='18px PS3';ctx2.fillText('▼',rx,top+vis*pitch);}
   ctx2.textBaseline = 'alphabetic';
 }
 
@@ -10924,6 +11158,14 @@ function enter() {
   // Item-level actions: dialog overlay or fullscreen landing card.
   const it = items[ii];
   if (it.action === 'netwiz') { openWizard(it.wiz); return; }
+  // Time Zone opens the dedicated 3D globe screen (not the side-drawer).
+  if (!it.action && !it.ch && it.n === 'Time Zone') {
+    openWizard('tz_globe');
+    wizState.values._bindItem = it;
+    wizState.values._tzVal = it.v;
+    wizEnterScreen('tz_globe', true);
+    return;
+  }
   // Free-text settings (System Name, ...) open the on-screen keyboard.
   if (!it.action && !it.ch && SETTING_TEXT[it.n]) { openItemOSK(it); return; }
   // Value/option settings open the side-drawer chooser bound to the item.
@@ -12345,6 +12587,7 @@ function frame(now) {
   // Modal overlays render last so they sit on top of the XMB. The landing
   // page is a full opaque replacement; the dialog is a translucent panel.
   if (landingState) drawLanding(ctx);
+  if (tzGlobe) tzGlobeTick();
   if (wizState) { wizTick(now); }
   if (wizState) {
     drawWizard(ctx);
