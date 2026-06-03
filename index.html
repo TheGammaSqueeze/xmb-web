@@ -899,6 +899,11 @@ const DIALOG_TEMPLATES = {
     title:'Camera Device Settings',
     body:'Tests the image from a camera that is connected to the system using a USB cable. You can adjust settings to reduce flickering for some cameras.\n\nNo camera is currently connected.'
   },
+  'Printer Settings': {
+    type:'info',
+    title:'Printer Settings',
+    body:'Adjusts settings for printers that are connected to this system.\n\nNo printer is connected to the system.'
+  },
   // -------------------------------------------------------------------------
   // Accessory Settings > Audio Device Settings.
   // Firmware: msg_audio_device_setting_explanation.
@@ -1213,8 +1218,14 @@ const DATA = [
       {n:'Video Settings',i:'xmb_icon_009',d:'Adjusts settings for video.',ch:[
           {n:'BD/DVD Auto-start',i:'xmb_icon_022',v:'On',d:'Configure BD/DVD auto-start settings.'}
         ]},
-      {n:'Music Settings',i:'xmb_icon_003',d:'Adjusts settings for music.'},
-      {n:'Chat Settings',i:'xmb_icon_042',d:'Adjusts settings for chat.'},
+      {n:'Music Settings',i:'xmb_icon_003',d:'Adjusts settings for music.',ch:[
+          {n:'Output Frequency',i:'xmb_icon_022',v:'48 kHz'},
+          {n:'Crossfade',i:'xmb_icon_022',v:'Off'}
+        ]},
+      {n:'Chat Settings',i:'xmb_icon_042',d:'Adjusts settings for chat.',ch:[
+          {n:'Microphone Volume',i:'xmb_icon_022',v:'Normal'},
+          {n:'Echo Cancellation',i:'xmb_icon_022',v:'On'}
+        ]},
       {n:'System Settings',i:'xmb_icon_012',d:'Adjusts settings for this PS3\u2122 system.',ch:[
           {n:'Automatic Update',i:'xmb_icon_022',v:'Off',d:'Starts the system automatically and downloads game patches, uploads new saved data to online storage and syncs trophy information with the server.'},
           {n:'System Name',i:'xmb_icon_022',v:'PS3-625'},
@@ -1284,7 +1295,7 @@ const DATA = [
           {n:'Mouse Type',i:'xmb_icon_022',v:'Right-handed',d:'Sets the mouse type. Set this option based on which hand you use to operate the mouse.'},
           {n:'Pointer Speed',i:'xmb_icon_022',v:'Normal',d:'Sets the speed at which the mouse pointer moves. The mouse pointer is displayed in the Internet browser and in games and other software that support use of a mouse.'}
         ]},
-      {n:'Printer Settings',i:'xmb_icon_010',d:'Adjusts settings for printers that are connected to this system.'},
+      {n:'Printer Settings',i:'xmb_icon_010',d:'Adjusts settings for printers that are connected to this system.',action:'dialog'},
       {n:'Display Settings',i:'xmb_icon_016',d:'Adjusts settings for video output.',ch:[
           {n:'Video Output Settings',i:'xmb_icon_022',d:'Configure video output settings according to your TV.',action:'dialog'},
           {n:'Screen Saver',i:'xmb_icon_022',v:'After 20 Minutes',d:'Configure the screen saver settings.'},
@@ -8768,6 +8779,166 @@ const BT_DEVICES = [
 // Devices the user has registered this session (persists while page open).
 const BT_REGISTERED = [];
 
+// ============================================================================
+// GENERIC SETTINGS CHOOSERS (side-drawer) + persistence
+// ============================================================================
+// Every value setting in the Settings tree opens a side-drawer (panel) chooser
+// listing its options, with the current value pre-selected. Confirming updates
+// the item value and persists it to localStorage so it survives reloads.
+// Option lists follow the standard PS3 firmware values for each setting.
+const LANGS = ['Japanese','English (United States)','English (United Kingdom)','French','Spanish',
+  'German','Italian','Dutch','Portuguese (Portugal)','Portuguese (Brazil)','Russian','Korean',
+  'Chinese (traditional)','Chinese (simplified)','Finnish','Swedish','Danish','Norwegian','Polish','Turkish'];
+const AUDIO_LANGS = ['English','Japanese','French','German','Spanish','Italian','Dutch','Portuguese',
+  'Russian','Korean','Chinese','Original'];
+const TIMEZONES = ['GMT-12:00','GMT-11:00','GMT-10:00','GMT-09:00','GMT-08:00','GMT-07:00','GMT-06:00',
+  'GMT-05:00','GMT-04:00','GMT-03:00','GMT-02:00','GMT-01:00','GMT','GMT+01:00','GMT+02:00','GMT+03:00',
+  'GMT+04:00','GMT+05:00','GMT+05:30','GMT+06:00','GMT+07:00','GMT+08:00','GMT+09:00','GMT+10:00','GMT+11:00','GMT+12:00'];
+const ONOFF = ['On','Off'], OFFON = ['Off','On'];
+const ENDIS = ['Enabled','Disabled'], DISEN = ['Disabled','Enabled'];
+
+const SETTING_OPTIONS = {
+  // Game Settings
+  'View Mode (PSP Remasters)': ['Normal','Full Screen'],
+  '3D Display (PSP Remasters)': OFFON,
+  'Ad Hoc Channel (PSP Remasters)': ['Automatic','Channel 1','Channel 6','Channel 11'],
+  'Ad Hoc Mode (PSP Remasters)': OFFON,
+  'PS Upscaler': ['Off','Normal','Smooth'],
+  'PS/PS2 Smoothing': OFFON,
+  // Video Settings
+  'BD/DVD Auto-start': ONOFF,
+  // System Settings
+  'Automatic Update': OFFON,
+  'System Language': LANGS,
+  'Character Set': ['Western (Latin)','Central European','Cyrillic','Greek','Turkish','Baltic'],
+  'Dictionary Type': ['English (UK)','English (US)','French','Spanish','German','Italian','Dutch'],
+  'Notification Messages': ['Display','Do Not Display'],
+  'Trophy Notifications': ['Display','Do Not Display'],
+  'Display [What\'s New]': ONOFF,
+  'Disc Auto-Start': ONOFF,
+  'Control for HDMI': OFFON,
+  'Enable ATRAC': ENDIS,
+  'Enable WMA Playback': ENDIS,
+  'Connect PS Vita System Using Network': ONOFF,
+  // Date and Time
+  'Date Format': ['YYYY/MM/DD','MM/DD/YYYY','DD/MM/YYYY'],
+  'Time Format': ['12-Hour Clock','24-Hour Clock'],
+  'Time Zone': TIMEZONES,
+  'Daylight Saving': OFFON,
+  // Power Save
+  'System Auto-Off': ['Off','After 1 hour','After 2 hours','After 3 hours','After 5 hours'],
+  'Controller Auto-Off': ['Off','After 10 min.','After 30 min.','After 60 min.'],
+  'Power Indicator': ['Bright','Dim','Off'],
+  'Turn Off System Automatically After Background Download': OFFON,
+  // Accessory
+  'Controller Vibration Function': ONOFF,
+  'Stereo Headset Audio Extension': OFFON,
+  'Keyboard Type': ['English (US)','English (UK)','French','Spanish','German','Italian','Dutch','Japanese'],
+  'Keyboard Entry Method': ['Predictive Input','Standard Input'],
+  'Key Repeat Delay': ['Short','Normal','Long'],
+  'Key Repeat Rate': ['Slow','Normal','Fast'],
+  'Mouse Type': ['Right-handed','Left-handed'],
+  'Pointer Speed': ['Slow','Normal','Fast'],
+  'Voice Changer': ['None','High Pitch','Low Pitch'],
+  // Display
+  'Screen Saver': ['Off','After 5 Minutes','After 10 Minutes','After 20 Minutes','After 30 Minutes'],
+  'Cross Color Reduction Filter': OFFON,
+  '50 Hz Video Output': ['Auto','On'],
+  'RGB Full Range (HDMI)': ['Limited','Full'],
+  'Y Pb/Cb Pr/Cr Super-White (HDMI)': OFFON,
+  'Deep Color Output (HDMI)': ['Automatic','Off'],
+  '1080p 24 Hz Output (HDMI)': ['Auto','Off'],
+  'BD/DVD - Video Output Format (HDMI)': ['Auto','Y Cb Cr','RGB'],
+  // Sound
+  'Audio Multi-Output': OFFON,
+  'Audio Output Device': ['System Default','Remote Play Device'],
+  'Key Tone': ONOFF,
+  'BD Audio Language': AUDIO_LANGS,
+  'DVD Audio Language': AUDIO_LANGS,
+  'HDD Audio Language': AUDIO_LANGS,
+  'BD Audio Output Format (HDMI)': ['Linear PCM','Bitstream'],
+  // Security (Parental Control levels: Off + 1..11)
+  'Parental Control': ['Off','1','2','3','4','5','6','7','8','9','10','11'],
+  'Internet Browser Start Control': OFFON,
+  'BD Parental Control': OFFON,
+  'DVD Parental Control': ['Off','Level 1','Level 2','Level 3','Level 4','Level 5','Level 6','Level 7','Level 8'],
+  // Remote Play
+  'Remote Start': OFFON,
+  // Network
+  'Internet Connection': ENDIS,
+  'Media Server Connection': DISEN,
+  // Music / Chat
+  'Output Frequency': ['44.1 kHz','48 kHz','88.2 kHz','96 kHz'],
+  'Crossfade': ['Off','5 seconds','10 seconds'],
+  'Microphone Volume': ['Low','Normal','High'],
+  'Echo Cancellation': ONOFF,
+};
+
+// Free-text settings edited via the on-screen keyboard.
+const SETTING_TEXT = { 'System Name': {max: 16} };
+
+function saveSetting(name, value) {
+  try { localStorage.setItem('ps3-xmb-set-' + name, value); } catch (e) {}
+}
+function loadSetting(name) {
+  try { return localStorage.getItem('ps3-xmb-set-' + name); } catch (e) { return null; }
+}
+// Apply any persisted setting values onto the DATA tree at startup.
+function loadAllSettings() {
+  const walk = (items) => {
+    if (!items) return;
+    for (const it of items) {
+      if (it.n) {
+        const saved = loadSetting(it.n);
+        if (saved != null && (it.v !== undefined || SETTING_OPTIONS[it.n] || SETTING_TEXT[it.n])) it.v = saved;
+        // Give registry items with no default value a sensible initial value.
+        else if (it.v === undefined && SETTING_OPTIONS[it.n]) it.v = SETTING_OPTIONS[it.n][0];
+      }
+      if (it.ch) walk(it.ch);
+    }
+  };
+  for (const cat of DATA) walk(cat.items);
+}
+
+// Returns the option list for a settings item (registry, else infer from value).
+function settingOptionsFor(it) {
+  if (SETTING_OPTIONS[it.n]) return SETTING_OPTIONS[it.n];
+  if (it.v === 'On' || it.v === 'Off') return ONOFF;
+  if (it.v === 'Enabled' || it.v === 'Disabled') return ENDIS;
+  return null;
+}
+
+// Opens the side-drawer chooser bound to a settings item.
+function openSettingChooser(it) {
+  const options = settingOptionsFor(it);
+  if (!options) return false;
+  let cur = options.indexOf(it.v);
+  if (cur < 0) cur = 0;
+  dialogState = {
+    item: it, iconId: it.i,
+    template: {type: 'chooser', panel: true, title: it.n, options: options},
+    sel: cur, origSel: cur,
+    bindItem: it, bindName: it.n,
+    anim: {start: performance.now(), dur: 250 * (window.XFADE_SLOMO || 1)}
+  };
+  playNav2();
+  return true;
+}
+
+// Opens the OSK to edit a free-text settings item (e.g. System Name).
+function openItemOSK(it) {
+  openWizard('item_text');
+  wizState.values._title = it.n;
+  wizState.values._label = it.n;
+  wizState.values._text = it.v || '';
+  wizState.values._bindItem = it;
+  wizState.values._max = (SETTING_TEXT[it.n] && SETTING_TEXT[it.n].max) || 64;
+  wizEnterScreen('item_text', true);   // re-init OSK buffer from _text
+}
+
+// Apply persisted setting values now that DATA and the registry both exist.
+loadAllSettings();
+
 // ---- Screen descriptors (rendering metadata; navigation lives in wizNext) ----
 // title/body may be strings or fn(v). `kind` selects the renderer.
 const NETCONF = {
@@ -8881,6 +9052,10 @@ const NETCONF = {
     foot:'enter-cancel', next:'bt_bd_registering'},
   bt_bd_registering: {kind:'progress', title:'Register BD Remote Control', body:'Registering...\nPlease wait.', autoMs:2600, next:'bt_bd_done'},
   bt_bd_done: {kind:'result', title:'Register BD Remote Control', body:'Register completed.', status:'ok', foot:'enter', next:'__close__'},
+
+  // Generic free-text item editor (System Name, etc.) bound via wizState.values.
+  item_text: {kind:'text_entry', title: v => v._title || 'Edit', label: v => v._label || '',
+    field:'_text', fmt:'ascii', maxLen:16},
   wlan_ssid_entry: {kind:'text_entry', title:'SSID', label:'SSID', field:'ssid', fmt:'ascii', maxLen:32},
 
   wlan_security: {kind:'chooser', title:'WLAN Security Setting', body:'Security', options:WIZ_SECURITY_OPTS},
@@ -9119,6 +9294,11 @@ function wizNext(id, choice) {
     case 'bt_info':    return '__back2__';
     case 'bt_bd_remote': return 'bt_bd_registering';
     case 'bt_bd_done':   return '__close__';
+    case 'item_text': {
+      const it = v._bindItem;
+      if (it) { it.v = v._text; saveSetting(it.n, v._text); }
+      return '__close__';
+    }
     default: return '__close__';
   }
 }
@@ -10494,6 +10674,11 @@ function enter() {
     if (tpl.themeKey && (tpl.type === 'chooser' || tpl.type === 'chooser_illust')) {
       applyThemeSelection(tpl.themeKey, dialogState.sel);
     }
+    // Generic settings chooser: write the chosen value back to the item + save.
+    if (dialogState.bindItem && tpl.options) {
+      dialogState.bindItem.v = tpl.options[dialogState.sel];
+      saveSetting(dialogState.bindName, dialogState.bindItem.v);
+    }
     dialogState = null;
     playNav2();
     return;
@@ -10512,6 +10697,12 @@ function enter() {
   // Item-level actions: dialog overlay or fullscreen landing card.
   const it = items[ii];
   if (it.action === 'netwiz') { openWizard(it.wiz); return; }
+  // Free-text settings (System Name, ...) open the on-screen keyboard.
+  if (!it.action && !it.ch && SETTING_TEXT[it.n]) { openItemOSK(it); return; }
+  // Value/option settings open the side-drawer chooser bound to the item.
+  if (!it.action && !it.ch && (it.v !== undefined || SETTING_OPTIONS[it.n])) {
+    if (openSettingChooser(it)) return;
+  }
   if (it.action === 'dialog') {
     const tpl = DIALOG_TEMPLATES[it.n] || {
       type:'info', title: it.n, body:'This feature is not yet implemented.'
