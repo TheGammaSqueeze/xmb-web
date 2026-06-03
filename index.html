@@ -1271,8 +1271,8 @@ const DATA = [
           {n:'Calibrate Motion Controller',i:'xmb_icon_022',action:'dialog',d:'Calibrates the magnetic sensor of a motion controller. Use this setting when the motion controller does not control on-screen movement as expected.'},
           {n:'Reassign Controllers',i:'xmb_icon_022',action:'dialog',d:'Change the number assigned to the controller that is currently in use.'},
           {n:'Controller Vibration Function',i:'xmb_icon_022',v:'On',d:'Sets whether or not to use the vibration function. This setting will be applied to all controllers that support the vibration function.'},
-          {n:'BD Remote Control Registration',i:'xmb_icon_022',action:'dialog',d:'Register the BD Remote Control.'},
-          {n:'Manage Bluetooth\u00ae Devices',i:'xmb_icon_022',action:'dialog',d:'Manage Bluetooth\u00ae devices.'},
+          {n:'BD Remote Control Registration',i:'xmb_icon_022',action:'netwiz',wiz:'bt_bd_remote',d:'Register the BD Remote Control.'},
+          {n:'Manage Bluetooth\u00ae Devices',i:'xmb_icon_022',action:'netwiz',wiz:'bt_manage',d:'Manage Bluetooth\u00ae devices.'},
           {n:'Camera Device Settings',i:'xmb_icon_022',action:'dialog',d:'Tests the image from a camera that is connected to the system using a USB cable. You can adjust settings to reduce flickering for some cameras.'},
           {n:'Audio Device Settings',i:'xmb_icon_022',action:'dialog',d:'Sets the audio input and output devices for voice/video chat and other communication features.'},
           {n:'Stereo Headset Audio Extension',i:'xmb_icon_022',v:'Off',d:'Sets whether or not to output all audio to the headset.'},
@@ -8755,6 +8755,19 @@ const WIZ_AP_LIST = [
 const WIZ_SECURITY_OPTS = ['None','WEP','WPA-PSK (TKIP)','WPA-PSK (AES)',
   'WPA2-PSK (TKIP)','WPA2-PSK (AES)','WPA-PSK / WPA2-PSK','EAP Authentication'];
 
+// Simulated Bluetooth devices discovered during a scan. `type` matches the
+// firmware Type column (Audio Device / Human Interface Device); HID devices
+// require a pass key, audio devices pair directly.
+const BT_DEVICES = [
+  {name:'PLAYSTATION(R)3 Headset', type:'Audio Device',           passkey:false},
+  {name:'BT Stereo Headphones',    type:'Audio Device',           passkey:false},
+  {name:'Bluetooth Keyboard',      type:'Human Interface Device', passkey:true},
+  {name:'Bluetooth Mouse',         type:'Human Interface Device', passkey:true},
+  {name:'Wireless Headset 2.0',    type:'Audio Device',           passkey:false},
+];
+// Devices the user has registered this session (persists while page open).
+const BT_REGISTERED = [];
+
 // ---- Screen descriptors (rendering metadata; navigation lives in wizNext) ----
 // title/body may be strings or fn(v). `kind` selects the renderer.
 const NETCONF = {
@@ -8821,7 +8834,53 @@ const NETCONF = {
            'Automatic setup by access point type. Select when using an access point that supports wireless LAN automatic setup.']},
 
   wlan_scanning: {kind:'progress', title:'WLAN Settings', body:'Scanning...\nPlease wait.', autoMs:2500, next:'wlan_ap_list'},
-  wlan_ap_list:  {kind:'scan_list', title:'WLAN Settings', body:'Select the access point to be used.'},
+  wlan_ap_list:  {kind:'scan_list', title:'WLAN Settings', body:'Select the access point to be used.',
+    header:['SSID','Signal Strength'],
+    rows: v => WIZ_AP_LIST.map(ap => ({label: ap.ssid + (ap.priv ? '  (Private Networks Only)' : ''),
+                                       locked: ap.sec !== 'None', bars: Math.max(1, Math.round(ap.signal/25)), _ap: ap})),
+    onSelect: (v, idx) => {
+      const ap = WIZ_AP_LIST[idx];
+      v.ssid = ap.ssid; v._apSec = ap.sec; v.security = ap.sec; v.signal = ap.signal;
+      if (ap.sec === 'None')               return (v.method === 'Easy') ? 'easy_settings_list' : 'ip_setting';
+      if (ap.sec === 'WEP')                return 'wep_key';
+      if (ap.sec === 'EAP Authentication') return 'eap_auth_setting';
+      return 'wpa_key';
+    }},
+
+  // -------------------------------------------------------------------------
+  // BLUETOOTH: Manage Bluetooth Devices + Register New Device (deviceconf_plugin)
+  // Text verbatim from xmb-ref/bluetooth/deviceconf_strings_en.txt.
+  // -------------------------------------------------------------------------
+  bt_manage: {kind:'chooser', title:'Manage Bluetooth® Devices',
+    body:'Register or manage Bluetooth® devices such as headsets, keyboards and mouse devices.\nSelect an option.',
+    options: v => ['Register New Device'].concat(BT_REGISTERED.map(d => d.name))},
+  bt_register_info: {kind:'info', title:'Register Bluetooth® Device',
+    body:'To register (pair), you will need to prepare the Bluetooth® device.\nFor information on preparing the device, refer to the instructions supplied with the Bluetooth® device.',
+    foot:'scan'},
+  bt_scanning: {kind:'progress', title:'Register Bluetooth® Device', body:'Scanning...\nPlease wait.', autoMs:2600, next:'bt_device_list'},
+  bt_device_list: {kind:'scan_list', title:'Register Bluetooth® Device', body:'Select the Bluetooth® device to register.',
+    header:['Device Name','Type'],
+    rows: v => BT_DEVICES.map(d => ({label: d.name, right: d.type})),
+    onSelect: (v, idx) => { v._btDev = BT_DEVICES[idx]; return BT_DEVICES[idx].passkey ? 'bt_passkey' : 'bt_registering'; }},
+  bt_passkey: {kind:'info', title:'Register Bluetooth® Device',
+    body: v => 'Use the selected Bluetooth® device to enter the pass key shown below and press the Enter key within 30 seconds.\n\nPass Key:  0000',
+    foot:'enter-cancel', next:'bt_registering'},
+  bt_registering: {kind:'progress', title:'Register Bluetooth® Device', body:'Registering...\nPlease wait.', autoMs:2400, next:'bt_register_done'},
+  bt_register_done: {kind:'result', title:'Register Bluetooth® Device', body:'Register completed.', status:'ok', foot:'enter', next:'bt_manage'},
+  bt_device_opts: {kind:'chooser', title:'Manage Bluetooth® Devices',
+    body: v => 'Registered Device:  ' + ((v._sel && v._sel.name) || ''),
+    options:['Connect','Disconnect','Delete','Information']},
+  bt_connecting: {kind:'progress', title:'Manage Bluetooth® Devices', body:'Connecting...\nPlease wait.', autoMs:2000, next:'bt_manage'},
+  bt_delete_confirm: {kind:'confirm', title:'Manage Bluetooth® Devices',
+    body:'Registration with the selected device will be deleted.\nAre you sure you want to continue?'},
+  bt_info: {kind:'status', title:'Manage Bluetooth® Devices', btinfo:true, foot:'ok'},
+
+  // BD Remote Control registration.
+  bt_bd_remote: {kind:'info', title:'Register BD Remote Control',
+    body:'Press the START button and ENTER button of the BD remote control you want to register at the same time, and hold down until the screen changes.',
+    foot:'enter-cancel', next:'bt_bd_registering'},
+  bt_bd_registering: {kind:'progress', title:'Register BD Remote Control', body:'Registering...\nPlease wait.', autoMs:2600, next:'bt_bd_done'},
+  bt_bd_done: {kind:'result', title:'Register BD Remote Control', body:'Register completed.', status:'ok', foot:'enter', next:'__close__'},
   wlan_ssid_entry: {kind:'text_entry', title:'SSID', label:'SSID', field:'ssid', fmt:'ascii', maxLen:32},
 
   wlan_security: {kind:'chooser', title:'WLAN Security Setting', body:'Security', options:WIZ_SECURITY_OPTS},
@@ -8918,8 +8977,12 @@ function wizEnterScreen(id, initial) {
       if (idx >= 0) ws.sel = idx;
     }
   }
-  if (s.kind === 'confirm') ws.sel = (id === 'cancel_confirm' || id === 'easy_settings_list') ? 1 : 0;
+  if (s.kind === 'confirm') ws.sel = (id === 'cancel_confirm' || id === 'easy_settings_list' || id === 'bt_delete_confirm') ? 1 : 0;
   if (s.kind === 'test') { ws.testPhase = 0; ws.testStart = performance.now(); }
+  // Reaching "Register completed." adds the device to the registered list.
+  if (id === 'bt_register_done' && ws.values._btDev) {
+    if (!BT_REGISTERED.some(d => d.name === ws.values._btDev.name)) BT_REGISTERED.push(ws.values._btDev);
+  }
   if (s.kind === 'text_entry') {
     const existing = ws.values[s.field] || '';
     ws.osk = {buf: existing, set:'lower', row:1, col:0, err:null, errAt:0};
@@ -9031,6 +9094,31 @@ function wizNext(id, choice) {
     case 'cancel_confirm':
       return (choice === 'Yes') ? '__close__' : '__back2__';
     case 'status_list': return '__close__';
+    // ---- Bluetooth ----
+    case 'bt_manage': {
+      if (choice === 'Register New Device') return 'bt_register_info';
+      const dev = BT_REGISTERED.find(d => d.name === choice);
+      if (dev) { v._sel = dev; return 'bt_device_opts'; }
+      return 'bt_manage';
+    }
+    case 'bt_register_info': return 'bt_scanning';
+    case 'bt_passkey':       return 'bt_registering';
+    case 'bt_register_done': return 'bt_manage';
+    case 'bt_device_opts':
+      if (choice === 'Connect')    return 'bt_connecting';
+      if (choice === 'Disconnect') return 'bt_manage';
+      if (choice === 'Delete')     return 'bt_delete_confirm';
+      return 'bt_info';                                  // Information
+    case 'bt_delete_confirm':
+      if (choice === 'Yes') {
+        const i = BT_REGISTERED.indexOf(v._sel);
+        if (i >= 0) BT_REGISTERED.splice(i, 1);
+        return 'bt_manage';
+      }
+      return '__back2__';
+    case 'bt_info':    return '__back2__';
+    case 'bt_bd_remote': return 'bt_bd_registering';
+    case 'bt_bd_done':   return '__close__';
     default: return '__close__';
   }
 }
@@ -9052,12 +9140,8 @@ function wizConfirm() {
   } else if (s.kind === 'confirm') {
     choice = (ws.sel === 0) ? 'Yes' : 'No';
   } else if (s.kind === 'scan_list') {
-    const ap = WIZ_AP_LIST[ws.sel];
-    ws.values.ssid = ap.ssid; ws.values._apSec = ap.sec; ws.values.security = ap.sec; ws.values.signal = ap.signal;
-    if (ap.sec === 'None')                  return wizGo((ws.values.method==='Easy')?'easy_settings_list':'ip_setting');
-    if (ap.sec === 'WEP')                   return wizGo('wep_key');
-    if (ap.sec === 'EAP Authentication')    return wizGo('eap_auth_setting');
-    return wizGo('wpa_key');
+    if (s.onSelect) { const nx = s.onSelect(ws.values, ws.sel); if (nx) wizGo(nx); return; }
+    return;
   } else if (s.kind === 'progress' || s.kind === 'test') {
     return;                                        // auto-advances
   }
@@ -9179,7 +9263,7 @@ function wizNavItem(dir) {
     const n = wizOptions(s, ws).length; if (!n) return;
     ws.sel = (ws.sel + dir + n) % n; playCursor();
   } else if (s.kind === 'scan_list') {
-    const n = WIZ_AP_LIST.length;
+    const n = wizRows(s, ws).length; if (!n) return;
     ws.sel = (ws.sel + dir + n) % n; playCursor();
   } else if (s.kind === 'confirm') {
     ws.sel = ws.sel === 0 ? 1 : 0; playCursor();
@@ -9373,21 +9457,28 @@ function drawWizConfirm(ctx2, s, ws, yT, yB) {
   drawDialogOption(ctx2, 'No',  bx + 220, by, ws.sel === 1, 'center');
 }
 
+// Generic scrollable selection list. Rows come from s.rows(values) and may
+// carry {label, locked, bars (0-4 or null), right}. Used for the Wi-Fi AP scan
+// and the Bluetooth device scan.
+function wizRows(s, ws) { return (typeof s.rows === 'function') ? s.rows(ws.values) : (s.rows || []); }
+
 function drawWizScanList(ctx2, s, ws, yT, yB) {
   ctx2.font = '24px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.95)'; ctx2.textAlign = 'center';
   ctx2.fillText(wizText(s.body, ws.values), XCF(V.W/2), yT + 70);
+  const hdr = s.header || ['SSID', 'Signal Strength'];
   const rowX = XCF(V.W * 0.18), valX = XCF(V.W * 0.78);
   ctx2.font = '18px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.6)';
-  ctx2.textAlign = 'left';  ctx2.fillText('SSID', rowX, yT + 118);
-  ctx2.textAlign = 'right'; ctx2.fillText('Signal Strength', valX + XCF(70), yT + 118);
+  ctx2.textAlign = 'left';  ctx2.fillText(hdr[0], rowX, yT + 118);
+  ctx2.textAlign = 'right'; ctx2.fillText(hdr[1], valX + XCF(70), yT + 118);
+  const rows = wizRows(s, ws);
   const top = yT + 150, pitch = 56;
-  const n = WIZ_AP_LIST.length;
+  const n = rows.length;
   const avail = yB - top - 20;
   const visible = Math.max(3, Math.floor(avail / pitch));
   let first = Math.max(0, Math.min(n - visible, ws.sel - Math.floor(visible/2)));
   if (n <= visible) first = 0;
   for (let i = first; i < Math.min(n, first + visible); i++) {
-    const ap = WIZ_AP_LIST[i];
+    const row = rows[i];
     const y = top + (i - first) * pitch;
     const sel = (i === ws.sel);
     if (sel) {
@@ -9399,11 +9490,15 @@ function drawWizScanList(ctx2, s, ws, yT, yB) {
     ctx2.textAlign = 'left'; ctx2.textBaseline = 'middle';
     ctx2.font = sel ? 'bold 24px PS3' : '23px PS3';
     ctx2.fillStyle = sel ? '#fff' : 'rgba(255,255,255,0.85)';
-    let name = ap.ssid + (ap.priv ? '  (Private Networks Only)' : '');
     let nx = rowX;
-    if (ap.sec !== 'None') { drawWizLock(ctx2, rowX + 8, y, sel); nx = rowX + 30; }
-    ctx2.fillText(name, nx, y);
-    drawWizSignalBars(ctx2, valX, y, ap.signal);
+    if (row.locked) { drawWizLock(ctx2, rowX + 8, y, sel); nx = rowX + 30; }
+    ctx2.fillText(row.label, nx, y);
+    if (row.bars != null) {
+      drawWizSignalBars(ctx2, valX, y, row.bars * 25);
+    } else if (row.right) {
+      ctx2.textAlign = 'right'; ctx2.font = '20px PS3'; ctx2.fillStyle = sel ? '#fff' : 'rgba(255,255,255,0.7)';
+      ctx2.fillText(row.right, valX + XCF(70), y);
+    }
     ctx2.textBaseline = 'alphabetic';
   }
   if (first > 0) { ctx2.fillStyle='rgba(255,255,255,0.5)'; ctx2.textAlign='center'; ctx2.font='20px PS3'; ctx2.fillText('▲', XCF(V.W/2), top-22); }
@@ -9593,7 +9688,15 @@ function drawWizCheck(ctx2, cx, cy, ok) {
 function drawWizStatus(ctx2, s, ws, yT, yB) {
   const v = ws.values;
   let rows;
-  if (s.review) {
+  if (s.btinfo) {
+    const d = v._sel || {};
+    rows = [
+      ['Device Name', d.name || '-'],
+      ['Type', d.type || '-'],
+      ['Connection Status', 'Not Connected'],
+      ['Charge Level', d.type === 'Audio Device' ? '100%' : '-'],
+    ];
+  } else if (s.review) {
     rows = [];
     rows.push(['Connection Method', v.conn || 'Wired Connection']);
     if (v.conn === 'Wireless') { rows.push(['SSID', v.ssid || '-']); rows.push(['Security', v.security || 'None']); }
@@ -9647,6 +9750,7 @@ function drawWizFooter(ctx2, s, ws) {
   else if (foot === 'cancel'){ hint(CANCEL_CX, 'circle', 'Back'); }
   else if (foot === 'enter') { hint(ENTER_CX, 'cross', 'Enter'); hint(CANCEL_CX, 'circle', 'Back'); }
   else if (foot === 'osk')   { hint(ENTER_CX, 'cross', 'Select'); hint(CANCEL_CX, 'circle', 'Back'); }
+  else if (foot === 'scan')  { hint(ENTER_CX, 'cross', 'Start Scanning'); hint(CANCEL_CX, 'circle', 'Back'); }
   else                       { hint(ENTER_CX, 'cross', 'Enter'); hint(CANCEL_CX, 'circle', 'Back'); }
 }
 function defaultFoot(kind) {
