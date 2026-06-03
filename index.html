@@ -1206,7 +1206,7 @@ const DATA = [
   {
     id:'settings', name:'Settings', icon:'xmb_icon_001', color:'#a0a0a0',
     items:[
-      {n:'System Update',i:'xmb_icon_008',d:'Update the PS3\u2122 system software.',action:'dialog'},
+      {n:'System Update',i:'xmb_icon_008',d:'Update the PS3\u2122 system software.',action:'netwiz',wiz:'upd_check'},
       {n:'Game Settings',i:'xmb_icon_005',d:'Adjusts settings for games.',ch:[
           {n:'View Mode (PSP Remasters)',i:'xmb_icon_022',v:'Normal',d:'Configure the screen size for PSP\u00ae Remasters.'},
           {n:'3D Display (PSP Remasters)',i:'xmb_icon_022',v:'Off',d:'Display PSP\u00ae Remasters in 3D.'},
@@ -1232,7 +1232,7 @@ const DATA = [
           {n:'System Language',i:'xmb_icon_022',v:'English (United Kingdom)'},
           {n:'Character Set',i:'xmb_icon_022'},
           {n:'Dictionary Type',i:'xmb_icon_022',v:'English (UK)'},
-          {n:'Add/Edit Term',i:'xmb_icon_022',action:'dialog'},
+          {n:'Add/Edit Term',i:'xmb_icon_022',action:'netwiz',wiz:'at_menu'},
           {n:'Delete Predictive Text Dictionary',i:'xmb_icon_022',action:'dialog',d:'Deletes words that were added automatically to the dictionary when using the on-screen keyboard.'},
           {n:'Notification Messages',i:'xmb_icon_022',v:'Display'},
           {n:'Trophy Notifications',i:'xmb_icon_022',v:'Display'},
@@ -1245,12 +1245,12 @@ const DATA = [
           {n:'Connect PS Vita System Using Network',i:'xmb_icon_022',v:'On'},
           {n:'List of Registered PS Vita Systems',i:'xmb_icon_022',action:'dialog'},
           {n:'Delete PS Vita System\'s Backup Files',i:'xmb_icon_022',action:'dialog',d:'Deletes backup files for the PS Vita system saved on this system.'},
-          {n:'Format Utility',i:'xmb_icon_022',action:'dialog'},
-          {n:'Backup Utility',i:'xmb_icon_022',action:'dialog'},
-          {n:'Data Transfer Utility',i:'xmb_icon_022',action:'dialog'},
-          {n:'Restore Default Settings',i:'xmb_icon_022',action:'dialog'},
-          {n:'Restore PS3\u2122 System',i:'xmb_icon_022',action:'dialog'},
-          {n:'System Information',i:'xmb_icon_022',action:'dialog'}
+          {n:'Format Utility',i:'xmb_icon_022',action:'netwiz',wiz:'fmt_method'},
+          {n:'Backup Utility',i:'xmb_icon_022',action:'netwiz',wiz:'bak_op'},
+          {n:'Data Transfer Utility',i:'xmb_icon_022',action:'netwiz',wiz:'dt_info'},
+          {n:'Restore Default Settings',i:'xmb_icon_022',action:'netwiz',wiz:'rds_confirm'},
+          {n:'Restore PS3\u2122 System',i:'xmb_icon_022',action:'netwiz',wiz:'rps_confirm'},
+          {n:'System Information',i:'xmb_icon_022',action:'netwiz',wiz:'sysinfo'}
         ]},
       {n:'Theme Settings',i:'xmb_icon_023',d:'Adjusts settings related to the appearance of the XMB\u2122 screen.',ch:[
           // FOUR items, verified by RPCS3 capture of the real EU firmware Theme
@@ -1269,8 +1269,8 @@ const DATA = [
           {n:'Time Format',i:'xmb_icon_022',v:'24-Hour Clock',d:'Sets the time display to either a 12-hour or 24-hour clock.'},
           {n:'Time Zone',i:'xmb_icon_022',v:'GMT'},
           {n:'Daylight Saving',i:'xmb_icon_022',v:'Off',d:'Sets for daylight saving time.'},
-          {n:'Set via Internet',i:'xmb_icon_022',action:'dialog',d:'Obtains the correct date and time automatically via the Internet when you sign in to PSN, and sets them on your system.'},
-          {n:'Set Manually',i:'xmb_icon_022',action:'dialog'}
+          {n:'Set via Internet',i:'xmb_icon_022',action:'netwiz',wiz:'svi_progress',d:'Obtains the correct date and time automatically via the Internet when you sign in to PSN, and sets them on your system.'},
+          {n:'Set Manually',i:'xmb_icon_022',action:'netwiz',wiz:'sm_date'}
         ]},
       {n:'Power Save Settings',i:'xmb_icon_056',d:'Adjusts settings to reduce power usage by this system.',ch:[
           {n:'System Auto-Off',i:'xmb_icon_022',v:'Off',d:'Sets whether or not to automatically turn off this system. If you do not operate the system for a set amount of time, the system will turn off automatically.'},
@@ -1285,7 +1285,7 @@ const DATA = [
           {n:'BD Remote Control Registration',i:'xmb_icon_022',action:'netwiz',wiz:'bt_bd_remote',d:'Register the BD Remote Control.'},
           {n:'Manage Bluetooth\u00ae Devices',i:'xmb_icon_022',action:'netwiz',wiz:'bt_manage',d:'Manage Bluetooth\u00ae devices.'},
           {n:'Camera Device Settings',i:'xmb_icon_022',action:'dialog',d:'Tests the image from a camera that is connected to the system using a USB cable. You can adjust settings to reduce flickering for some cameras.'},
-          {n:'Audio Device Settings',i:'xmb_icon_022',action:'dialog',d:'Sets the audio input and output devices for voice/video chat and other communication features.'},
+          {n:'Audio Device Settings',i:'xmb_icon_022',action:'netwiz',wiz:'ad_menu',d:'Sets the audio input and output devices for voice/video chat and other communication features.'},
           {n:'Stereo Headset Audio Extension',i:'xmb_icon_022',v:'Off',d:'Sets whether or not to output all audio to the headset.'},
           {n:'Voice Changer',i:'xmb_icon_022',d:'You can change the voice that is input using an audio input device.'},
           {n:'Keyboard Type',i:'xmb_icon_022',v:'English (US)',d:'Select the keyboard type.'},
@@ -1297,7 +1297,7 @@ const DATA = [
         ]},
       {n:'Printer Settings',i:'xmb_icon_010',d:'Adjusts settings for printers that are connected to this system.',action:'dialog'},
       {n:'Display Settings',i:'xmb_icon_016',d:'Adjusts settings for video output.',ch:[
-          {n:'Video Output Settings',i:'xmb_icon_022',d:'Configure video output settings according to your TV.',action:'dialog'},
+          {n:'Video Output Settings',i:'xmb_icon_022',d:'Configure video output settings according to your TV.',action:'netwiz',wiz:'vid_connector'},
           {n:'Screen Saver',i:'xmb_icon_022',v:'After 20 Minutes',d:'Configure the screen saver settings.'},
           {n:'Cross Color Reduction Filter',i:'xmb_icon_022',v:'Off',d:'Reduces rainbow-effect artifacts. This setting is used when the system outputs composite signal to a VIDEO IN or SCART connector.'},
           {n:'50 Hz Video Output',i:'xmb_icon_022',v:'Auto',d:'Sets the playback method for content recorded at 50 Hz. This setting is used when playing content saved on the system storage or storage media.'},
@@ -1309,7 +1309,7 @@ const DATA = [
           {n:'Control for HDMI',i:'xmb_icon_022',v:'Off',d:'The system and devices connected via HDMI can operate each other.'}
         ]},
       {n:'Sound Settings',i:'xmb_icon_017',d:'Adjusts settings for audio output.',ch:[
-          {n:'Audio Output Settings',i:'xmb_icon_022',d:'Configure audio output settings.',action:'dialog'},
+          {n:'Audio Output Settings',i:'xmb_icon_022',d:'Configure audio output settings.',action:'netwiz',wiz:'aud_connector'},
           {n:'Audio Multi-Output',i:'xmb_icon_022',v:'Off',d:'Sets to output audio through multiple connectors simultaneously. Audio output to connectors that are not selected in [Audio Output Settings] is downscaled to 2 Ch.'},
           {n:'Audio Output Device',i:'xmb_icon_022',v:'System Default',d:'Sets the audio output device for use during remote play. To output audio from a PS Vita system, a PSP\u2122 system, a PC or a mobile phone, select [Remote Play Device].'},
           {n:'Key Tone',i:'xmb_icon_022',v:'On',d:'Sets whether or not to use key tones on the XMB\u2122 menu.'},
@@ -1319,7 +1319,7 @@ const DATA = [
           {n:'BD Audio Output Format (HDMI)',i:'xmb_icon_022',v:'Linear PCM',d:'Set the BD audio output format.'}
         ]},
       {n:'Security Settings',i:'xmb_icon_018',d:'Adjusts parental control settings.',ch:[
-          {n:'Change Password',i:'xmb_icon_022',action:'dialog'},
+          {n:'Change Password',i:'xmb_icon_022',action:'netwiz',wiz:'pwd_new'},
           {n:'Parental Control',i:'xmb_icon_022',v:'Off'},
           {n:'Internet Browser Start Control',i:'xmb_icon_022',v:'Off'},
           {n:'BD Parental Control',i:'xmb_icon_022',v:'Off'},
@@ -1327,9 +1327,9 @@ const DATA = [
         ]},
       {n:'Remote Play Settings',i:'xmb_icon_020',d:'Adjusts settings for remote play. Remote play enables you to use a device that supports the remote play feature (such as a PSP\u2122 system) to operate this system over a network.',ch:[
           {n:'Remote Start',i:'xmb_icon_022',v:'Off',d:'Sets whether or not to turn on this system automatically when a registered device is connected for remote play.'},
-          {n:'Register Device',i:'xmb_icon_022',action:'dialog',d:'Register a remote play device with this system.'},
-          {n:'Status of Registered Devices',i:'xmb_icon_022',action:'dialog'},
-          {n:'Delete Registered Device',i:'xmb_icon_022',action:'dialog'}
+          {n:'Register Device',i:'xmb_icon_022',action:'netwiz',wiz:'rp_register',d:'Register a remote play device with this system.'},
+          {n:'Status of Registered Devices',i:'xmb_icon_022',action:'netwiz',wiz:'rp_status'},
+          {n:'Delete Registered Device',i:'xmb_icon_022',action:'netwiz',wiz:'rp_delete'}
         ]},
       {n:'Network Settings',i:'xmb_icon_006',d:'Adjusts settings for the Internet connection.',ch:[
           {n:'Settings and Connection Status List',i:'xmb_icon_022',action:'netwiz',wiz:'status_list',d:'Displays current network settings and connection status.'},
@@ -9056,6 +9056,115 @@ const NETCONF = {
   // Generic free-text item editor (System Name, etc.) bound via wizState.values.
   item_text: {kind:'text_entry', title: v => v._title || 'Edit', label: v => v._label || '',
     field:'_text', fmt:'ascii', maxLen:16},
+
+  // ===================== SYSTEM INFORMATION =====================
+  sysinfo: {kind:'status', title:'System Information', sysinfo:true, foot:'ok'},
+
+  // ===================== VIDEO OUTPUT SETTINGS =====================
+  vid_connector: {kind:'chooser', title:'Video Output Settings',
+    body:'Select the type of connector on your TV.',
+    options:['HDMI','Composite / S Video','Component / D-Terminal','AV MULTI / SCART']},
+  vid_resolution: {kind:'checklist', title:'Video Output Settings',
+    body:'Select all resolutions that are supported by your TV.',
+    items:['480p','576p','720p','1080i','1080p'], checked:[2,3,4], finish:'Set Audio Output Settings', next:'vid_test'},
+  vid_test: {kind:'confirm', title:'Video Output Settings',
+    body:'Can you read this screen?\nSelect [Yes] if you can.\n\nIf you do not press any buttons, the system will automatically go back to the previous setting.'},
+  vid_done: {kind:'result', title:'Video Output Settings', body:'The video output settings have been updated.', status:'ok', foot:'enter', next:'__close__'},
+
+  // ===================== AUDIO OUTPUT SETTINGS =====================
+  aud_connector: {kind:'chooser', title:'Audio Output Settings',
+    body:'Select the connector on the TV or AV amplifier (receiver).',
+    options:['HDMI','Optical Digital','Audio Input Connector / SCART / AV MULTI']},
+  aud_method: {kind:'chooser', title:'Audio Output Settings',
+    body:'Select the method for setting the output format.', options:['Automatic','Manual']},
+  aud_formats: {kind:'checklist', title:'Audio Output Settings',
+    body:'Select an output format supported by the TV or AV amplifier (receiver) in use.',
+    items:['Linear PCM 2 Ch. 44.1 kHz','Linear PCM 5.1 Ch.','Linear PCM 7.1 Ch.','Dolby Digital 5.1 Ch.','DTS 5.1 Ch.','AAC'],
+    checked:[0], finish:'Finish', next:'aud_done'},
+  aud_done: {kind:'result', title:'Audio Output Settings', body:'The audio output settings have been updated.', status:'ok', foot:'enter', next:'__close__'},
+
+  // ===================== FORMAT UTILITY =====================
+  fmt_method: {kind:'chooser', title:'Format Utility',
+    body:'Formats the system storage. All data on the system storage will be deleted during formatting.',
+    options:['Quick Format','Full Format']},
+  fmt_confirm: {kind:'confirm', title:'Format Utility',
+    body:'All data on the system storage will be erased.\nAre you sure you want to continue?'},
+  fmt_progress: {kind:'progress', title:'Format Utility', body:'Formatting...\nDo not remove the storage media.', autoMs:3200, next:'fmt_done'},
+  fmt_done: {kind:'result', title:'Format Utility', body:'Format completed.', status:'ok', foot:'enter', next:'__close__'},
+
+  // ===================== BACKUP UTILITY =====================
+  bak_op: {kind:'chooser', title:'Backup Utility',
+    body:'Back up or restore data on the system storage.\nSelect the operation you want to perform.',
+    options:['Back Up','Restore','Delete Backup Data']},
+  bak_backup_confirm: {kind:'confirm', title:'Backup Utility',
+    body:'Do you want to back up data on the system storage to other storage media?\n\nLimitations may apply when backing up certain copyright-protected content.'},
+  bak_backing: {kind:'progress', title:'Backup Utility', body:'Backing up...\nDo not remove the storage media.', autoMs:3200, next:'bak_backup_done'},
+  bak_backup_done: {kind:'result', title:'Backup Utility', body:'Back up completed.', status:'ok', foot:'enter', next:'__close__'},
+  bak_none: {kind:'result', title:'Backup Utility', body:'There is no backup data.\nConnect storage media that contains the backup data.', status:'fail', foot:'ok', next:'__close__'},
+
+  // ===================== RESTORE DEFAULT SETTINGS =====================
+  rds_confirm: {kind:'confirm', title:'Restore Default Settings',
+    body:'Restores the system software to its default settings.\nAre you sure you want to continue?'},
+  rds_progress: {kind:'progress', title:'Restore Default Settings', body:'Please wait...', autoMs:2600, next:'rds_done'},
+  rds_done: {kind:'result', title:'Restore Default Settings', body:'Restore completed.\nThe default settings have been restored.', status:'ok', foot:'enter', next:'__close__'},
+
+  // ===================== RESTORE PS3 SYSTEM =====================
+  rps_confirm: {kind:'confirm', title:'Restore PS3™ System',
+    body:'Formats the system storage and restores the system software to its default settings.\nAre you sure you want to continue?'},
+  rps_progress: {kind:'progress', title:'Restore PS3™ System', body:'Formatting...\nDo not turn off the system.', autoMs:3400, next:'rps_done'},
+  rps_done: {kind:'result', title:'Restore PS3™ System', body:'The system has been restored to its default settings.', status:'ok', foot:'enter', next:'__close__'},
+
+  // ===================== SYSTEM UPDATE =====================
+  upd_check: {kind:'progress', title:'System Update', body:'Checking for the latest version of the system software...', autoMs:2600, next:'upd_uptodate'},
+  upd_uptodate: {kind:'result', title:'System Update', body:'The system software is up to date.\n\nThe latest version of the system software has already been installed.', status:'ok', foot:'ok', next:'__close__'},
+
+  // ===================== CHANGE PASSWORD =====================
+  pwd_new: {kind:'text_entry', title:'Change Password', label:'Enter a new 4-digit password.', field:'pw1', fmt:'pin', mask:true, maxLen:4},
+  pwd_confirm: {kind:'text_entry', title:'Change Password', label:'Enter the new password again to confirm.', field:'pw2', fmt:'pin', mask:true, maxLen:4},
+  pwd_mismatch: {kind:'result', title:'Change Password', body:'The passwords do not match.\nTry again.', status:'fail', foot:'enter', next:'pwd_new'},
+  pwd_done: {kind:'result', title:'Change Password', body:'The password has been changed.', status:'ok', foot:'enter', next:'__close__'},
+
+  // ===================== DATE/TIME: Set via Internet / Manually =====================
+  svi_progress: {kind:'progress', title:'Set via Internet', body:'Obtaining the date and time via the Internet...', autoMs:2600, next:'svi_done'},
+  svi_done: {kind:'result', title:'Set via Internet', body:'The date and time have been set.', status:'ok', foot:'enter', next:'__close__'},
+  sm_date: {kind:'text_entry', title:'Set Manually', label:'Date (YYYY/MM/DD)', field:'_date', fmt:'date', maxLen:10},
+  sm_time: {kind:'text_entry', title:'Set Manually', label:'Time (HH:MM)', field:'_time', fmt:'time', maxLen:5},
+  sm_done: {kind:'result', title:'Set Manually', body:'The date and time have been set.', status:'ok', foot:'enter', next:'__close__'},
+
+  // ===================== REMOTE PLAY: Register Device =====================
+  rp_register: {kind:'info', title:'Register Device',
+    body:'Using the device you want to register, select [Settings] > [Network Settings] > [Internet Connection], and then enter the numbers shown below.\n\nRegistration code:  2461-8053\n\nThe registration code is valid for 5 minutes.',
+    foot:'enter-cancel', next:'rp_waiting'},
+  rp_waiting: {kind:'progress', title:'Register Device', body:'Waiting for the device to connect...', autoMs:3200, next:'rp_done'},
+  rp_done: {kind:'result', title:'Register Device', body:'Registration completed.', status:'ok', foot:'enter', next:'__close__'},
+  rp_status: {kind:'status', title:'Status of Registered Devices', rpstatus:true, foot:'ok'},
+  rp_delete: {kind:'result', title:'Delete Registered Device', body:'There are no registered devices.', status:'fail', foot:'ok', next:'__close__'},
+
+  // ===================== DATA TRANSFER UTILITY =====================
+  dt_info: {kind:'info', title:'Data Transfer Utility',
+    body:'Transfers data from your current PS3™ system to a new PS3™ system over a network.\n\nConnect both systems to the same network, then follow the on-screen instructions on each system.',
+    foot:'enter-cancel', next:'dt_method'},
+  dt_method: {kind:'chooser', title:'Data Transfer Utility',
+    body:'Select the system you are using.', options:['This is the system to transfer data from','This is the system to transfer data to']},
+  dt_progress: {kind:'progress', title:'Data Transfer Utility', body:'Searching for the other PS3™ system...', autoMs:3000, next:'dt_notfound'},
+  dt_notfound: {kind:'result', title:'Data Transfer Utility', body:'The other PS3™ system was not found.\nCheck that both systems are connected to the same network.', status:'fail', foot:'ok', next:'__close__'},
+
+  // ===================== ADD/EDIT TERM =====================
+  at_menu: {kind:'chooser', title:'Add/Edit Term', body:'Add words to be displayed as options for predictive text entry.\nSelect an option.',
+    options:['Add Term','Delete All']},
+  at_term: {kind:'text_entry', title:'Add/Edit Term', label:'Term', field:'_term', fmt:'ascii', maxLen:30},
+  at_reading: {kind:'text_entry', title:'Add/Edit Term', label:'Reading', field:'_reading', fmt:'ascii', maxLen:30},
+  at_done: {kind:'result', title:'Add/Edit Term', body:'The term has been added.', status:'ok', foot:'enter', next:'__close__'},
+  at_delall: {kind:'confirm', title:'Add/Edit Term', body:'All terms that were added will be deleted.\nAre you sure you want to continue?'},
+  at_delall_done: {kind:'result', title:'Add/Edit Term', body:'Deletion completed.', status:'ok', foot:'enter', next:'__close__'},
+
+  // ===================== AUDIO DEVICE SETTINGS =====================
+  ad_menu: {kind:'chooser', title:'Audio Device Settings',
+    body:'Sets the audio input and output devices.\nSelect an option.',
+    options:['Input Device','Output Device','Microphone Level']},
+  ad_input: {kind:'chooser', title:'Audio Device Settings', body:'Input Device', options:['System Default Device','None']},
+  ad_output: {kind:'chooser', title:'Audio Device Settings', body:'Output Device', options:['System Default Device','None']},
+  ad_miclevel: {kind:'chooser', title:'Audio Device Settings', body:'Microphone Level', options:['1','2','3','4','5']},
   wlan_ssid_entry: {kind:'text_entry', title:'SSID', label:'SSID', field:'ssid', fmt:'ascii', maxLen:32},
 
   wlan_security: {kind:'chooser', title:'WLAN Security Setting', body:'Security', options:WIZ_SECURITY_OPTS},
@@ -9154,6 +9263,7 @@ function wizEnterScreen(id, initial) {
   }
   if (s.kind === 'confirm') ws.sel = (id === 'cancel_confirm' || id === 'easy_settings_list' || id === 'bt_delete_confirm') ? 1 : 0;
   if (s.kind === 'test') { ws.testPhase = 0; ws.testStart = performance.now(); }
+  if (s.kind === 'checklist') { ws.checks = new Set(s.checked || []); ws.sel = 0; }
   // Reaching "Register completed." adds the device to the registered list.
   if (id === 'bt_register_done' && ws.values._btDev) {
     if (!BT_REGISTERED.some(d => d.name === ws.values._btDev.name)) BT_REGISTERED.push(ws.values._btDev);
@@ -9299,6 +9409,66 @@ function wizNext(id, choice) {
       if (it) { it.v = v._text; saveSetting(it.n, v._text); }
       return '__close__';
     }
+    // ---- System Information ----
+    case 'sysinfo': return '__close__';
+    // ---- Video Output ----
+    case 'vid_connector': v._vidconn = choice; return 'vid_resolution';
+    case 'vid_test': return (choice === 'Yes') ? 'vid_done' : 'vid_resolution';
+    case 'vid_done': return '__close__';
+    // ---- Audio Output ----
+    case 'aud_connector': v._audconn = choice; return 'aud_method';
+    case 'aud_method': return (choice === 'Manual') ? 'aud_formats' : 'aud_done';
+    case 'aud_done': return '__close__';
+    // ---- Format ----
+    case 'fmt_method': v._fmt = choice; return 'fmt_confirm';
+    case 'fmt_confirm': return (choice === 'Yes') ? 'fmt_progress' : '__back2__';
+    case 'fmt_done': return '__close__';
+    // ---- Backup ----
+    case 'bak_op':
+      if (choice === 'Back Up') return 'bak_backup_confirm';
+      return 'bak_none';                                   // Restore / Delete: no media
+    case 'bak_backup_confirm': return (choice === 'Yes') ? 'bak_backing' : '__back2__';
+    case 'bak_backup_done': return '__close__';
+    case 'bak_none': return '__close__';
+    // ---- Restore Default / PS3 ----
+    case 'rds_confirm': return (choice === 'Yes') ? 'rds_progress' : '__back2__';
+    case 'rds_done': return '__close__';
+    case 'rps_confirm': return (choice === 'Yes') ? 'rps_progress' : '__back2__';
+    case 'rps_done': return '__close__';
+    // ---- System Update ----
+    case 'upd_uptodate': return '__close__';
+    // ---- Change Password ----
+    case 'pwd_new': return 'pwd_confirm';
+    case 'pwd_confirm': return (v.pw1 === v.pw2) ? 'pwd_done' : 'pwd_mismatch';
+    case 'pwd_mismatch': return 'pwd_new';
+    case 'pwd_done': return '__close__';
+    // ---- Date/Time ----
+    case 'svi_done': return '__close__';
+    case 'sm_date': return 'sm_time';
+    case 'sm_time': return 'sm_done';
+    case 'sm_done': return '__close__';
+    // ---- Remote Play ----
+    case 'rp_register': return 'rp_waiting';
+    case 'rp_done': return '__close__';
+    case 'rp_status': return '__close__';
+    case 'rp_delete': return '__close__';
+    // ---- Data Transfer ----
+    case 'dt_info': return 'dt_method';
+    case 'dt_method': return 'dt_progress';
+    case 'dt_notfound': return '__close__';
+    // ---- Add/Edit Term ----
+    case 'at_menu': return (choice === 'Add Term') ? 'at_term' : 'at_delall';
+    case 'at_term': return 'at_reading';
+    case 'at_reading': return 'at_done';
+    case 'at_done': return '__close__';
+    case 'at_delall': return (choice === 'Yes') ? 'at_delall_done' : '__back2__';
+    case 'at_delall_done': return '__close__';
+    // ---- Audio Device Settings ----
+    case 'ad_menu':
+      if (choice === 'Input Device') return 'ad_input';
+      if (choice === 'Output Device') return 'ad_output';
+      return 'ad_miclevel';
+    case 'ad_input': case 'ad_output': case 'ad_miclevel': return '__back2__';
     default: return '__close__';
   }
 }
@@ -9321,6 +9491,16 @@ function wizConfirm() {
     choice = (ws.sel === 0) ? 'Yes' : 'No';
   } else if (s.kind === 'scan_list') {
     if (s.onSelect) { const nx = s.onSelect(ws.values, ws.sel); if (nx) wizGo(nx); return; }
+    return;
+  } else if (s.kind === 'checklist') {
+    const items = s.items || [];
+    if (ws.sel < items.length) {                 // toggle a checkbox
+      if (ws.checks.has(ws.sel)) ws.checks.delete(ws.sel); else ws.checks.add(ws.sel);
+      playCursor();
+    } else {                                      // Finish row
+      ws.values._checked = items.filter((_, i) => ws.checks.has(i));
+      wizGo(s.next);
+    }
     return;
   } else if (s.kind === 'progress' || s.kind === 'test') {
     return;                                        // auto-advances
@@ -9355,6 +9535,9 @@ function wizValidate(s, val) {
       return null;
     }
     case 'num': return /^\d+$/.test(val) ? null : 'The value you entered is not valid.';
+    case 'pin': return /^\d{4}$/.test(val) ? null : 'Enter a 4-digit number.';
+    case 'date': return /^\d{4}\/\d{2}\/\d{2}$/.test(val) ? null : 'Enter the date as YYYY/MM/DD.';
+    case 'time': return /^\d{2}:\d{2}$/.test(val) ? null : 'Enter the time as HH:MM.';
     case 'port': {
       if (!/^\d+$/.test(val)) return 'The port number is invalid.\nEnter a number from 1 to 65535.';
       const n = +val; return (n >= 1 && n <= 65535) ? null : 'The port number is invalid.\nEnter a number from 1 to 65535.';
@@ -9444,6 +9627,9 @@ function wizNavItem(dir) {
     ws.sel = (ws.sel + dir + n) % n; playCursor();
   } else if (s.kind === 'scan_list') {
     const n = wizRows(s, ws).length; if (!n) return;
+    ws.sel = (ws.sel + dir + n) % n; playCursor();
+  } else if (s.kind === 'checklist') {
+    const n = (s.items || []).length + 1;   // +1 for the Finish row
     ws.sel = (ws.sel + dir + n) % n; playCursor();
   } else if (s.kind === 'confirm') {
     ws.sel = ws.sel === 0 ? 1 : 0; playCursor();
@@ -9577,6 +9763,7 @@ function drawWizSlide(ctx2, view, offX, now, yT, yB) {
     case 'chooser':   drawWizChooser(ctx2, s, view, yT, yB); break;
     case 'confirm':   drawWizConfirm(ctx2, s, view, yT, yB); break;
     case 'scan_list': drawWizScanList(ctx2, s, view, yT, yB); break;
+    case 'checklist': drawWizChecklist(ctx2, s, view, yT, yB); break;
     case 'text_entry':drawWizTextEntry(ctx2, s, view, yT, yB, now); break;
     case 'progress':  drawWizProgress(ctx2, s, view, yT, yB, now); break;
     case 'test':      drawWizTest(ctx2, s, view, yT, yB, now); break;
@@ -9584,6 +9771,36 @@ function drawWizSlide(ctx2, view, offX, now, yT, yB) {
     case 'status':    drawWizStatus(ctx2, s, view, yT, yB); break;
   }
   ctx2.restore();
+}
+
+function drawWizChecklist(ctx2, s, ws, yT, yB) {
+  ctx2.font = '24px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.95)'; ctx2.textAlign = 'center';
+  const bodyLines = wrapLines(ctx2, wizText(s.body, ws.values), (V.W - 400) * LAYOUT_FIT);
+  let ty = yT + 70; for (const ln of bodyLines) { ctx2.fillText(ln, XCF(V.W/2), ty); ty += 30; }
+  const items = s.items || [];
+  const cx = XCF(V.W * 0.34), boxX = XCF(V.W * 0.30);
+  const top = yT + 150, pitch = 48;
+  const checks = ws.checks || new Set();
+  ctx2.textBaseline = 'middle';
+  for (let i = 0; i < items.length; i++) {
+    const y = top + i * pitch, sel = (i === ws.sel);
+    // checkbox
+    ctx2.save(); ctx2.shadowColor = 'rgba(0,0,0,0)';
+    ctx2.strokeStyle = sel ? '#fff' : 'rgba(255,255,255,0.7)'; ctx2.lineWidth = 2;
+    ctx2.strokeRect(boxX, y - 11, 22, 22);
+    if (checks.has(i)) {
+      ctx2.strokeStyle = '#7fe07f'; ctx2.lineWidth = 3; ctx2.beginPath();
+      ctx2.moveTo(boxX+4, y); ctx2.lineTo(boxX+9, y+6); ctx2.lineTo(boxX+19, y-7); ctx2.stroke();
+    }
+    ctx2.restore();
+    ctx2.textAlign = 'left'; ctx2.font = sel ? 'bold 24px PS3' : '23px PS3';
+    ctx2.fillStyle = sel ? '#fff' : 'rgba(255,255,255,0.85)';
+    ctx2.fillText(items[i], boxX + 36, y);
+  }
+  // Finish row
+  const fy = top + items.length * pitch + 16, fsel = (ws.sel === items.length);
+  drawDialogOption(ctx2, s.finish || 'Finish', XCF(V.W/2), fy, fsel, 'center');
+  ctx2.textBaseline = 'alphabetic';
 }
 
 function wizSnapshot(ws) {
@@ -9868,7 +10085,17 @@ function drawWizCheck(ctx2, cx, cy, ok) {
 function drawWizStatus(ctx2, s, ws, yT, yB) {
   const v = ws.values;
   let rows;
-  if (s.btinfo) {
+  if (s.sysinfo) {
+    rows = [
+      ['System Software', 'Version 4.92'],
+      ['Model', 'CECH-2504B'],
+      ['MAC Address', '00:1A:EF:5A:C3:7B'],
+      ['IP Address', '192.168.1.10'],
+      ['System Storage', '438 GB / 465 GB free'],
+    ];
+  } else if (s.rpstatus) {
+    rows = [['Registered Devices', '(None)']];
+  } else if (s.btinfo) {
     const d = v._sel || {};
     rows = [
       ['Device Name', d.name || '-'],
