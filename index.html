@@ -10479,7 +10479,7 @@ let groupReflow = null;   // {start} -- staggered fan-in of the regrouped list (
 // audio-reactive (AnalyserNode frequency data).
 // ============================================================================
 let musicPlayer = null;     // {tracks, idx, vis}
-const MP_VIS = ['XMB Waves', 'Electric Mountains', 'Globe'];
+const MP_VIS = ['XMB Waves', 'Canyon', 'Globe'];
 let mpAudio = null, mpCtx = null, mpAnalyser = null, mpFreq = null, mpSrc = null;
 let mpVisName = null;        // {text, start} brief visualizer-name banner
 
@@ -10584,6 +10584,73 @@ function mpDrawGlobe(lon, lat, scale) {
   return true;
 }
 
+// ---- Canyon visualizer (canyon.qrc): raymarched teal terrain fly-through ----
+// Reverse-engineered from canyon.qrc (CANYON_CAMERA/TERRAIN/FOG/COLOUR/LINE
+// params: camera height, forward fly POS SPEED, look-down target, fog-to-black,
+// glowing crest LINE) + the music2.mp4 reference (teal rolling dunes, bright
+// electric contour lines). Rendered on the shared #globe WebGL context.
+let canyonProg = null, canyonBuf = null;
+function initCanyon() {
+  initGlobe(); const gl = globeGL; if (!gl || canyonProg) return;
+  const vs = 'attribute vec2 p; void main(){ gl_Position=vec4(p,0.,1.); }';
+  const fs = [
+    'precision highp float;',
+    'uniform vec2 uRes; uniform float uTime; uniform float uBass; uniform float uMid;',
+    'float hash(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }',
+    'float noise(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f);',
+    '  float a=hash(i),b=hash(i+vec2(1,0)),c=hash(i+vec2(0,1)),d=hash(i+vec2(1,1));',
+    '  return mix(mix(a,b,f.x),mix(c,d,f.x),f.y); }',
+    'float fbm(vec2 p){ float s=0.0,a=0.5; for(int i=0;i<4;i++){ s+=a*noise(p); p=p*2.0; a*=0.5; } return s; }',
+    'float terr(vec2 p){ return (fbm(p*0.22)-0.5)*2.8*(1.0+uBass*0.4); }',  // smooth rolling dunes
+    'void main(){',
+    '  vec2 uv=(gl_FragCoord.xy/uRes-0.5); uv.x*=uRes.x/uRes.y;',
+    '  vec3 ro=vec3(0.0, 2.4, uTime*3.2);',                 // camera height + forward fly (POS SPEED)
+    '  vec3 ta=vec3(0.0, 1.0, ro.z+6.0);',                  // look slightly down + ahead (TARGET)
+    '  vec3 f=normalize(ta-ro), r=normalize(cross(vec3(0,1,0),f)), u=cross(f,r);',
+    '  vec3 rd=normalize(uv.x*r+uv.y*u+1.5*f);',            // 1.5 ~ ZOOM
+    '  float t=0.0, hit=-1.0;',
+    '  for(int i=0;i<110;i++){',
+    '    vec3 p=ro+rd*t; float d=p.y-terr(p.xz);',
+    '    if(d<0.02){ hit=t; break; }',
+    '    t+=max(0.04, d*0.45); if(t>55.0) break; }',
+    '  vec3 col=vec3(0.0);',
+    '  if(hit>0.0){',
+    '    vec3 p=ro+rd*hit; vec2 e=vec2(0.06,0.0);',
+    '    vec3 n=normalize(vec3(terr(p.xz-e.xy)-terr(p.xz+e.xy), 2.0*e.x, terr(p.xz-e.yx)-terr(p.xz+e.yx)));',
+    '    float diff=clamp(dot(n,normalize(vec3(0.2,0.8,-0.3))),0.0,1.0);',
+    '    vec3 teal=vec3(0.0,0.52,0.58);',
+    '    col=teal*(0.08+0.55*diff);',
+    '    float fres=pow(1.0-clamp(dot(n,-rd),0.0,1.0),2.2);',   // bright teal rim on grazing slopes
+    '    col+=vec3(0.20,1.0,1.0)*fres*0.7*(0.6+uMid*1.0);',
+    '    float streak=smoothstep(0.62,1.0, fbm(p.xz*0.35 + vec2(0.0, uTime*0.6)));',  // flowing electric streaks
+    '    col+=vec3(0.25,1.0,1.0)*streak*diff*0.55*(0.5+uBass);',
+    '    col*=exp(-hit*0.05);',                            // fog to black
+    '  }',
+    '  gl_FragColor=vec4(col,1.0);',
+    '}'].join('\n');
+  function sh(tp,src){ const o=gl.createShader(tp); gl.shaderSource(o,src); gl.compileShader(o);
+    if(!gl.getShaderParameter(o,gl.COMPILE_STATUS)) console.error('canyon',gl.getShaderInfoLog(o)); return o; }
+  const pr=gl.createProgram(); gl.attachShader(pr,sh(gl.VERTEX_SHADER,vs)); gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,fs)); gl.linkProgram(pr); canyonProg=pr;
+  canyonBuf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,canyonBuf);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
+}
+let mpCanyonTime = 0;
+function mpDrawCanyon(bands) {
+  initCanyon(); const gl=globeGL; if(!gl||!canyonProg) return false;
+  if(globeCanvas.width!==xmbCanvas.width||globeCanvas.height!==xmbCanvas.height){ globeCanvas.width=xmbCanvas.width; globeCanvas.height=xmbCanvas.height; }
+  mpCanyonTime += 0.016*(1.0+bands.bass*0.5);
+  const W=gl.drawingBufferWidth,H=gl.drawingBufferHeight;
+  gl.viewport(0,0,W,H); gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.useProgram(canyonProg); gl.bindBuffer(gl.ARRAY_BUFFER,canyonBuf);
+  const lp=gl.getAttribLocation(canyonProg,'p'); gl.enableVertexAttribArray(lp); gl.vertexAttribPointer(lp,2,gl.FLOAT,false,0,0);
+  gl.uniform2f(gl.getUniformLocation(canyonProg,'uRes'),W,H);
+  gl.uniform1f(gl.getUniformLocation(canyonProg,'uTime'),mpCanyonTime);
+  gl.uniform1f(gl.getUniformLocation(canyonProg,'uBass'),bands.bass);
+  gl.uniform1f(gl.getUniformLocation(canyonProg,'uMid'),bands.mid);
+  gl.drawArrays(gl.TRIANGLES,0,6);
+  return true;
+}
+
 // ---- Visualizer backgrounds (drawn full-frame on the 2D canvas) ----
 function drawVisWaves(ctx2, bands) {
   // The live WebGL wave shows through where the 2D canvas is transparent; add a
@@ -10595,41 +10662,12 @@ function drawVisWaves(ctx2, bands) {
   g.addColorStop(0,'rgba(0,0,0,'+(a+0.12).toFixed(2)+')'); g.addColorStop(0.4,'rgba(0,0,0,'+a.toFixed(2)+')'); g.addColorStop(1,'rgba(0,0,0,'+(a+0.18).toFixed(2)+')');
   ctx2.fillStyle = g; ctx2.fillRect(0,0,cw,ch);
 }
-function drawVisMountains(ctx2, bands) {
-  ctx2.setTransform(dpr*scaleX,0,0,dpr*scaleY,0,frameCenterTY());
-  // night-sky background
-  const bg = ctx2.createLinearGradient(0,0,0,V.H);
-  bg.addColorStop(0,'#05010f'); bg.addColorStop(0.55,'#0a0420'); bg.addColorStop(1,'#02010a');
-  ctx2.fillStyle = bg; ctx2.fillRect(0,0,XCF(V.W),V.H);
-  const bins = bands.bins; const N = bins ? bins.length : 64;
-  // layered electric ridges (back -> front), parallax scroll, audio-driven height
-  const layers = [
-    {base:0.62, amp:120, col:'rgba(120,60,200', speed:0.00018, glow:10},
-    {base:0.74, amp:170, col:'rgba(60,120,255', speed:0.00030, glow:14},
-    {base:0.88, amp:230, col:'rgba(40,230,255', speed:0.00048, glow:18},
-  ];
-  const t = performance.now();
-  for (const L of layers) {
-    const baseY = V.H * L.base;
-    ctx2.beginPath(); ctx2.moveTo(0, V.H);
-    const steps = 90;
-    for (let s=0;s<=steps;s++){
-      const x = XCF(V.W) * (s/steps);
-      const phase = (s/steps)*6 + t*L.speed*1000;
-      const bi = Math.floor(((Math.sin(phase)*0.5+0.5))*(N*0.6));
-      const energy = bins ? bins[bi]/255 : (Math.sin(phase*1.7)*0.4+0.4);
-      const ridge = Math.abs(Math.sin(phase*1.3))*0.4 + energy*0.9;
-      const y = baseY - ridge*L.amp*(0.6+bands.bass*0.8);
-      ctx2.lineTo(x, y);
-    }
-    ctx2.lineTo(XCF(V.W), V.H); ctx2.closePath();
-    const fill = ctx2.createLinearGradient(0,baseY-L.amp,0,V.H);
-    fill.addColorStop(0, L.col+',0.55)'); fill.addColorStop(1, L.col+',0.04)');
-    ctx2.fillStyle = fill; ctx2.fill();
-    // bright electric crest line
-    ctx2.save(); ctx2.shadowColor = L.col+',0.9)'; ctx2.shadowBlur = L.glow*(1+bands.treble);
-    ctx2.strokeStyle = L.col+',0.95)'; ctx2.lineWidth = 2; ctx2.stroke(); ctx2.restore();
-  }
+function drawVisCanyon(ctx2, bands) {
+  const cw = xmbCanvas.width, ch = xmbCanvas.height;
+  const ok = mpDrawCanyon(bands);
+  ctx2.setTransform(1,0,0,1,0,0);
+  ctx2.fillStyle = '#000'; ctx2.fillRect(0,0,cw,ch);
+  if (ok) { try { ctx2.drawImage(globeCanvas,0,0,cw,ch); } catch(e){} }
 }
 function drawVisGlobe(ctx2, bands) {
   const cw = xmbCanvas.width, ch = xmbCanvas.height;
@@ -10646,53 +10684,41 @@ function drawMusicPlayer(ctx2) {
   ctx2.save();
   // 1) visualizer background
   if (mp.vis === 0) drawVisWaves(ctx2, bands);
-  else if (mp.vis === 1) drawVisMountains(ctx2, bands);
+  else if (mp.vis === 1) drawVisCanyon(ctx2, bands);
   else drawVisGlobe(ctx2, bands);
-  // 2) Now Playing UI (virtual coords)
+  // 2) Minimal Now Playing overlay (measured music2.mp4): small album art at
+  // the bottom-left, title (bold) above the artist/source line.
   ctx2.setTransform(dpr*scaleX,0,0,dpr*scaleY,0,frameCenterTY());
   const t = mp.tracks[mp.idx] || {};
-  // album art
-  const artSz = 240, ax = XCF(V.W*0.10), ay = V.H*0.30;
-  ctx2.save(); ctx2.shadowColor='rgba(0,0,0,0.6)'; ctx2.shadowBlur=24; ctx2.shadowOffsetY=8;
+  const artSz = 64, ax = XCF(V.W*0.045), ay = V.H*0.85;
+  ctx2.save(); ctx2.shadowColor='rgba(0,0,0,0.6)'; ctx2.shadowBlur=14; ctx2.shadowOffsetY=4;
   const ic = getIcon('asset:images/icon_fw_track.png');
   if (ic && ic.loaded) ctx2.drawImage(ic.img, ax, ay, artSz, artSz);
   ctx2.restore();
-  // track info
-  const tx = ax + artSz + 50, ty = ay + 40;
-  ctx2.textAlign='left'; ctx2.shadowColor='rgba(0,0,0,0.7)'; ctx2.shadowBlur=5; ctx2.shadowOffsetY=2;
-  ctx2.fillStyle='rgba(255,255,255,0.8)'; ctx2.font='24px PS3'; ctx2.fillText(t.a||'', tx, ty);
-  ctx2.fillStyle='#fff'; ctx2.font='40px PS3'; ctx2.fillText(t.n||'', tx, ty+52);
-  ctx2.fillStyle='rgba(255,255,255,0.7)'; ctx2.font='22px PS3';
-  ctx2.fillText('http://s3k.ocremix.org - Project Chaos' + (t.st?'   ('+t.st+')':''), tx, ty+92);
-  // progress bar
+  const tx = ax + artSz + 22;
+  ctx2.textAlign='left'; ctx2.textBaseline='alphabetic';
+  ctx2.shadowColor='rgba(0,0,0,0.75)'; ctx2.shadowBlur=4; ctx2.shadowOffsetY=1;
+  ctx2.fillStyle='#fff'; ctx2.font='26px PS3'; ctx2.fillText(t.n||'', tx, ay+30);
+  ctx2.fillStyle='rgba(255,255,255,0.8)'; ctx2.font='19px PS3';
+  ctx2.fillText((t.a?t.a+' / ':'') + 'http://s3k.ocremix.org - Project Chaos', tx, ay+56);
+  // thin progress line along the very bottom
   const dur = (mpAudio && isFinite(mpAudio.duration)) ? mpAudio.duration : 0;
   const cur = mpAudio ? mpAudio.currentTime : 0;
-  const pbx = ax, pby = V.H*0.78, pbw = XCF(V.W) - ax*2;
-  ctx2.shadowColor='rgba(0,0,0,0)';
-  ctx2.fillStyle='rgba(255,255,255,0.25)'; roundRect(ctx2, pbx, pby, pbw, 5, 2.5); ctx2.fill();
   const frac = dur ? Math.max(0,Math.min(1,cur/dur)) : 0;
-  ctx2.fillStyle='#fff'; roundRect(ctx2, pbx, pby, pbw*frac, 5, 2.5); ctx2.fill();
-  ctx2.beginPath(); ctx2.arc(pbx+pbw*frac, pby+2.5, 7, 0, Math.PI*2); ctx2.fill();
-  ctx2.textAlign='left'; ctx2.fillStyle='rgba(255,255,255,0.85)'; ctx2.font='20px PS3';
-  ctx2.fillText(mpFmt(cur), pbx, pby+30);
-  ctx2.textAlign='right'; ctx2.fillText(mpFmt(dur), pbx+pbw, pby+30);
-  // play/pause indicator
-  ctx2.textAlign='center'; ctx2.fillStyle='#fff'; ctx2.font='26px PS3';
-  ctx2.fillText((mpAudio && !mpAudio.paused) ? '▶' : '❙❙', XCF(V.W/2), pby-26);
-  // visualizer-name banner (brief)
+  ctx2.shadowColor='rgba(0,0,0,0)';
+  ctx2.fillStyle='rgba(255,255,255,0.18)'; ctx2.fillRect(0, V.H-3, XCF(V.W), 2);
+  ctx2.fillStyle='rgba(255,255,255,0.9)'; ctx2.fillRect(0, V.H-3, XCF(V.W)*frac, 2);
+  // visualizer-name banner (brief, top-left)
   if (mpVisName) {
     const el = performance.now() - mpVisName.start;
-    if (el > 1600) mpVisName = null;
+    if (el > 1500) mpVisName = null;
     else {
-      const a = el<150?el/150:(el>1300?(1600-el)/300:1);
-      ctx2.globalAlpha = Math.max(0,a); ctx2.textAlign='right'; ctx2.font='24px PS3';
+      const a = el<150?el/150:(el>1200?(1500-el)/300:1);
+      ctx2.globalAlpha = Math.max(0,a); ctx2.textAlign='left'; ctx2.font='24px PS3';
       ctx2.shadowColor='rgba(0,0,0,0.6)'; ctx2.shadowBlur=4;
-      ctx2.fillStyle='#fff'; ctx2.fillText(mpVisName.text, XCF(V.W*0.96), V.H*0.10); ctx2.globalAlpha=1;
+      ctx2.fillStyle='#fff'; ctx2.fillText(mpVisName.text, XCF(V.W*0.045), V.H*0.11); ctx2.globalAlpha=1;
     }
   }
-  // footer hints
-  ctx2.textAlign='center'; ctx2.font='20px PS3'; ctx2.fillStyle='rgba(255,255,255,0.85)'; ctx2.shadowColor='rgba(0,0,0,0.5)'; ctx2.shadowBlur=3;
-  ctx2.fillText('✕ Play/Pause     ◀ ▶ Prev/Next     △ Visualizer     ○ Back', XCF(V.W/2), V.H*0.93);
   ctx2.restore();
 }
 
@@ -10731,7 +10757,7 @@ function buildOptRows() {
 }
 
 function openOptMenu() {
-  if (musicPlayer) { mpCycleVis(); return; }   // Triangle cycles the visualizer in Now Playing
+  if (musicPlayer) return;   // no options menu in Now Playing (Square cycles the visualizer)
   if (optMenu || dialogState || wizState || landingState || submenuAnim) return;
   const rows = buildOptRows(); if (!rows) return;
   let sel = 0; while (rows[sel] && rows[sel].sep) sel++;
@@ -10795,6 +10821,7 @@ function openContentInfo(it) {
 }
 
 function cycleGroup() {
+  if (musicPlayer) { mpCycleVis(); return; }   // Square toggles the Now Playing visualizer
   const cat = DATA[ci];
   if (!cat.content || !cat.groupModes || stack.length || dialogState || wizState || optMenu) return;
   cat._groupIdx = ((cat._groupIdx || 0) + 1) % cat.groupModes.length;
