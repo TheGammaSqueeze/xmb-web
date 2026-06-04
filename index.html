@@ -10605,38 +10605,34 @@ function drawLavenderPanel(ctx2, leftX, rightX, ap) {
   ctx2.fillRect(leftX, frameTopV(), rightX - leftX, frameHV());
 }
 
-// Options menu (Triangle) -- rendered in the EXACT style of the Theme/Colour
-// side-panel chooser: the lavender grey gradient panel anchored to the right,
-// white option labels (selected larger), sliding in from the right. The
-// submenu (Sort By / Group Content choices) opens as a second lavender column
-// to the left so it stays on screen.
+// Options menu (Triangle): the firmware options list (Sort By / Group Content /
+// Play / Copy / ...) at its own position, with the Theme/Colour side-panel
+// LAVENDER GRADIENT as the background (only the gradient style is borrowed -- the
+// option items + layout are the real options menu, not the chooser's items).
 function drawOptMenu(ctx2) {
   const o = optMenu; if (!o) return;
   const ap = Math.min(1, (performance.now() - o.anim.start) / o.anim.dur);
   ctx2.save();
   ctx2.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, frameCenterTY());
-  // Panel geometry (matches drawSidePanel: left=1324, right=1697, text=1340).
-  const PL = XCP(1324), PR = 1697, TX = XCP(1340), PITCH = 40;
-  const ease = ap*ap*(3-2*ap);
-  const xs = (1 - ease) * (PR - PL);          // slide-in offset
-  // Submenu lavender column to the left (when open).
-  if (o.subOpen) drawLavenderPanel(ctx2, XCP(1324) - XCP(300), XCP(1697) - XCP(300), ap);
-  drawLavenderPanel(ctx2, PL + xs, PR + xs, ap);
+  const mainX = XCF(V.W * 0.605) + (1 - ap) * 30;
+  const subX  = XCF(V.W * 0.775);
+  // Side-panel lavender gradient behind the options (darkest core sits behind
+  // the option text column, fading to the right edge).
+  drawLavenderPanel(ctx2, XCF(V.W * 0.52), XCF(V.W * 1.0), ap);
   ctx2.globalAlpha = ap;
 
-  // Lay out parent rows: top group, a gap at the separator, then actions.
-  let y = 360;
+  let y = 300; const sp = 40;
   for (let i = 0; i < o.rows.length; i++) {
     const r = o.rows[i];
-    if (r.sep) { y += 54; continue; }
-    drawOptRow(ctx2, r.label, TX + xs, y, (i === o.sel && !o.subOpen), !!r.sub, r.icon, o.subOpen);
-    y += PITCH;
+    if (r.sep) { y += 60; continue; }
+    drawOptRow(ctx2, r.label, mainX, y, (i === o.sel && !o.subOpen), !!r.sub, r.icon, o.subOpen);
+    y += sp;
   }
   if (o.subOpen) {
-    const sx = XCP(1340) - XCP(300); let sy = 360;
+    let sy = 300;
     for (let i = 0; i < o.subRows.length; i++) {
-      drawOptRow(ctx2, o.subRows[i].label, sx, sy, i === o.subSel, false, false, false);
-      sy += PITCH;
+      drawOptRow(ctx2, o.subRows[i].label, subX, sy, i === o.subSel, false, false, false);
+      sy += sp;
     }
   }
   ctx2.restore();
