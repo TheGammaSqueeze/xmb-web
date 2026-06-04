@@ -10636,8 +10636,10 @@ function drawOptMenu(ctx2) {
   // grey-green (semi-transparent). Rows: Sort By / Group Content at the top,
   // a gap, then Play / Copy / Add to Playlist / Delete / Information.
   const TX = XCP(1340), PITCH = 38;
-  const PR = XCF(V.W * 0.90);
-  const ease = ap*ap*(3-2*ap), xs = (1 - ease) * (XCF(V.W*0.90) - XCF(V.W*0.685));
+  // Animation (measured music.mp4 f126-130): the panel FADES in over ~0.13s
+  // with only a small ~37px leftward settle -- it does NOT slide the full
+  // panel width. ap drives the fade; xs is the tiny settle offset.
+  const ease = ap*ap*(3-2*ap), xs = (1 - ease) * XCF(37);
   if (o.subOpen) drawOptPanel(ctx2, -XCP(330), ap);   // submenu column (shifted left)
   drawOptPanel(ctx2, xs, ap);
   ctx2.globalAlpha = ap;
@@ -10862,10 +10864,11 @@ function drawSidePanel(ctx2, ds, ap) {
   // The list TOP item centre lands at y ~= 510 with subsequent items at pitch=40.
   const SP_LIST_TOP_Y = 510;
 
-  // Slide-in: at ap=0, panel is offset right by SP_PANEL_WIDTH (off-screen);
-  // at ap=1 it's at its rest position. Smoothstep easing.
+  // Open animation: measured from RPCS3 (music.mp4 f126-130) the side panel
+  // FADES in (alpha = ap) with only a small ~37px leftward settle -- it does
+  // NOT slide the full panel width. Smoothstep easing on the small settle.
   const ease = ap * ap * (3 - 2 * ap);
-  const xShift = (1 - ease) * SP_PANEL_WIDTH;
+  const xShift = (1 - ease) * XCP(37);
 
   // -----------------------------------------------------------------------
   // 1. Draw panel background: full-height horizontal gradient lavender.
