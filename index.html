@@ -7420,7 +7420,11 @@ function drawXMB(now) {
       const ic = getIcon(items[i].i);
       // Submenu items don't scale up on focus (PS3 firmware behavior - submenu items
       // keep small icon since visual emphasis is on text/description/value).
-      const isz = inSubmenu
+      // EXCEPTION: content-browser media items (Music/Photo/Video albums + tracks)
+      // DO enlarge the focused item to a thumbnail, like the real XMB content
+      // view (measured focused track icon ~178px ~= ITEM_ICON_ACTIVE).
+      const contentMedia = DATA[ci].content && (items[i].mtype === 'track' || items[i].mtype === 'album');
+      const isz = (inSubmenu && !contentMedia)
         ? V.ITEM_ICON_SIZE
         : (isActive ? V.ITEM_ICON_ACTIVE : V.ITEM_ICON_SIZE);
       ctx.globalAlpha = alpha;
@@ -7488,11 +7492,22 @@ function drawXMB(now) {
         ctx.fillStyle = 'rgb(255,255,255)';
         ctx.fillText(items[i].n, XCP(V.ITEM_TEXT_X + xShift), y - 1);
 
-        // Music tracks show their artist (+ stage) as the subtitle, like the
-        // PS3 content browser; other items use their plain description.
-        let _desc = items[i].d;
+        // Music tracks: artist/source line ABOVE the bold title (PS3 layout).
         if (items[i].mtype === 'track' && items[i].a) {
-          _desc = items[i].a + (items[i].st ? '   (' + items[i].st + ')' : '') + (items[i].dur ? '    ' + items[i].dur : '');
+          ctx.save();
+          ctx.font = '300 ' + (V.ITEM_DESC_SIZE * DESC_BOOST) + 'px PS3';
+          ctx.globalAlpha = 0.78 * alphaMul * descNewAlpha;
+          ctx.fillStyle = 'rgb(235,235,235)';
+          ctx.shadowColor = 'rgba(0,0,0,' + (0.45 + 0.4 * nightShadow).toFixed(3) + ')';
+          ctx.shadowBlur = 3; ctx.shadowOffsetY = 1;
+          ctx.fillText(items[i].a, XCP(V.ITEM_TEXT_X + xShift), y - V.ITEM_TEXT_ACTIVE_SIZE + 2);
+          ctx.restore();
+        }
+
+        // Lower subtitle line: stage + duration for tracks, else plain desc.
+        let _desc = items[i].d;
+        if (items[i].mtype === 'track') {
+          _desc = (items[i].st ? items[i].st : '') + (items[i].dur ? '    ' + items[i].dur : '');
         }
         if (_desc) {
           // Fade in over ITEM_DESC_FADE_MS so the new active description
@@ -10587,9 +10602,10 @@ function drawOptMenu(ctx2) {
   // (green theme delta +(38,64,62) over base (13,75,13)) and fading out by
   // x~0.89W. It is a glossy near-white sheen with a slight theme pickup, so it
   // tracks the current colour; we tint the additive light by dispTint.
+  // Glossy sheen is a near-white highlight (a reflection is white, theme-safe);
+  // magnitude calibrated to the measured green peak (+38,64,62 -> luminance ~55).
   const tnt = (typeof dispTint !== 'undefined') ? dispTint : [0.82,0.62,0.9];
-  // calibrated so a green wallpaper reproduces the measured +(38,64,62) peak
-  const pr = 14 + tnt[0]*30, pg = 34 + tnt[1]*50, pb = 30 + tnt[2]*40;
+  const pr = 40 + tnt[0]*8, pg = 50 + tnt[1]*8, pb = 48 + tnt[2]*8;
   const prof = [[0.66,0],[0.68,0.06],[0.69,0.55],[0.705,0.95],[0.715,1.0],
                 [0.74,0.95],[0.78,0.80],[0.82,0.60],[0.86,0.28],[0.89,0.06],[0.92,0]];
   const x0 = XCF(V.W*0.62), x1 = XCF(V.W*0.96);
