@@ -10614,40 +10614,29 @@ function drawOptMenu(ctx2) {
   const ap = Math.min(1, (performance.now() - o.anim.start) / o.anim.dur);
   ctx2.save();
   ctx2.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, frameCenterTY());
-  const mainX = XCF(V.W * 0.605) + (1 - ap) * 30;
-  const subX  = XCF(V.W * 0.775);
-  // Background: the real options panel is an ADDITIVE lighter+desaturated band
-  // over the wallpaper (measured RPCS3 state0.png: green base (13,75,13) ->
-  // peak (51,139,75), i.e. +(38,64,62) at x~0.71W, ramping from 0.68W, fading
-  // by 0.89W). This reads as the "grey gradient" -- the green lightens and
-  // greys out. Drawn additively so it tracks whatever wallpaper colour is set.
-  const prof = [[0.62,0],[0.66,0],[0.68,0.10],[0.69,0.58],[0.705,0.95],
-                [0.715,1.0],[0.74,0.95],[0.78,0.80],[0.82,0.58],[0.86,0.26],[0.89,0.05],[0.93,0]];
-  const gx0 = XCF(V.W*0.60), gx1 = XCF(V.W*0.96);
-  const sheen = ctx2.createLinearGradient(gx0, 0, gx1, 0);
-  for (const [xf,m] of prof) {
-    const t = Math.max(0, Math.min(1, (XCF(V.W*xf) - gx0) / (gx1 - gx0)));
-    sheen.addColorStop(t, 'rgba(' + Math.round(38*m) + ',' + Math.round(64*m) + ',' + Math.round(62*m) + ',1)');
-  }
-  ctx2.save();
-  ctx2.globalCompositeOperation = 'lighter';
+  // Confirmed from /work/music.mp4 (frames 141-197, 1009-1065): the options
+  // menu is the firmware LAVENDER side panel (same gradient as the Theme/Colour
+  // chooser), right-anchored at the side-panel slot (left 1324, right 1697,
+  // text 1340). Over a black theme it reads lavender; over green it reads
+  // grey-green (semi-transparent). Rows: Sort By / Group Content at the top,
+  // a gap, then Play / Copy / Add to Playlist / Delete / Information.
+  const PL = XCP(1324), PR = 1697, TX = XCP(1340), PITCH = 38;
+  const ease = ap*ap*(3-2*ap), xs = (1 - ease) * (PR - PL);
+  if (o.subOpen) drawLavenderPanel(ctx2, XCP(1324 - 330), XCP(1697 - 330), ap);  // submenu column (left)
+  drawLavenderPanel(ctx2, PL + xs, PR + xs, ap);
   ctx2.globalAlpha = ap;
-  ctx2.fillStyle = sheen; ctx2.fillRect(gx0, frameTopV(), gx1 - gx0, frameHV());
-  ctx2.restore();
-  ctx2.globalAlpha = ap;
-
-  let y = 300; const sp = 40;
+  let y = 270;
   for (let i = 0; i < o.rows.length; i++) {
     const r = o.rows[i];
-    if (r.sep) { y += 60; continue; }
-    drawOptRow(ctx2, r.label, mainX, y, (i === o.sel && !o.subOpen), !!r.sub, r.icon, o.subOpen);
-    y += sp;
+    if (r.sep) { y += 200; continue; }   // gap between the view group and actions
+    drawOptRow(ctx2, r.label, TX + xs, y, (i === o.sel && !o.subOpen), !!r.sub, r.icon, o.subOpen);
+    y += PITCH;
   }
   if (o.subOpen) {
-    let sy = 300;
+    const sx = XCP(1340 - 330); let sy = 270;
     for (let i = 0; i < o.subRows.length; i++) {
-      drawOptRow(ctx2, o.subRows[i].label, subX, sy, i === o.subSel, false, false, false);
-      sy += sp;
+      drawOptRow(ctx2, o.subRows[i].label, sx, sy, i === o.subSel, false, false, false);
+      sy += PITCH;
     }
   }
   ctx2.restore();
