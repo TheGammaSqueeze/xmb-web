@@ -1353,9 +1353,48 @@ const DATA = [
   },
   {
     id:'music', name:'Music', icon:'xmb_icon_003', color:'#c498ff',
+    content:'music',
+    groupModes:['By Album','By Artist','By Genre','By Track','By Release Year','All'],
     items:[
       {n:'Search for Media Servers',i:'xmb_icon_035',d:'Scans the network and connects to a media server. To use this function, a media server must be set up to allow connections from the PS3\u2122 system.'},
-      {n:'Playlists',i:'xmb_icon_037'}
+      {n:'Playlists',i:'xmb_icon_037'},
+          {n:'http://s3k.ocremix.org - Project Chaos - Bonus Tracks',i:'xmb_icon_037',mtype:'album',d:'35 Tracks  28:00',artist:'Various Artists',year:'2010',genre:'Game Arrangement',ch:[
+            {n:"Sonic the Hedgehog and Knuckles",i:'xmb_icon_037',mtype:'track',a:"SnappleMan",st:"Title",dur:'2:00'},
+            {n:"The Wait is Over!",i:'xmb_icon_037',mtype:'track',a:"KungFuChicken!",st:"Data Select",dur:'2:00'},
+            {n:"Divided from Grace",i:'xmb_icon_037',mtype:'track',a:"Rexy",st:"Angel Island",dur:'2:00'},
+            {n:"Caution-Echidnas May Eat Your Brain",i:'xmb_icon_037',mtype:'track',a:"Daniel Baranowsky",st:"S3 Boss 1",dur:'2:00'},
+            {n:"Walk on Water",i:'xmb_icon_037',mtype:'track',a:"housethegrate",st:"Hydrocity",dur:'2:00'},
+            {n:"Knuckleduster",i:'xmb_icon_037',mtype:'track',a:"Daniel Baranowsky",st:"Marble Garden",dur:'2:00'},
+            {n:"Three Ring Nightfall",i:'xmb_icon_037',mtype:'track',a:"Hadyn",st:"Carnival Night",dur:'2:00'},
+            {n:"That Freezing Feeling",i:'xmb_icon_037',mtype:'track',a:"Hetcenus",st:"IceCap",dur:'2:00'},
+            {n:"Elevator Music",i:'xmb_icon_037',mtype:'track',a:"Gecko Yamori",st:"Launch Base",dur:'2:00'},
+            {n:"Robotnik Radio",i:'xmb_icon_037',mtype:'track',a:"GaMeBoX",st:"S&K Boss 1",dur:'2:00'},
+            {n:"iMushroom",i:'xmb_icon_037',mtype:'track',a:"GaMeBoX",st:"Mushroom Hill",dur:'2:00'},
+            {n:"Dead Batteries",i:'xmb_icon_037',mtype:'track',a:"SnappleMan",st:"Flying Battery",dur:'2:00'},
+            {n:"Live at the Sandopolis",i:'xmb_icon_037',mtype:'track',a:"BrainCells",st:"Sandopolis",dur:'2:00'},
+            {n:"Beneath the Ashes",i:'xmb_icon_037',mtype:'track',a:"Rexy, Hetcenus",st:"Lava Reef",dur:'2:00'},
+            {n:"The Secluded Stronghold",i:'xmb_icon_037',mtype:'track',a:"Kanjika",st:"Hidden Palace",dur:'2:00'},
+            {n:"Breathtaking Vision",i:'xmb_icon_037',mtype:'track',a:"Kanjika",st:"Sky Sanctuary",dur:'2:00'},
+            {n:"Scrambled Eggman",i:'xmb_icon_037',mtype:'track',a:"BrainCells, SnappleMan",st:"Boss",dur:'2:00'},
+            {n:"Before the Storm",i:'xmb_icon_037',mtype:'track',a:"Joker",st:"Death Egg",dur:'2:00'},
+            {n:"Malicious Fingers",i:'xmb_icon_037',mtype:'track',a:"SnappleMan",st:"Final Boss",dur:'2:00'},
+            {n:"The Doomsday",i:'xmb_icon_037',mtype:'track',a:"SnappleMan, Ashane, norg",st:"Doomsday Zone",dur:'2:00'},
+            {n:"So Long and Thanks for All the...",i:'xmb_icon_037',mtype:'track',a:"Red Tailed Fox",st:"S3 Credits",dur:'2:00'},
+            {n:"Red Sphere, Blue Sphere",i:'xmb_icon_037',mtype:'track',a:"chthonic",st:"Special Stage",dur:'2:00'},
+            {n:"Schumacher Bar",i:'xmb_icon_037',mtype:'track',a:"Rexy",st:"Competition Menu",dur:'2:00'},
+            {n:"Momentary Standstill",i:'xmb_icon_037',mtype:'track',a:"Ross Kmet",st:"Azure Lake",dur:'2:00'},
+            {n:"Helium Stairways",i:'xmb_icon_037',mtype:'track',a:"Ichitootah",st:"Balloon Park",dur:'2:00'},
+            {n:"Ivory Gadget",i:'xmb_icon_037',mtype:'track',a:"Hetcenus",st:"Chrome Gadget",dur:'2:00'},
+            {n:"Heat Blur",i:'xmb_icon_037',mtype:'track',a:"Joker",st:"Desert Palace",dur:'2:00'},
+            {n:"Eternal Excavation",i:'xmb_icon_037',mtype:'track',a:"jmr",st:"Endless Mine",dur:'2:00'},
+            {n:"Groove Basin",i:'xmb_icon_037',mtype:'track',a:"Rayza",st:"Azure Lake WIP",dur:'2:00'},
+            {n:"Water on the Dancefloor",i:'xmb_icon_037',mtype:'track',a:"AkumajoBelmont",st:"Hydrocity WIP",dur:'2:00'},
+            {n:"Heads Up for Tails",i:'xmb_icon_037',mtype:'track',a:"Hadyn",st:"Final Boss",dur:'2:00'},
+            {n:"Stranger to Closure",i:'xmb_icon_037',mtype:'track',a:"Kanjika",st:"S3 Credits WIP",dur:'2:00'},
+            {n:"Ice Cap 4 Life",i:'xmb_icon_037',mtype:'track',a:"GaMeBoX",st:"IceCap WIP",dur:'2:00'},
+            {n:"Hydrochill",i:'xmb_icon_037',mtype:'track',a:"Kanjika",st:"Hydrocity WIP",dur:'2:00'},
+            {n:"Lava Passion",i:'xmb_icon_037',mtype:'track',a:"Xenon Odyssey",st:"Lava Reef WIP",dur:'2:00'}
+          ]}
     ]
   },
   {
@@ -10381,6 +10420,197 @@ function drawWizTzGlobe(ctx2, s, ws, yT, yB) {
   ctx2.textBaseline = 'alphabetic';
 }
 
+// ============================================================================
+// XMB CONTENT BROWSER: Triangle options menu + Square Group Content switch
+// ============================================================================
+// Reproduces the PS3 content-column behaviour (Music/Photo/Video) from the
+// firmware explore_category_*.rco option sets + RPCS3 captures:
+//  - TRIANGLE opens the right-side options menu, CONTEXT-DEPENDENT: at a
+//    category root on a folder it shows Sort By / Group Content (submenus) then
+//    Play / Copy / Add to Playlist / Delete / Information; inside a folder on a
+//    track it shows Delete Multiple / Copy Multiple then the same item actions.
+//  - SQUARE cycles the Group Content mode (By Album / By Artist / By Genre /
+//    By Track / By Release Year / All) with a banner + content reflow.
+let optMenu = null;       // {rows, sel, subOpen, subRows, subSel, anim}
+let groupBanner = null;   // {text, start}
+
+function sortFieldForGroup(mode) {
+  if (mode === 'By Artist') return 'Artist';
+  if (mode === 'By Genre') return 'Genre';
+  if (mode === 'By Release Year') return 'Release Year';
+  return 'Title';
+}
+
+function buildOptRows() {
+  const items = curItems(); const it = items && items[ii]; const cat = DATA[ci];
+  const inContent = !!cat.content; const inside = stack.length > 0;
+  const rows = [];
+  if (inContent && !inside) {
+    const sf = sortFieldForGroup(cat.groupModes[cat._groupIdx || 0]);
+    rows.push({label:'Sort By', sub:[{label:sf+' ▼', sort:'desc'},{label:sf+' ▲', sort:'asc'}]});
+    rows.push({label:'Group Content', icon:true, sub: cat.groupModes.map((m,i)=>({label:m, group:i}))});
+    rows.push({sep:1});
+  } else if (inside && inContent) {
+    rows.push({label:'Delete Multiple', act:'delmulti'});
+    rows.push({label:'Copy Multiple', act:'copymulti'});
+    rows.push({sep:1});
+  }
+  const media = it && (it.mtype === 'album' || it.mtype === 'track');
+  if (media || (inContent && it)) {
+    rows.push({label:'Play', act:'play'});
+    rows.push({label:'Copy', act:'copy'});
+    rows.push({label:'Add to Playlist', act:'addpl'});
+    rows.push({label:'Delete', act:'delete'});
+    rows.push({label:'Information', act:'info'});
+  } else if (it) {
+    rows.push({label:'Information', act:'info'});
+  }
+  return rows.length ? rows : null;
+}
+
+function openOptMenu() {
+  if (optMenu || dialogState || wizState || landingState || submenuAnim) return;
+  const rows = buildOptRows(); if (!rows) return;
+  let sel = 0; while (rows[sel] && rows[sel].sep) sel++;
+  optMenu = {rows, sel, subOpen:false, subRows:null, subSel:0, anim:{start:performance.now(), dur:180}};
+  playNav2();
+}
+function closeOptMenu() { optMenu = null; playNav(); }
+
+function optMove(dir) {
+  const o = optMenu; if (!o) return;
+  if (o.subOpen) { const n = o.subRows.length; o.subSel = (o.subSel + dir + n) % n; playCursor(); return; }
+  let s = o.sel;
+  do { s = (s + dir + o.rows.length) % o.rows.length; } while (o.rows[s].sep);
+  o.sel = s; playCursor();
+}
+function optOpenSub() {
+  const o = optMenu; if (!o || o.subOpen) return false;
+  const r = o.rows[o.sel];
+  if (r.sub) { o.subOpen = true; o.subRows = r.sub; o.subSel = 0; playNav2(); return true; }
+  return false;
+}
+function optEnter() {
+  const o = optMenu; if (!o) return;
+  if (o.subOpen) { applyOptSub(o.subRows[o.subSel]); return; }
+  const r = o.rows[o.sel];
+  if (r.sub) { optOpenSub(); return; }
+  doOptAction(r.act);
+}
+function optBack() {
+  const o = optMenu; if (!o) return;
+  if (o.subOpen) { o.subOpen = false; playNav(); return; }
+  closeOptMenu();
+}
+function applyOptSub(sr) {
+  const cat = DATA[ci];
+  if (sr.group != null) { cat._groupIdx = sr.group; regroupContent(cat); showGroupBanner(cat.groupModes[sr.group]); }
+  else if (sr.sort) { cat._sortDir = sr.sort; }
+  closeOptMenu();
+}
+function doOptAction(act) {
+  const items = curItems(); const it = items[ii];
+  if (act === 'info') { optMenu = null; openContentInfo(it); return; }
+  if (act === 'play') { showGroupBanner('Now Playing:  ' + (it ? it.n : '')); closeOptMenu(); return; }
+  closeOptMenu();   // copy / addpl / delete / multi: simulated no-ops
+}
+function openContentInfo(it) {
+  let body;
+  if (it && it.mtype === 'track')
+    body = 'Title          ' + it.n + '\nArtist         ' + (it.a||'-') + '\nStage          ' + (it.st||'-') + '\nPlaying Time   ' + (it.dur||'-') + '\nFormat         MP3';
+  else if (it && it.mtype === 'album')
+    body = 'Album          ' + it.n + '\nArtist         ' + (it.artist||'-') + '\nGenre          ' + (it.genre||'-') + '\nRelease Year   ' + (it.year||'-') + '\nTracks         ' + (it.ch?it.ch.length:0);
+  else body = (it && it.d) || 'No information is available.';
+  dialogState = {item:it, iconId:it?it.i:null, template:{type:'info', title:'Information', body:body}, sel:0,
+                 anim:{start:performance.now(), dur:250}};
+  playNav2();
+}
+
+function cycleGroup() {
+  const cat = DATA[ci];
+  if (!cat.content || !cat.groupModes || stack.length || dialogState || wizState || optMenu) return;
+  cat._groupIdx = ((cat._groupIdx || 0) + 1) % cat.groupModes.length;
+  regroupContent(cat);
+  showGroupBanner(cat.groupModes[cat._groupIdx]);
+  playNav2();
+}
+function showGroupBanner(text) { groupBanner = {text, start:performance.now()}; }
+
+// Rebuild a content category's item list for the current Group Content mode.
+function regroupContent(cat) {
+  if (!cat._album) {
+    cat._special = cat.items.filter(x => !x.mtype);
+    cat._album = cat.items.find(x => x.mtype === 'album');
+  }
+  const album = cat._album; if (!album) return;   // nothing groupable (Photo/Video stubs)
+  const tracks = album.ch || [];
+  const mode = cat.groupModes[cat._groupIdx || 0];
+  let grouped = [];
+  if (mode === 'By Album') grouped = [album];
+  else if (mode === 'By Track' || mode === 'All') grouped = tracks.slice();
+  else if (mode === 'By Artist') {
+    const m = {}; tracks.forEach(t => { (m[t.a] = m[t.a] || []).push(t); });
+    grouped = Object.keys(m).sort().map(a => ({n:a, i:'xmb_icon_037', mtype:'album',
+      d: m[a].length + (m[a].length>1?' Tracks':' Track'), artist:a, genre:album.genre, year:album.year, ch:m[a]}));
+  }
+  else if (mode === 'By Genre') grouped = [{n:album.genre||'Game Arrangement', i:'xmb_icon_037', mtype:'album', d:tracks.length+' Tracks', genre:album.genre, ch:tracks}];
+  else if (mode === 'By Release Year') grouped = [{n:album.year||'2010', i:'xmb_icon_037', mtype:'album', d:tracks.length+' Tracks', year:album.year, ch:tracks}];
+  cat.items = cat._special.concat(grouped);
+  if (ii >= cat.items.length) ii = cat.items.length - 1;
+}
+
+function drawOptMenu(ctx2) {
+  const o = optMenu; if (!o) return;
+  const now = performance.now(); const ap = Math.min(1, (now - o.anim.start) / o.anim.dur);
+  ctx2.save();
+  ctx2.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, frameCenterTY());
+  const g = ctx2.createLinearGradient(XCF(V.W*0.48), 0, XCF(V.W), 0);
+  g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(0.35, 'rgba(0,0,0,'+(0.45*ap)+')'); g.addColorStop(1, 'rgba(0,0,0,'+(0.55*ap)+')');
+  ctx2.fillStyle = g; ctx2.fillRect(XCF(V.W*0.48), 0, XCF(V.W*0.52), V.H);
+  ctx2.globalAlpha = ap;
+  const xoff = (1 - ap) * 36;
+  const mainX = XCF(V.W*0.605) + xoff;
+  let y = 300; const sp = 40;
+  for (let i = 0; i < o.rows.length; i++) {
+    const r = o.rows[i];
+    if (r.sep) { y += 70; continue; }
+    drawOptRow(ctx2, r.label, mainX, y, (i === o.sel && !o.subOpen), !!r.sub, r.icon);
+    y += sp;
+  }
+  if (o.subOpen) {
+    const sx = XCF(V.W*0.775); let sy = 300;
+    for (let i = 0; i < o.subRows.length; i++) { drawOptRow(ctx2, o.subRows[i].label, sx, sy, i === o.subSel, false, false); sy += sp; }
+  }
+  ctx2.restore();
+}
+function drawOptRow(ctx2, label, x, y, sel, arrow, icon) {
+  ctx2.save(); ctx2.textBaseline = 'middle'; ctx2.textAlign = 'left';
+  if (sel) { ctx2.shadowColor = 'rgba(255,255,255,0.8)'; ctx2.shadowBlur = 14; ctx2.font = 'bold 23px PS3'; ctx2.fillStyle = '#fff'; }
+  else { ctx2.shadowColor = 'rgba(0,0,0,0.5)'; ctx2.shadowBlur = 3; ctx2.shadowOffsetY = 1; ctx2.font = '22px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.85)'; }
+  ctx2.fillText(label, x, y);
+  const w = ctx2.measureText(label).width;
+  if (arrow) ctx2.fillText('▶', x + w + 16, y);
+  ctx2.restore();
+}
+
+function drawGroupBanner(ctx2) {
+  if (!groupBanner) return;
+  const t = performance.now() - groupBanner.start, DUR = 1700;
+  if (t > DUR) { groupBanner = null; return; }
+  const ap = t < 180 ? t/180 : (t > DUR-300 ? (DUR-t)/300 : 1);
+  ctx2.save();
+  ctx2.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, frameCenterTY());
+  ctx2.globalAlpha = Math.max(0, Math.min(1, ap));
+  const by = 116, bh = 50;
+  const g = ctx2.createLinearGradient(0, 0, XCF(V.W), 0);
+  g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(0.15, 'rgba(0,0,0,0.55)'); g.addColorStop(0.85, 'rgba(0,0,0,0.55)'); g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx2.fillStyle = g; ctx2.fillRect(0, by, XCF(V.W), bh);
+  ctx2.fillStyle = '#fff'; ctx2.font = '25px PS3'; ctx2.textAlign = 'center'; ctx2.textBaseline = 'middle';
+  ctx2.save(); ctx2.shadowColor = 'rgba(0,0,0,0.6)'; ctx2.shadowBlur = 4;
+  ctx2.fillText(groupBanner.text, XCF(V.W/2), by + bh/2 + 1); ctx2.restore();
+  ctx2.restore();
+}
+
 function drawWizFooter(ctx2, s, ws) {
   const HINT_Y = 909;
   ctx2.font = '22px PS3'; ctx2.textBaseline = 'middle'; ctx2.fillStyle = 'rgba(255,255,255,0.95)';
@@ -10969,6 +11199,8 @@ function queueOrLock(lockMs) {
 }
 
 function navCat(dir, fromRepeat) {
+  // Content options menu (Triangle): RIGHT opens a submenu, LEFT closes it.
+  if (optMenu) { if (dir > 0) optOpenSub(); else optBack(); return; }
   // Network wizard: LEFT/RIGHT moves Yes/No or OSK column.
   if (wizState) { wizNavCat(dir); return; }
   // Dialog: LEFT/RIGHT moves between options for chooser, or between
@@ -11067,6 +11299,8 @@ function navCat(dir, fromRepeat) {
 }
 
 function navItem(dir, fromRepeat) {
+  // Content options menu (Triangle): UP/DOWN moves the option/sub focus.
+  if (optMenu) { optMove(dir); return; }
   // Network wizard: UP/DOWN moves option focus / OSK row.
   if (wizState) { wizNavItem(dir); return; }
   // Dialog: UP/DOWN moves between options for chooser. For confirm/info
@@ -11131,6 +11365,8 @@ function navItem(dir, fromRepeat) {
 }
 
 function enter() {
+  // Content options menu (Triangle) owns Cross while open.
+  if (optMenu) { optEnter(); return; }
   // Network wizard: Cross confirms. On the OSK it presses the focused key.
   if (wizState) { if (wizState.osk) wizOskPress(); else wizConfirm(); return; }
   // Dialog: Cross confirms. For theme-bound chooser dialogs the current
@@ -11242,6 +11478,8 @@ function enter() {
 }
 
 function back() {
+  // Content options menu (Triangle): Circle closes submenu / menu.
+  if (optMenu) { optBack(); return; }
   // Network wizard: Circle pops the wizard stack (closes at the root).
   if (wizState) { wizBack(); return; }
   // Dialog and landing close immediately on Circle / Back.
@@ -11356,6 +11594,16 @@ const KEY_ACCEL_FACTOR = V.INPUT_ACCEL_MULT;         // firmware: 1.4x accelerat
 // firmware-derived processKeyRepeat schedule can drive chained motion without
 // the inputLock clamping it down to the animation duration.
 function getKeyAction(key, fromRepeat) {
+  // Content options menu owns the D-pad while open.
+  if (optMenu) {
+    switch (key) {
+      case 'ArrowUp':    return () => optMove(-1);
+      case 'ArrowDown':  return () => optMove(1);
+      case 'ArrowRight': return () => optOpenSub();
+      case 'ArrowLeft':  return () => optBack();
+      default: return null;
+    }
+  }
   // Network wizard owns all D-pad input while active.
   if (wizState) {
     switch (key) {
@@ -11421,6 +11669,10 @@ document.addEventListener('keydown', e => {
         e.preventDefault(); enter(); break;
       case 'Backspace': case 'Escape': case 'z': case 'Z':
         e.preventDefault(); back(); break;
+      case 'e': case 'E':   // Triangle: content options menu
+        e.preventDefault(); openOptMenu(); break;
+      case 'q': case 'Q':   // Square: cycle Group Content
+        e.preventDefault(); cycleGroup(); break;
       case 'Tab':
         // Cycle through the supported aspect ratios (Shift+Tab goes backwards).
         e.preventDefault();
@@ -11526,6 +11778,8 @@ function pollGP() {
     if (jp(13)) navItem(1);
     if (jp(0)) enter();   // Cross
     if (jp(1)) back();    // Circle
+    if (jp(2)) cycleGroup();   // Square: cycle Group Content
+    if (jp(3)) openOptMenu();  // Triangle: content options menu
 
     // Left stick - also drives wave/particle perturbation
     const lx = gp.axes[0], ly = gp.axes[1];
@@ -12607,6 +12861,9 @@ function frame(now) {
     drawDialogClosing(ctx, p);
     if (p >= 1) dialogClosing = null;
   }
+  // Content-browser overlays (over the XMB, not over dialogs/wizards).
+  if (groupBanner && !dialogState && !wizState) drawGroupBanner(ctx);
+  if (optMenu) drawOptMenu(ctx);
 
   // Mark the just-drawn xmbCanvas as the valid "previous" for next frame.
   // Even outside active animations we keep this updated so the FIRST frame
