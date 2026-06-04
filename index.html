@@ -10565,21 +10565,31 @@ function drawOptMenu(ctx2) {
   ctx2.save();
   ctx2.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, frameCenterTY());
 
-  const divX = XCF(V.W * 0.585);                 // vertical divider (panel left edge)
   const mainX = XCF(V.W * 0.605) + (1 - ap) * 34;
-  // Soft dim of the XMB beneath the panel so item labels recede (theme shows
-  // through), then a faint light band just right of the divider -- matching the
-  // firmware options panel which keeps the current colour theme visible.
-  const dim = ctx2.createLinearGradient(XCF(V.W * 0.46), 0, XCF(V.W), 0);
-  dim.addColorStop(0, 'rgba(0,0,0,0)'); dim.addColorStop(0.30, 'rgba(0,0,0,'+(0.30*ap)+')'); dim.addColorStop(1, 'rgba(0,0,0,'+(0.34*ap)+')');
-  ctx2.fillStyle = dim; ctx2.fillRect(XCF(V.W * 0.46), 0, XCF(V.W * 0.54), V.H);
-  const lite = ctx2.createLinearGradient(divX, 0, divX + XCF(170), 0);
-  lite.addColorStop(0, 'rgba(255,255,255,'+(0.10*ap)+')'); lite.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx2.fillStyle = lite; ctx2.fillRect(divX, 0, XCF(170), V.H);
-  // Divider line.
+  // Side-panel sheen. Measured from RPCS3 (xmb-ref/content/step_sq/state0.png):
+  // the panel is NOT a dark dim -- it is an ADDITIVE light vertical band that
+  // brightens the wallpaper, ramping from x~0.68W, peaking at x~0.71W
+  // (green theme delta +(38,64,62) over base (13,75,13)) and fading out by
+  // x~0.89W. It is a glossy near-white sheen with a slight theme pickup, so it
+  // tracks the current colour; we tint the additive light by dispTint.
+  const tnt = (typeof dispTint !== 'undefined') ? dispTint : [0.82,0.62,0.9];
+  // calibrated so a green wallpaper reproduces the measured +(38,64,62) peak
+  const pr = 14 + tnt[0]*30, pg = 34 + tnt[1]*50, pb = 30 + tnt[2]*40;
+  const prof = [[0.66,0],[0.68,0.06],[0.69,0.55],[0.705,0.95],[0.715,1.0],
+                [0.74,0.95],[0.78,0.80],[0.82,0.60],[0.86,0.28],[0.89,0.06],[0.92,0]];
+  const x0 = XCF(V.W*0.62), x1 = XCF(V.W*0.96);
+  const sheen = ctx2.createLinearGradient(XCF(V.W*0.62), 0, XCF(V.W*0.96), 0);
+  for (const [xf,m] of prof) {
+    const t = (XCF(V.W*xf) - x0) / (x1 - x0);
+    sheen.addColorStop(Math.max(0,Math.min(1,t)),
+      'rgba('+Math.round(pr*m)+','+Math.round(pg*m)+','+Math.round(pb*m)+',1)');
+  }
+  ctx2.save();
+  ctx2.globalCompositeOperation = 'lighter';   // additive brightening
   ctx2.globalAlpha = ap;
-  ctx2.strokeStyle = 'rgba(255,255,255,0.5)'; ctx2.lineWidth = 1;
-  ctx2.beginPath(); ctx2.moveTo(divX, 0); ctx2.lineTo(divX, V.H); ctx2.stroke();
+  ctx2.fillStyle = sheen; ctx2.fillRect(XCF(V.W*0.60), 0, XCF(V.W*0.40), V.H);
+  ctx2.restore();
+  ctx2.globalAlpha = ap;
 
   let y = 300; const sp = 40;
   for (let i = 0; i < o.rows.length; i++) {
@@ -10641,33 +10651,35 @@ function drawOptRow(ctx2, label, x, y, sel, arrow, icon) {
   ctx2.restore();
 }
 
+// Persistent top-left grouping indicator (measured from RPCS3
+// xmb-ref/content/sqcap/s03.png): a small music-note icon + the current Group
+// Content mode (e.g. "By Genre") sits in the top-left corner of content
+// categories. It updates when Square cycles the mode, with a brief pop/fade.
 function drawGroupBanner(ctx2) {
-  if (!groupBanner) return;
-  const t = performance.now() - groupBanner.start, DUR = 1700;
-  if (t > DUR) { groupBanner = null; return; }
-  const ap = t < 180 ? t/180 : (t > DUR-300 ? (DUR-t)/300 : 1);
-  const grow = t < 240 ? t/240 : 1; const ease = grow*grow*(3-2*grow);
+  const cat = DATA[ci];
+  if (!cat || !cat.content || !cat.groupModes || stack.length) return;
+  if (dialogState || wizState || landingState || optMenu) return;
+  const mode = cat.groupModes[cat._groupIdx || 0]; if (!mode) return;
+  // Brief emphasis when the mode just changed.
+  let pop = 0;
+  if (groupBanner) {
+    const t = performance.now() - groupBanner.start;
+    if (t > 900) groupBanner = null; else pop = Math.max(0, 1 - t/900);
+  }
   ctx2.save();
   ctx2.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, frameCenterTY());
-  ctx2.globalAlpha = Math.max(0, Math.min(1, ap));
-  const by = 116, bh = 50, cx = XCF(V.W/2), halfW = XCF(V.W/2) * ease;
-  const tr = Math.round(dispTint[0]*255), tg = Math.round(dispTint[1]*255), tb = Math.round(dispTint[2]*255);
-  const dr = Math.round(tr*0.25), dg = Math.round(tg*0.25), db = Math.round(tb*0.25);
-  const g = ctx2.createLinearGradient(cx - halfW, 0, cx + halfW, 0);
-  g.addColorStop(0, 'rgba(0,0,0,0)');
-  g.addColorStop(0.12, 'rgba('+dr+','+dg+','+db+',0.62)');
-  g.addColorStop(0.5, 'rgba(0,0,0,0.62)');
-  g.addColorStop(0.88, 'rgba('+dr+','+dg+','+db+',0.62)');
-  g.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx2.fillStyle = g; ctx2.fillRect(cx - halfW, by, halfW*2, bh);
-  ctx2.strokeStyle = 'rgba('+Math.min(255,tr+90)+','+Math.min(255,tg+90)+','+Math.min(255,tb+90)+',0.55)';
-  ctx2.lineWidth = 1;
-  ctx2.beginPath(); ctx2.moveTo(cx-halfW, by+0.5); ctx2.lineTo(cx+halfW, by+0.5);
-  ctx2.moveTo(cx-halfW, by+bh-0.5); ctx2.lineTo(cx+halfW, by+bh-0.5); ctx2.stroke();
-  ctx2.globalAlpha = Math.max(0, Math.min(1, ap)) * Math.min(1, Math.max(0,(t-120)/200));
-  ctx2.fillStyle = '#fff'; ctx2.font = '25px PS3'; ctx2.textAlign = 'center'; ctx2.textBaseline = 'middle';
-  ctx2.save(); ctx2.shadowColor = 'rgba(0,0,0,0.6)'; ctx2.shadowBlur = 4;
-  ctx2.fillText(groupBanner.text, cx, by + bh/2 + 1); ctx2.restore();
+  const iconSz = 30, ix = XCF(82), iy = 88;
+  const ic = getIcon('xmb_icon_003');
+  if (ic && (ic.loaded || ic.normalMapReady)) drawIconAt(ctx2, ic, 'xmb_icon_003', ix, iy, iconSz, iconSz);
+  ctx2.textAlign = 'left'; ctx2.textBaseline = 'middle';
+  ctx2.font = '26px PS3';
+  ctx2.save();
+  ctx2.shadowColor = 'rgba(0,0,0,0.55)'; ctx2.shadowBlur = 3; ctx2.shadowOffsetY = 1;
+  // pop: briefly brighten + nudge on change
+  ctx2.fillStyle = 'rgba(255,255,255,' + (0.92 + 0.08*pop).toFixed(3) + ')';
+  ctx2.fillText(mode, ix + iconSz + 8, iy + iconSz/2 + 1);
+  if (pop > 0) { ctx2.shadowColor = 'rgba(255,255,255,'+(0.6*pop).toFixed(2)+')'; ctx2.shadowBlur = 12; ctx2.fillText(mode, ix + iconSz + 8, iy + iconSz/2 + 1); }
+  ctx2.restore();
   ctx2.restore();
 }
 
@@ -12922,7 +12934,7 @@ function frame(now) {
     if (p >= 1) dialogClosing = null;
   }
   // Content-browser overlays (over the XMB, not over dialogs/wizards).
-  if (groupBanner && !dialogState && !wizState) drawGroupBanner(ctx);
+  drawGroupBanner(ctx);     // persistent top-left grouping indicator (self-gating)
   if (optMenu) drawOptMenu(ctx);
 
   // Mark the just-drawn xmbCanvas as the valid "previous" for next frame.
