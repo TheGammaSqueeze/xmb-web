@@ -10616,9 +10616,24 @@ function drawOptMenu(ctx2) {
   ctx2.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, frameCenterTY());
   const mainX = XCF(V.W * 0.605) + (1 - ap) * 30;
   const subX  = XCF(V.W * 0.775);
-  // Side-panel lavender gradient behind the options (darkest core sits behind
-  // the option text column, fading to the right edge).
-  drawLavenderPanel(ctx2, XCF(V.W * 0.52), XCF(V.W * 1.0), ap);
+  // Background: the real options panel is an ADDITIVE lighter+desaturated band
+  // over the wallpaper (measured RPCS3 state0.png: green base (13,75,13) ->
+  // peak (51,139,75), i.e. +(38,64,62) at x~0.71W, ramping from 0.68W, fading
+  // by 0.89W). This reads as the "grey gradient" -- the green lightens and
+  // greys out. Drawn additively so it tracks whatever wallpaper colour is set.
+  const prof = [[0.62,0],[0.66,0],[0.68,0.10],[0.69,0.58],[0.705,0.95],
+                [0.715,1.0],[0.74,0.95],[0.78,0.80],[0.82,0.58],[0.86,0.26],[0.89,0.05],[0.93,0]];
+  const gx0 = XCF(V.W*0.60), gx1 = XCF(V.W*0.96);
+  const sheen = ctx2.createLinearGradient(gx0, 0, gx1, 0);
+  for (const [xf,m] of prof) {
+    const t = Math.max(0, Math.min(1, (XCF(V.W*xf) - gx0) / (gx1 - gx0)));
+    sheen.addColorStop(t, 'rgba(' + Math.round(38*m) + ',' + Math.round(64*m) + ',' + Math.round(62*m) + ',1)');
+  }
+  ctx2.save();
+  ctx2.globalCompositeOperation = 'lighter';
+  ctx2.globalAlpha = ap;
+  ctx2.fillStyle = sheen; ctx2.fillRect(gx0, frameTopV(), gx1 - gx0, frameHV());
+  ctx2.restore();
   ctx2.globalAlpha = ap;
 
   let y = 300; const sp = 40;
@@ -10664,23 +10679,25 @@ function drawGroupIcon(ctx2, x, y) {
   ctx2.restore();
 }
 
-// Side-panel-style option row: white label, selected larger (Rodin Regular, no
-// highlight bar -- emphasis is size + brightness, exactly like the Theme/Colour
-// chooser). `dim` fades the parent column when a submenu is open.
+// Options row matching the real XMB options menu: uniform-size white labels,
+// the SELECTED row gets a glossy highlight bar (not larger text). `dim` fades
+// the parent column when a submenu is open.
 function drawOptRow(ctx2, label, x, y, sel, arrow, icon, dim) {
   ctx2.save(); ctx2.textBaseline = 'middle'; ctx2.textAlign = 'left';
-  ctx2.font = sel ? '400 26px PS3' : '400 22px PS3';
-  let a = sel ? 1.0 : 0.90; if (dim) a *= 0.55;
-  ctx2.shadowColor = 'rgba(0,0,0,' + (0.35).toFixed(2) + ')'; ctx2.shadowBlur = 1.5; ctx2.shadowOffsetY = 1;
+  ctx2.font = '23px PS3';
+  const w = ctx2.measureText(label).width;
+  const iconGap = icon ? 28 : 0, arrGap = arrow ? 26 : 0;
+  if (sel) drawOptHighlight(ctx2, x, y, w + iconGap + arrGap);
+  let a = sel ? 1.0 : 0.86; if (dim) a *= 0.5;
+  if (!sel) { ctx2.shadowColor = 'rgba(0,0,0,0.5)'; ctx2.shadowBlur = 3; ctx2.shadowOffsetY = 1; }
   ctx2.fillStyle = 'rgba(255,255,255,' + a.toFixed(3) + ')';
   ctx2.fillText(label, x, y);
-  const w = ctx2.measureText(label).width;
   if (icon) drawGroupIcon(ctx2, x + w + 10, y);
   if (arrow) {
     ctx2.shadowColor = 'rgba(0,0,0,0)';
-    ctx2.fillStyle = 'rgba(255,255,255,' + (sel?0.9:0.55).toFixed(2) + ')';
+    ctx2.fillStyle = 'rgba(255,255,255,' + (sel?0.95:0.6).toFixed(2) + ')';
     ctx2.font = '16px PS3';
-    ctx2.fillText('▶', x + w + (icon?34:12), y);
+    ctx2.fillText('▶', x + w + iconGap + 8, y);
   }
   ctx2.restore();
 }
