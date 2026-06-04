@@ -10605,6 +10605,21 @@ function drawLavenderPanel(ctx2, leftX, rightX, ap) {
   ctx2.fillRect(leftX, frameTopV(), rightX - leftX, frameHV());
 }
 
+// Options-menu panel: measured from /work/music.mp4 frame 0169 (lavender over
+// black) -> a semi-transparent purple, sharp left edge at x~0.69W, peak at
+// x~0.71W (color (150,125,195) @ ~0.70 alpha -> (101,84,129) over black),
+// fading out by x~0.90W. Drawn source-over so it blends with any wallpaper.
+function drawOptPanel(ctx2, dx, ap) {
+  const L = XCF(V.W * 0.685) + dx, R = XCF(V.W * 0.92) + dx;
+  const g = ctx2.createLinearGradient(L, 0, R, 0);
+  // [normalised t over L..R, alpha]
+  const prof = [[0.00,0.0],[0.03,0.62],[0.12,0.70],[0.21,0.70],[0.30,0.66],
+                [0.44,0.55],[0.58,0.44],[0.72,0.29],[0.86,0.08],[1.00,0.0]];
+  for (const [t,al] of prof) g.addColorStop(t, 'rgba(150,125,195,' + (al*ap).toFixed(3) + ')');
+  ctx2.fillStyle = g;
+  ctx2.fillRect(L, frameTopV(), R - L, frameHV());
+}
+
 // Options menu (Triangle): the firmware options list (Sort By / Group Content /
 // Play / Copy / ...) at its own position, with the Theme/Colour side-panel
 // LAVENDER GRADIENT as the background (only the gradient style is borrowed -- the
@@ -10620,10 +10635,11 @@ function drawOptMenu(ctx2) {
   // text 1340). Over a black theme it reads lavender; over green it reads
   // grey-green (semi-transparent). Rows: Sort By / Group Content at the top,
   // a gap, then Play / Copy / Add to Playlist / Delete / Information.
-  const PL = XCP(1324), PR = 1697, TX = XCP(1340), PITCH = 38;
-  const ease = ap*ap*(3-2*ap), xs = (1 - ease) * (PR - PL);
-  if (o.subOpen) drawLavenderPanel(ctx2, XCP(1324 - 330), XCP(1697 - 330), ap);  // submenu column (left)
-  drawLavenderPanel(ctx2, PL + xs, PR + xs, ap);
+  const TX = XCP(1340), PITCH = 38;
+  const PR = XCF(V.W * 0.90);
+  const ease = ap*ap*(3-2*ap), xs = (1 - ease) * (XCF(V.W*0.90) - XCF(V.W*0.685));
+  if (o.subOpen) drawOptPanel(ctx2, -XCP(330), ap);   // submenu column (shifted left)
+  drawOptPanel(ctx2, xs, ap);
   ctx2.globalAlpha = ap;
   let y = 270;
   for (let i = 0; i < o.rows.length; i++) {
