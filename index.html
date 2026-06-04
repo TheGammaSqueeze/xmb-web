@@ -7415,6 +7415,14 @@ function drawXMB(now) {
       if (y < fTop + 40) alpha *= Math.max(0, (y - fTop) / 40);
       if (y > fBot - 20) alpha *= Math.max(0, (fBot - y) / 20);
       alpha *= alphaMul;
+      // Square regroup: staggered fan-in of the new list (measured music.mp4
+      // f697-700: items appear top-to-bottom over ~0.15s). Gated to the active
+      // content category at its root.
+      if (groupReflow && items === DATA[ci].items && !stack.length) {
+        const el = performance.now() - groupReflow.start;
+        const p = Math.max(0, Math.min(1, (el - i * 26) / 170));
+        alpha *= p * p * (3 - 2 * p);   // staggered fade-in, top to bottom
+      }
       if (alpha <= 0.01) continue;
 
       const ic = getIcon(items[i].i);
@@ -10463,6 +10471,7 @@ function drawWizTzGlobe(ctx2, s, ws, yT, yB) {
 //    By Track / By Release Year / All) with a banner + content reflow.
 let optMenu = null;       // {rows, sel, subOpen, subRows, subSel, anim}
 let groupBanner = null;   // {text, start}
+let groupReflow = null;   // {start} -- staggered fan-in of the regrouped list (Square)
 
 function sortFieldForGroup(mode) {
   if (mode === 'By Artist') return 'Artist';
@@ -10534,7 +10543,7 @@ function optBack() {
 }
 function applyOptSub(sr) {
   const cat = DATA[ci];
-  if (sr.group != null) { cat._groupIdx = sr.group; regroupContent(cat); showGroupBanner(cat.groupModes[sr.group]); }
+  if (sr.group != null) { cat._groupIdx = sr.group; regroupContent(cat); groupReflow = {start: performance.now()}; showGroupBanner(cat.groupModes[sr.group]); }
   else if (sr.sort) { cat._sortDir = sr.sort; }
   closeOptMenu();
 }
@@ -10561,6 +10570,7 @@ function cycleGroup() {
   if (!cat.content || !cat.groupModes || stack.length || dialogState || wizState || optMenu) return;
   cat._groupIdx = ((cat._groupIdx || 0) + 1) % cat.groupModes.length;
   regroupContent(cat);
+  groupReflow = {start: performance.now()};
   showGroupBanner(cat.groupModes[cat._groupIdx]);
   playNav2();
 }
@@ -12988,7 +12998,8 @@ function frame(now) {
     if (p >= 1) dialogClosing = null;
   }
   // Content-browser overlays (over the XMB, not over dialogs/wizards).
-  drawGroupBanner(ctx);     // persistent top-left grouping indicator (self-gating)
+  if (groupReflow && performance.now() - groupReflow.start > 1400) groupReflow = null;
+  drawGroupBanner(ctx);     // transient top-left grouping banner (self-gating)
   if (optMenu) drawOptMenu(ctx);
 
   // Mark the just-drawn xmbCanvas as the valid "previous" for next frame.
