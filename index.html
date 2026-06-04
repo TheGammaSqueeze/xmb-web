@@ -10589,50 +10589,55 @@ function regroupContent(cat) {
   if (ii >= cat.items.length) ii = cat.items.length - 1;
 }
 
+// Helper: the firmware lavender side-panel gradient (same stops as the
+// Theme/Colour chooser drawSidePanel), drawn as a full-height vertical band.
+function drawLavenderPanel(ctx2, leftX, rightX, ap) {
+  const g = ctx2.createLinearGradient(leftX, 0, rightX, 0);
+  g.addColorStop(0.000, 'rgba(178,170,194,' + (0.00*ap) + ')');
+  g.addColorStop(0.043, 'rgba(178,170,194,' + (0.55*ap) + ')');
+  g.addColorStop(0.142, 'rgba(151,141,174,' + (0.88*ap) + ')');
+  g.addColorStop(0.300, 'rgba(160,150,182,' + (0.80*ap) + ')');
+  g.addColorStop(0.470, 'rgba(174,165,191,' + (0.65*ap) + ')');
+  g.addColorStop(0.651, 'rgba(195,189,210,' + (0.45*ap) + ')');
+  g.addColorStop(0.820, 'rgba(220,217,229,' + (0.22*ap) + ')');
+  g.addColorStop(1.000, 'rgba(245,244,247,' + (0.00*ap) + ')');
+  ctx2.fillStyle = g;
+  ctx2.fillRect(leftX, frameTopV(), rightX - leftX, frameHV());
+}
+
+// Options menu (Triangle) -- rendered in the EXACT style of the Theme/Colour
+// side-panel chooser: the lavender grey gradient panel anchored to the right,
+// white option labels (selected larger), sliding in from the right. The
+// submenu (Sort By / Group Content choices) opens as a second lavender column
+// to the left so it stays on screen.
 function drawOptMenu(ctx2) {
   const o = optMenu; if (!o) return;
-  const now = performance.now(); const ap = Math.min(1, (now - o.anim.start) / o.anim.dur);
+  const ap = Math.min(1, (performance.now() - o.anim.start) / o.anim.dur);
   ctx2.save();
   ctx2.setTransform(dpr * scaleX, 0, 0, dpr * scaleY, 0, frameCenterTY());
-
-  const mainX = XCF(V.W * 0.605) + (1 - ap) * 34;
-  // Side-panel sheen. Measured from RPCS3 (xmb-ref/content/step_sq/state0.png):
-  // the panel is NOT a dark dim -- it is an ADDITIVE light vertical band that
-  // brightens the wallpaper, ramping from x~0.68W, peaking at x~0.71W
-  // (green theme delta +(38,64,62) over base (13,75,13)) and fading out by
-  // x~0.89W. It is a glossy near-white sheen with a slight theme pickup, so it
-  // tracks the current colour; we tint the additive light by dispTint.
-  // Glossy sheen is a near-white highlight (a reflection is white, theme-safe);
-  // magnitude calibrated to the measured green peak (+38,64,62 -> luminance ~55).
-  const tnt = (typeof dispTint !== 'undefined') ? dispTint : [0.82,0.62,0.9];
-  const pr = 40 + tnt[0]*8, pg = 50 + tnt[1]*8, pb = 48 + tnt[2]*8;
-  const prof = [[0.66,0],[0.68,0.06],[0.69,0.55],[0.705,0.95],[0.715,1.0],
-                [0.74,0.95],[0.78,0.80],[0.82,0.60],[0.86,0.28],[0.89,0.06],[0.92,0]];
-  const x0 = XCF(V.W*0.62), x1 = XCF(V.W*0.96);
-  const sheen = ctx2.createLinearGradient(XCF(V.W*0.62), 0, XCF(V.W*0.96), 0);
-  for (const [xf,m] of prof) {
-    const t = (XCF(V.W*xf) - x0) / (x1 - x0);
-    sheen.addColorStop(Math.max(0,Math.min(1,t)),
-      'rgba('+Math.round(pr*m)+','+Math.round(pg*m)+','+Math.round(pb*m)+',1)');
-  }
-  ctx2.save();
-  ctx2.globalCompositeOperation = 'lighter';   // additive brightening
-  ctx2.globalAlpha = ap;
-  ctx2.fillStyle = sheen; ctx2.fillRect(XCF(V.W*0.60), 0, XCF(V.W*0.40), V.H);
-  ctx2.restore();
+  // Panel geometry (matches drawSidePanel: left=1324, right=1697, text=1340).
+  const PL = XCP(1324), PR = 1697, TX = XCP(1340), PITCH = 40;
+  const ease = ap*ap*(3-2*ap);
+  const xs = (1 - ease) * (PR - PL);          // slide-in offset
+  // Submenu lavender column to the left (when open).
+  if (o.subOpen) drawLavenderPanel(ctx2, XCP(1324) - XCP(300), XCP(1697) - XCP(300), ap);
+  drawLavenderPanel(ctx2, PL + xs, PR + xs, ap);
   ctx2.globalAlpha = ap;
 
-  let y = 300; const sp = 40;
+  // Lay out parent rows: top group, a gap at the separator, then actions.
+  let y = 360;
   for (let i = 0; i < o.rows.length; i++) {
     const r = o.rows[i];
-    if (r.sep) { y += 70; continue; }
-    drawOptRow(ctx2, r.label, mainX, y, (i === o.sel && !o.subOpen), !!r.sub, r.icon);
-    y += sp;
+    if (r.sep) { y += 54; continue; }
+    drawOptRow(ctx2, r.label, TX + xs, y, (i === o.sel && !o.subOpen), !!r.sub, r.icon, o.subOpen);
+    y += PITCH;
   }
   if (o.subOpen) {
-    const sx = XCF(V.W * 0.775); let sy = 300;
-    // light divider for the submenu column + left-arrow on the open parent
-    for (let i = 0; i < o.subRows.length; i++) { drawOptRow(ctx2, o.subRows[i].label, sx, sy, i === o.subSel, false, false); sy += sp; }
+    const sx = XCP(1340) - XCP(300); let sy = 360;
+    for (let i = 0; i < o.subRows.length; i++) {
+      drawOptRow(ctx2, o.subRows[i].label, sx, sy, i === o.subSel, false, false, false);
+      sy += PITCH;
+    }
   }
   ctx2.restore();
 }
@@ -10663,21 +10668,23 @@ function drawGroupIcon(ctx2, x, y) {
   ctx2.restore();
 }
 
-function drawOptRow(ctx2, label, x, y, sel, arrow, icon) {
+// Side-panel-style option row: white label, selected larger (Rodin Regular, no
+// highlight bar -- emphasis is size + brightness, exactly like the Theme/Colour
+// chooser). `dim` fades the parent column when a submenu is open.
+function drawOptRow(ctx2, label, x, y, sel, arrow, icon, dim) {
   ctx2.save(); ctx2.textBaseline = 'middle'; ctx2.textAlign = 'left';
-  ctx2.font = sel ? 'bold 23px PS3' : '22px PS3';
-  const w = ctx2.measureText(label).width;
-  const iconGap = icon ? 26 : 0;
-  if (sel) drawOptHighlight(ctx2, x, y, w + iconGap + (arrow ? 26 : 0));
-  if (sel) { ctx2.fillStyle = '#fff'; }
-  else { ctx2.shadowColor = 'rgba(0,0,0,0.55)'; ctx2.shadowBlur = 3; ctx2.shadowOffsetY = 1; ctx2.fillStyle = 'rgba(255,255,255,0.88)'; }
+  ctx2.font = sel ? '400 26px PS3' : '400 22px PS3';
+  let a = sel ? 1.0 : 0.90; if (dim) a *= 0.55;
+  ctx2.shadowColor = 'rgba(0,0,0,' + (0.35).toFixed(2) + ')'; ctx2.shadowBlur = 1.5; ctx2.shadowOffsetY = 1;
+  ctx2.fillStyle = 'rgba(255,255,255,' + a.toFixed(3) + ')';
   ctx2.fillText(label, x, y);
-  if (icon) drawGroupIcon(ctx2, x + w + 8, y);
+  const w = ctx2.measureText(label).width;
+  if (icon) drawGroupIcon(ctx2, x + w + 10, y);
   if (arrow) {
     ctx2.shadowColor = 'rgba(0,0,0,0)';
-    ctx2.fillStyle = sel ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.6)';
-    ctx2.font = '15px PS3';
-    ctx2.fillText('▶', x + w + iconGap + 10, y);
+    ctx2.fillStyle = 'rgba(255,255,255,' + (sel?0.9:0.55).toFixed(2) + ')';
+    ctx2.font = '16px PS3';
+    ctx2.fillText('▶', x + w + (icon?34:12), y);
   }
   ctx2.restore();
 }
