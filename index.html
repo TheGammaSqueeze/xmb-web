@@ -2757,6 +2757,24 @@ for (let i = 0; i < BG_NUM_PARTICLES; i++) {
   spawnParticle(p, PART_ASPECT_DEFAULT);
   particles.push(p);
 }
+// The music "XMB Waves" visualizer uses DOUBLE the particle density of the menu
+// (music2.mp4). A second pool of the same size is spawned lazily and concatenated
+// onto the base pool only while that visualizer is active; the menu is unaffected.
+let _mpExtraParticles = [];
+let _mpCombinedParticles = null;
+function activeParticlePool() {
+  if (musicPlayer && musicPlayer.vis === 0) {
+    if (_mpExtraParticles.length === 0) {
+      for (let i = 0; i < BG_NUM_PARTICLES; i++) {
+        const p = {}; spawnParticle(p, PART_ASPECT_DEFAULT); _mpExtraParticles.push(p);
+      }
+      _mpCombinedParticles = particles.concat(_mpExtraParticles);
+    }
+    return _mpCombinedParticles;
+  }
+  return particles;
+}
+let _drawParticleCount = BG_NUM_PARTICLES;
 
 // ------ SHADER SOURCES ------
 
@@ -2779,6 +2797,13 @@ const FS_BG = `
 precision mediump float;
 varying vec2 vUV;
 uniform float uWaveFade;  // 0..1 thin silvery wave presence (boot + steady)
+// MUSIC-PLAYER "XMB Waves" visualizer: when uMusicVis>0.5 the background becomes
+// a clean vertical gradient (theme colour at the TOP fading to BLACK at the
+// bottom) and the wave ribbon is raised to the upper third of the screen, matching
+// the real PS3 music-player wave visualizer (music2.mp4). uMusicTop is the
+// theme colour (linear) used at the top of that gradient.
+uniform float uMusicVis;
+uniform vec3 uMusicTop;
 
 // Thin silvery silk wave: a few delicate translucent filaments along a gently
 // undulating crest, like the real PS3 XMB wave. Returns an additive RGB term
@@ -2808,6 +2833,9 @@ vec3 silkWave(vec2 uv, float t) {
   // Secondary slower term: lifts the right side back UP so the right rises
   // rather than mirroring the left, giving the real asymmetric sweep.
   float secondary = sin(uv.x * 2.0 + sweepPhase * 0.6);
+  // (The captured firmware wave -- not silkWave -- is what renders in the music
+  // visualizer; it is raised via uOffset in drawCapturedWave. silkWave is only a
+  // fallback, so keep its firmware mid-screen crest.)
   float baseY = 0.505
               + 0.115 * primary       // broad sweep -> trough left-of-center-right
               - 0.035 * secondary      // asymmetry: lifts the right side back up
@@ -3571,6 +3599,17 @@ void main() {
     // hand-off to steady, where waveColorAdd is unboosted, stays seamless).
     float waveBoost = 1.0 + 0.7 * (1.0 - fade);
     gl_FragColor = vec4(gradOnly * fade * sweepMask + waveColorAdd * waveMask * waveBoost, 1.0);
+    return;
+  }
+  // ---- MUSIC "XMB Waves" VISUALIZER OVERRIDE ----
+  // Replace the menu gradient with the music-player gradient: theme colour at the
+  // TOP smoothly fading to pure BLACK at the bottom (music2.mp4), with the raised
+  // silvery wave ribbon (already in waveColorAdd) kept on top. Particles are drawn
+  // separately (doubled in this mode) over this composite.
+  if (uMusicVis > 0.5) {
+    float yy = vUV.y;                                   // 1 = top, 0 = bottom
+    vec3 grad = uMusicTop * smoothstep(0.08, 1.0, yy);  // theme colour TOP -> black BOTTOM
+    gl_FragColor = vec4(grad + waveColorAdd, 1.0);
     return;
   }
   gl_FragColor = vec4(finalColor, 1.0);
@@ -5453,6 +5492,9 @@ function drawCapturedWave(fade) {
     (window._waveYFadeLo != null) ? window._waveYFadeLo : 10.0,
     (window._waveYFadeHi != null) ? window._waveYFadeHi : 11.0);
   const offLoc = gl.getUniformLocation(waveCapProgram, 'uOffset');
+  // MUSIC "XMB Waves" visualizer raises the firmware wave to the upper third of
+  // the screen (music2.mp4). uOffset.y is an additive NDC shift (+ = up).
+  const _mvLift = (musicPlayer && musicPlayer.vis === 0) ? 0.55 : 0.0;
   if (window._waveLines === true && waveCapLineIBO) {
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waveCapLineIBO);
     // Multi-pass strand thickening: 1px GL_LINES get sparse/wireframe at high
@@ -5469,11 +5511,11 @@ function drawCapturedWave(fade) {
       ((window._waveAlpha2 != null) ? window._waveAlpha2 : 0.18) * (2.6 / passes));
     for (let i = 0; i < passes; i++) {
       const t = passes > 1 ? (i / (passes - 1) - 0.5) : 0.0; // -0.5..0.5
-      gl.uniform2f(offLoc, 0.0, t * spreadPx * ndcPerPx);
+      gl.uniform2f(offLoc, 0.0, _mvLift + t * spreadPx * ndcPerPx);
       gl.drawElements(gl.LINES, waveCapLineCount, gl.UNSIGNED_INT, 0);
     }
   } else {
-    if (offLoc) gl.uniform2f(offLoc, 0.0, 0.0);
+    if (offLoc) gl.uniform2f(offLoc, 0.0, _mvLift);
     // Filled sheet is far denser than the line strands, so it needs a much
     // lower per-fragment alpha to land at the same brightness.
     gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uAlpha'),
@@ -6243,7 +6285,7 @@ const PART_DT = 1000 / 60;                     // 16.667 ms fixed step
 // a tiny amount each 1/60s step, lightly centered on the cloud home.
 const _gJ = () => (Math.random() + Math.random() + Math.random() - 1.5) * 0.08;
 function stepParticles() {
-  for (const p of particles) {
+  for (const p of activeParticlePool()) {
     // SMOOTH damped Brownian (velocity + friction), NOT per-frame position
     // jitter (which looked like erratic "microscope organisms"). Friction
     // 0.0306 from PARTICLES.mnu makes velocity persist -> gentle gliding.
@@ -6293,11 +6335,13 @@ function buildParticleData(aspect, canvasH, nightBlend) {
   // spot light direction (eye space) from c[264-266]: spotPos (4.16,2.63,-7.6)
   const lx0 = 4.16, ly0 = 2.63, lz0 = -7.6, ll0 = Math.hypot(lx0, ly0, lz0);
   const lx = lx0 / ll0, ly = ly0 / ll0, lz = lz0 / ll0;
-  const data = new Float32Array(particles.length * 8);   // +spark
+  const pool = activeParticlePool();
+  _drawParticleCount = pool.length;
+  const data = new Float32Array(pool.length * 8);   // +spark
   let o = 0;
   const Hs = canvasH / 720;
   const FOCUS_Z = 5.8;            // eye-space depth in sharp focus (cloud median)
-  for (const p of particles) {
+  for (const p of pool) {
     const pr = projectEye(p.ex, p.ey, p.ez);
     if (!pr) { data[o + 3] = 0; o += 8; continue; }
     const w = pr[2];
@@ -6603,6 +6647,24 @@ function drawBGWebGL(dt) {
   var _rev = (typeof manualColorReveal === 'number') ? Math.min(Math.max(manualColorReveal, 0.0), 1.0) : 1.0;
   // animated HSV strength (cross-fades Original <-> a manual colour)
   gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uHSVStrength'), dispHSV * _rev);
+
+  // MUSIC "XMB Waves" visualizer: flip the gradient (theme colour top -> black
+  // bottom) and raise the wave. The top colour is the live theme tint, lifted to
+  // a vivid value so the top band reads richly coloured (music2.mp4 = saturated
+  // purple top). The base hue follows whatever Colour the user has chosen.
+  var _mvOn = (musicPlayer && musicPlayer.vis === 0) ? 1.0 : 0.0;
+  gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uMusicVis'), _mvOn);
+  if (_mvOn > 0.5) {
+    // Use the VIVID current theme hue (the per-month gradient anchor, or the
+    // manual Colour if one is chosen) for the top of the music gradient, then
+    // renormalize to a fixed bright value so the top band reads richly coloured
+    // (music2.mp4) regardless of time-of-day darkening.
+    var _mt = _monthBase;
+    if (dispHSV * _rev > 0.5) _mt = _manualTint;   // manual Colour selected
+    var _mx = Math.max(_mt[0], _mt[1], _mt[2]) || 1.0;
+    gl.uniform3f(gl.getUniformLocation(bgShaderProgram, 'uMusicTop'),
+                 _mt[0]/_mx*0.62, _mt[1]/_mx*0.62, _mt[2]/_mx*0.62);
+  }
   // Boot intro gradient ramp (coldboot1->coldboot2). bootGradientBrightness
   // is 1.0 once the intro is done; during boot it ramps the gradient up from
   // near-black over the fade window (boot_spec.md section 1).
@@ -6918,7 +6980,7 @@ function drawBGWebGL(dt) {
   gl.vertexAttribPointer(aColorP, 3, gl.FLOAT, false, ST, 16);
   if (aSparkP >= 0) gl.vertexAttribPointer(aSparkP, 1, gl.FLOAT, false, ST, 28);
 
-  gl.drawArrays(gl.POINTS, 0, BG_NUM_PARTICLES);
+  gl.drawArrays(gl.POINTS, 0, _drawParticleCount);
 
   gl.disableVertexAttribArray(aPosP);
   gl.disableVertexAttribArray(aSizeP);
@@ -10533,7 +10595,8 @@ function mpCycleVis() {
   if (!musicPlayer) return;
   musicPlayer.vis = (musicPlayer.vis + 1) % MP_VIS.length;
   mpVisName = {text: MP_VIS[musicPlayer.vis], start: performance.now()};
-  if (musicPlayer.vis === 2) initGlobe();
+  if (musicPlayer.vis === 1) initCanyon();
+  else if (musicPlayer.vis === 2) initMPGlobe();
   playNav2();
 }
 function closeMusicPlayer() {
@@ -10559,27 +10622,102 @@ function mpBands() {
   return {bass:b/(bEnd*255||1), mid:m/((mEnd-bEnd)*255||1), treble:t/((n-mEnd)*255||1), bins:mpFreq};
 }
 
-let mpGlobePhase = 0;
+let mpGlobePhase = 0;     // earth spin (continents slide)
+let mpSunPhase = 0;       // sun orbit -> drives the phase cycle (full disc -> crescent -> eclipse)
 
-// Render the earth globe (timezone shader) to the offscreen #globe canvas at a
-// given orientation/scale -- shared by the music globe visualizer.
-function mpDrawGlobe(lon, lat, scale) {
-  initGlobe(); const gl = globeGL; if (!gl || !globeProg) return false;
+// Dedicated cinematic globe shader for the music "Globe" visualizer. Unlike the
+// Time Zone globe (small, half-lit, fixed sun) this matches the PS3 Earth
+// Visualizer reference (YouTube 6Gud7hiPRM0): a LARGE earth filling the frame, an
+// ORBITING sun so the earth cycles through full -> terminator -> thin glowing
+// crescent -> eclipse, a visible sun sprite/bloom that peeks past the limb, a
+// strong blue atmosphere limb glow with a warm sunrise edge, and a starfield.
+let mpGlobeProg = null, mpGlobeBuf = null;
+function initMPGlobe() {
+  initGlobe(); const gl = globeGL; if (!gl || mpGlobeProg) return;
+  const vs = 'attribute vec2 p; void main(){ gl_Position=vec4(p,0.,1.); }';
+  const fs = [
+   'precision highp float;',
+   'uniform vec2 uRes; uniform vec2 uCenter; uniform float uR; uniform float uLon; uniform float uTime;',
+   'uniform vec3 uSun;',
+   'uniform sampler2D uDay, uNight, uClouds;',
+   'const float PI=3.14159265;',
+   'mat3 rotY(float a){ float s=sin(a),c=cos(a); return mat3(c,0.,-s, 0.,1.,0., s,0.,c); }',
+   'float h21(vec2 p){ p=fract(p*vec2(123.34,345.45)); p+=dot(p,p+34.345); return fract(p.x*p.y); }',
+   'void main(){',
+   '  vec2 fc=vec2(gl_FragCoord.x, uRes.y-gl_FragCoord.y);',
+   '  vec2 d=(fc-uCenter)/uR;',
+   '  float r2=dot(d,d); float rr=sqrt(r2);',
+   '  vec3 L=normalize(uSun);',
+   '  vec3 col=vec3(0.0);',
+   '  // starfield',
+   '  vec2 cell=floor(fc/2.5); float hs=h21(cell);',
+   '  float star=step(0.9968,hs)*(0.35+0.65*h21(cell+7.1));',
+   '  star*=0.55+0.45*sin(uTime*3.0+hs*43.0);',
+   '  col+=vec3(0.8,0.85,1.0)*star;',
+   '  // sun sprite + bloom, placed just outside the limb along the sun direction',
+   '  vec2 sdir=(length(L.xy)>1e-3)?normalize(vec2(L.x,-L.y)):vec2(1.0,0.0);',
+   '  vec2 sunScreen=uCenter+sdir*uR*1.14;',
+   '  float sd=length(fc-sunScreen)/uR;',
+   '  float behind=smoothstep(0.0,-0.45,L.z);',         // 1 when sun strongly behind earth
+   '  float sunVis=clamp(1.0-behind,0.0,1.0);',
+   '  float sunCore=exp(-sd*sd/0.0008);',
+   '  float sunGlow=exp(-sd/0.16);',
+   '  col+=vec3(1.0,0.96,0.86)*(sunCore*1.5+sunGlow*0.55)*sunVis;',
+   '  if(r2>1.0){',
+   '    float ring=exp(-(rr-1.0)/0.24);',                // atmosphere falloff outside limb
+   '    vec3 Ndir=normalize(vec3(d.x,-d.y,0.0));',
+   '    float lit=pow(clamp(dot(Ndir,L)*0.5+0.5,0.0,1.0),1.6);',
+   '    col+=vec3(0.30,0.55,1.0)*ring*1.4*lit;',          // blue atmosphere
+   '    col+=vec3(1.0,0.5,0.22)*ring*0.55*pow(lit,3.0);', // warm sunrise edge
+   '    gl_FragColor=vec4(col,1.0); return;',
+   '  }',
+   '  float z=sqrt(max(0.0,1.0-r2));',
+   '  vec3 N=vec3(d.x,-d.y,z);',
+   '  vec3 G=rotY(uLon)*N;',
+   '  float lat=asin(clamp(G.y,-1.,1.)); float lon=atan(G.x,G.z);',
+   '  vec2 tuv=vec2(lon/(2.0*PI)+0.5, 0.5 - lat/PI);',
+   '  vec3 day=texture2D(uDay,tuv).rgb;',
+   '  vec3 night=texture2D(uNight,tuv).rgb;',
+   '  float cloud=texture2D(uClouds,tuv).r;',
+   '  float diff=dot(N,L);',
+   '  float dayAmt=smoothstep(-0.10,0.16,diff);',
+   '  day=mix(day, vec3(1.0), cloud*0.5*clamp(dayAmt+0.1,0.,1.));',
+   '  vec3 surf=mix(night*1.5, day*(0.22+1.05*clamp(diff,0.,1.)), dayAmt);',
+   '  float fres=pow(1.0-z,3.0);',
+   '  float litN=clamp(diff*0.5+0.5,0.,1.);',
+   '  surf+=vec3(0.30,0.55,1.0)*fres*pow(litN,1.5)*1.2;',  // inner blue rim
+   '  surf+=vec3(1.0,0.55,0.25)*fres*pow(litN,5.0)*0.8;',  // sunrise glow at lit limb
+   '  gl_FragColor=vec4(surf,1.0);',
+   '}'].join('\n');
+  function sh(t,src){ const o=gl.createShader(t); gl.shaderSource(o,src); gl.compileShader(o);
+    if(!gl.getShaderParameter(o,gl.COMPILE_STATUS)) console.error('mpglobe',gl.getShaderInfoLog(o)); return o; }
+  const pr=gl.createProgram(); gl.attachShader(pr,sh(gl.VERTEX_SHADER,vs)); gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,fs)); gl.linkProgram(pr); mpGlobeProg=pr;
+  mpGlobeBuf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,mpGlobeBuf);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
+}
+
+// Render the cinematic music globe to the offscreen #globe canvas.
+function mpDrawGlobe(lon, sunPhase, scale) {
+  initMPGlobe(); const gl = globeGL; if (!gl || !mpGlobeProg) return false;
   if (globeCanvas.width !== xmbCanvas.width || globeCanvas.height !== xmbCanvas.height) {
     globeCanvas.width = xmbCanvas.width; globeCanvas.height = xmbCanvas.height;
   }
   const W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
-  gl.viewport(0,0,W,H); gl.clearColor(0.01,0.015,0.03,1.0); gl.clear(gl.COLOR_BUFFER_BIT);
-  gl.useProgram(globeProg); gl.bindBuffer(gl.ARRAY_BUFFER, globeBuf);
-  const lp = gl.getAttribLocation(globeProg,'p'); gl.enableVertexAttribArray(lp); gl.vertexAttribPointer(lp,2,gl.FLOAT,false,0,0);
-  gl.uniform2f(gl.getUniformLocation(globeProg,'uRes'), W, H);
-  gl.uniform2f(gl.getUniformLocation(globeProg,'uCenter'), 0.5*W, 0.46*H);
-  gl.uniform1f(gl.getUniformLocation(globeProg,'uR'), (0.30*scale)*H);
-  gl.uniform1f(gl.getUniformLocation(globeProg,'uLon'), lon);
-  gl.uniform1f(gl.getUniformLocation(globeProg,'uLat'), lat);
-  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, globeTex.day);    gl.uniform1i(gl.getUniformLocation(globeProg,'uDay'),0);
-  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, globeTex.night);  gl.uniform1i(gl.getUniformLocation(globeProg,'uNight'),1);
-  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, globeTex.clouds); gl.uniform1i(gl.getUniformLocation(globeProg,'uClouds'),2);
+  // sun orbits in a plane slightly tilted out of the screen so it dips behind the
+  // earth (eclipse) and swings back toward the viewer (full disc).
+  const sx = Math.sin(sunPhase), sz = Math.cos(sunPhase), sy = 0.16;
+  gl.viewport(0,0,W,H); gl.clearColor(0.0,0.0,0.01,1.0); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.useProgram(mpGlobeProg); gl.bindBuffer(gl.ARRAY_BUFFER, mpGlobeBuf);
+  const lp = gl.getAttribLocation(mpGlobeProg,'p'); gl.enableVertexAttribArray(lp); gl.vertexAttribPointer(lp,2,gl.FLOAT,false,0,0);
+  gl.uniform2f(gl.getUniformLocation(mpGlobeProg,'uRes'), W, H);
+  gl.uniform2f(gl.getUniformLocation(mpGlobeProg,'uCenter'), 0.5*W, 0.50*H);
+  gl.uniform1f(gl.getUniformLocation(mpGlobeProg,'uR'), (0.42*scale)*H);
+  gl.uniform1f(gl.getUniformLocation(mpGlobeProg,'uLon'), lon);
+  gl.uniform1f(gl.getUniformLocation(mpGlobeProg,'uTime'), mpGlobePhase);
+  gl.uniform3f(gl.getUniformLocation(mpGlobeProg,'uSun'), sx, sy, sz);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, globeTex.day);    gl.uniform1i(gl.getUniformLocation(mpGlobeProg,'uDay'),0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, globeTex.night);  gl.uniform1i(gl.getUniformLocation(mpGlobeProg,'uNight'),1);
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, globeTex.clouds); gl.uniform1i(gl.getUniformLocation(mpGlobeProg,'uClouds'),2);
   gl.drawArrays(gl.TRIANGLES,0,6);
   return true;
 }
@@ -10596,6 +10734,7 @@ function initCanyon() {
   const fs = [
     'precision highp float;',
     'uniform vec2 uRes; uniform float uTime; uniform float uBass; uniform float uMid;',
+    'uniform vec3 uRo; uniform vec3 uTa; uniform float uZoom; uniform float uRoll;',
     'float hash(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }',
     'float noise(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f);',
     '  float a=hash(i),b=hash(i+vec2(1,0)),c=hash(i+vec2(0,1)),d=hash(i+vec2(1,1));',
@@ -10604,10 +10743,12 @@ function initCanyon() {
     'float terr(vec2 p){ return (fbm(p*0.22)-0.5)*2.8*(1.0+uBass*0.4); }',  // smooth rolling dunes
     'void main(){',
     '  vec2 uv=(gl_FragCoord.xy/uRes-0.5); uv.x*=uRes.x/uRes.y;',
-    '  vec3 ro=vec3(0.0, 2.4, uTime*3.2);',                 // camera height + forward fly (POS SPEED)
-    '  vec3 ta=vec3(0.0, 1.0, ro.z+6.0);',                  // look slightly down + ahead (TARGET)
+    '  float cr=cos(uRoll), sr=sin(uRoll);',               // banking roll
+    '  uv = mat2(cr,-sr,sr,cr)*uv;',
+    '  vec3 ro=uRo;',                                       // camera (path integrated in JS, varying speed)
+    '  vec3 ta=uTa;',                                       // look target (sways + pitches over time)
     '  vec3 f=normalize(ta-ro), r=normalize(cross(vec3(0,1,0),f)), u=cross(f,r);',
-    '  vec3 rd=normalize(uv.x*r+uv.y*u+1.5*f);',            // 1.5 ~ ZOOM
+    '  vec3 rd=normalize(uv.x*r+uv.y*u+uZoom*f);',          // uZoom ~ varying focal length
     '  float t=0.0, hit=-1.0;',
     '  for(int i=0;i<110;i++){',
     '    vec3 p=ro+rd*t; float d=p.y-terr(p.xz);',
@@ -10634,11 +10775,29 @@ function initCanyon() {
   canyonBuf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,canyonBuf);
   gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
 }
-let mpCanyonTime = 0;
+let mpCanyonTime = 0;     // animation clock
+let mpCanyonZ = 0;        // integrated forward distance (varying speed)
 function mpDrawCanyon(bands) {
   initCanyon(); const gl=globeGL; if(!gl||!canyonProg) return false;
   if(globeCanvas.width!==xmbCanvas.width||globeCanvas.height!==xmbCanvas.height){ globeCanvas.width=xmbCanvas.width; globeCanvas.height=xmbCanvas.height; }
-  mpCanyonTime += 0.016*(1.0+bands.bass*0.5);
+  const t = mpCanyonTime;
+  // The canyon.qrc presets continuously re-aim the camera (POS SPEED, POS Y,
+  // TARGET, ZOOM all sweep). Reproduce that with slow layered sines so the
+  // fly-through camera and speed change constantly (music2.mp4): forward speed
+  // surges and eases, the camera rises/dips, drifts laterally, the look target
+  // sways/banks, and the focal length breathes.
+  const speed = 2.4 * (1.0 + 0.55*Math.sin(t*0.13) + 0.35*Math.sin(t*0.37+1.7)) * (1.0 + bands.bass*0.6);
+  mpCanyonZ += 0.016 * Math.max(0.4, speed);
+  mpCanyonTime += 0.016;
+  const camX = 3.0*Math.sin(t*0.11) + 1.3*Math.sin(t*0.29);
+  const camY = 2.6 + 1.3*Math.sin(t*0.19+0.5);
+  const roZ = mpCanyonZ;
+  // look target: ahead of the camera, swaying in yaw and pitching up/down
+  const taX = camX + 5.0*Math.sin(t*0.17+2.1);
+  const taY = 0.8 + 1.1*Math.sin(t*0.23);
+  const taZ = roZ + 6.0;
+  const zoom = 1.5 + 0.45*Math.sin(t*0.09);
+  const roll = 0.28*Math.sin(t*0.15) + 0.10*Math.sin(t*0.41);
   const W=gl.drawingBufferWidth,H=gl.drawingBufferHeight;
   gl.viewport(0,0,W,H); gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
   gl.useProgram(canyonProg); gl.bindBuffer(gl.ARRAY_BUFFER,canyonBuf);
@@ -10647,20 +10806,22 @@ function mpDrawCanyon(bands) {
   gl.uniform1f(gl.getUniformLocation(canyonProg,'uTime'),mpCanyonTime);
   gl.uniform1f(gl.getUniformLocation(canyonProg,'uBass'),bands.bass);
   gl.uniform1f(gl.getUniformLocation(canyonProg,'uMid'),bands.mid);
+  gl.uniform3f(gl.getUniformLocation(canyonProg,'uRo'),camX,camY,roZ);
+  gl.uniform3f(gl.getUniformLocation(canyonProg,'uTa'),taX,taY,taZ);
+  gl.uniform1f(gl.getUniformLocation(canyonProg,'uZoom'),zoom);
+  gl.uniform1f(gl.getUniformLocation(canyonProg,'uRoll'),roll);
   gl.drawArrays(gl.TRIANGLES,0,6);
   return true;
 }
 
 // ---- Visualizer backgrounds (drawn full-frame on the 2D canvas) ----
 function drawVisWaves(ctx2, bands) {
-  // The live WebGL wave shows through where the 2D canvas is transparent; add a
-  // subtle audio-reactive dark vignette so the Now Playing text stays legible.
+  // The live WebGL background (now in music mode: theme-colour-top -> black-bottom
+  // gradient, raised wave, doubled particles -- see FS_BG uMusicVis) shows through
+  // where the 2D canvas is transparent. Nothing to draw here; just clear so the
+  // real firmware wave is the visualizer.
   const cw = xmbCanvas.width, ch = xmbCanvas.height;
   ctx2.clearRect(0,0,cw,ch);
-  const a = 0.28 + 0.10*(1-bands.bass);
-  const g = ctx2.createLinearGradient(0,0,0,ch);
-  g.addColorStop(0,'rgba(0,0,0,'+(a+0.12).toFixed(2)+')'); g.addColorStop(0.4,'rgba(0,0,0,'+a.toFixed(2)+')'); g.addColorStop(1,'rgba(0,0,0,'+(a+0.18).toFixed(2)+')');
-  ctx2.fillStyle = g; ctx2.fillRect(0,0,cw,ch);
 }
 function drawVisCanyon(ctx2, bands) {
   const cw = xmbCanvas.width, ch = xmbCanvas.height;
@@ -10671,10 +10832,11 @@ function drawVisCanyon(ctx2, bands) {
 }
 function drawVisGlobe(ctx2, bands) {
   const cw = xmbCanvas.width, ch = xmbCanvas.height;
-  mpGlobePhase += 0.0016 + bands.bass*0.004;
-  const ok = mpDrawGlobe(mpGlobePhase, 0.18*Math.sin(mpGlobePhase*0.3), 1.0 + bands.bass*0.18);
+  mpGlobePhase += 0.0016 + bands.bass*0.003;     // earth spin (continents slide)
+  mpSunPhase += 0.0045 + bands.bass*0.002;        // sun orbit -> phase cycle
+  const ok = mpDrawGlobe(mpGlobePhase, mpSunPhase, 1.0 + bands.bass*0.06);
   ctx2.setTransform(1,0,0,1,0,0);
-  ctx2.fillStyle = '#02010a'; ctx2.fillRect(0,0,cw,ch);
+  ctx2.fillStyle = '#000005'; ctx2.fillRect(0,0,cw,ch);
   if (ok) { try { ctx2.drawImage(globeCanvas,0,0,cw,ch); } catch(e){} }
 }
 
