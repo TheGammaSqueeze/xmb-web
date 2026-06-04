@@ -7488,7 +7488,13 @@ function drawXMB(now) {
         ctx.fillStyle = 'rgb(255,255,255)';
         ctx.fillText(items[i].n, XCP(V.ITEM_TEXT_X + xShift), y - 1);
 
-        if (items[i].d) {
+        // Music tracks show their artist (+ stage) as the subtitle, like the
+        // PS3 content browser; other items use their plain description.
+        let _desc = items[i].d;
+        if (items[i].mtype === 'track' && items[i].a) {
+          _desc = items[i].a + (items[i].st ? '   (' + items[i].st + ')' : '') + (items[i].dur ? '    ' + items[i].dur : '');
+        }
+        if (_desc) {
           // Fade in over ITEM_DESC_FADE_MS so the new active description
           // doesn't snap-in mid-slide.
           ctx.globalAlpha = 0.7 * alphaMul * descNewAlpha;
@@ -7502,7 +7508,7 @@ function drawXMB(now) {
           const maxWidth = (LAYOUT_FIT < 0.999)
             ? Math.max(180, XCF(V.W) - descStartX - 50)
             : (V.W - (V.ITEM_TEXT_X + xShift) - 200);
-          drawWrappedText(ctx, items[i].d, descStartX,
+          drawWrappedText(ctx, _desc, descStartX,
                           y + V.ITEM_DESC_OFFSET + 4, maxWidth, descSize + 4, 3);
         }
 
