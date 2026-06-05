@@ -3607,8 +3607,17 @@ void main() {
   // silvery wave ribbon (already in waveColorAdd) kept on top. Particles are drawn
   // separately (doubled in this mode) over this composite.
   if (uMusicVis > 0.5) {
-    float yy = vUV.y;                                   // 1 = top, 0 = bottom
-    vec3 grad = uMusicTop * smoothstep(0.08, 1.0, yy);  // theme colour TOP -> black BOTTOM
+    // 1:1 with the real PS3 "XMB Waves" visualizer (back_colours0.fpo), measured
+    // from RPCS3 (xmb-ref/music_vis/waves): the gradient is a FIXED purple field
+    // (theme-independent -- XMB theme was GREEN at capture, visualizer rendered
+    // PURPLE), brightest at TOP-RIGHT, fading to black by ~mid-screen, with a
+    // left->right gain. Hue ratio R:G:B = 0.85:0.38:1.0 (peak sRGB ~122,55,143).
+    float t = clamp((vUV.y - 0.49) / 0.51, 0.0, 1.0);  // 0 at mid-screen, 1 at top
+    // Measured falloff: gentle purple "shoulder" through the mid (so the wave band
+    // reads magenta), with the cliff to black ~y0.49 inherent in the t-clamp.
+    float vert = pow(t, 1.2);
+    float horiz = 0.59 + 0.41 * vUV.x;                  // left 0.59 -> right 1.0
+    vec3 grad = uMusicTop * (vert * horiz);             // uMusicTop = peak purple
     gl_FragColor = vec4(grad + waveColorAdd, 1.0);
     return;
   }
@@ -5459,6 +5468,12 @@ function drawCapturedWave(fade) {
     gl.bindBuffer(gl.ARRAY_BUFFER, waveCapClipVBO);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, S);
   }
+  // MUSIC "XMB Waves" visualizer: the real ribbon is much brighter than the
+  // menu wave (measured peak ~160-255 vs ~60), reading as a bright magenta/white
+  // sweep over the purple field. Boost the captured-wave emission in music mode.
+  const _mvWaveGain = (musicPlayer && musicPlayer.vis === 0)
+                      ? ((window._mvWaveGain != null) ? window._mvWaveGain : 1.35) : 1.0;
+  fade = fade * _mvWaveGain;
   gl.useProgram(waveCapProgram);
   gl.enable(gl.BLEND);
   if (window._waveAlphaBlend === true) {
@@ -5482,7 +5497,11 @@ function drawCapturedWave(fade) {
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uScaleX'), (LAYOUT_FIT > 0.0 ? 1.0 / LAYOUT_FIT : 1.0));
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uFade'), fade);
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uAlpha'), (window._waveAlpha2 != null) ? window._waveAlpha2 : 0.18);
-  gl.uniform3fv(gl.getUniformLocation(waveCapProgram, 'uTint'), new Float32Array((window._waveTint) || [0.96, 0.97, 1.00]));
+  // Music "XMB Waves" ribbon is tinted MAGENTA/purple (low green), measured from
+  // RPCS3 (bright spots ~ (255,191,255)/(221,90,208)); the menu wave stays silver.
+  const _mvTint = (musicPlayer && musicPlayer.vis === 0)
+                  ? ((window._mvTint) || [1.0, 0.52, 1.0]) : ((window._waveTint) || [0.96, 0.97, 1.00]);
+  gl.uniform3fv(gl.getUniformLocation(waveCapProgram, 'uTint'), new Float32Array(_mvTint));
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uSilk'), (window._waveSilk != null) ? window._waveSilk : 1.0);
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uSpecW'),
     (window._waveSpecW != null) ? window._waveSpecW : 0.30);
@@ -5492,9 +5511,11 @@ function drawCapturedWave(fade) {
     (window._waveYFadeLo != null) ? window._waveYFadeLo : 10.0,
     (window._waveYFadeHi != null) ? window._waveYFadeHi : 11.0);
   const offLoc = gl.getUniformLocation(waveCapProgram, 'uOffset');
-  // MUSIC "XMB Waves" visualizer raises the firmware wave to the upper third of
-  // the screen (music2.mp4). uOffset.y is an additive NDC shift (+ = up).
-  const _mvLift = (musicPlayer && musicPlayer.vis === 0) ? 0.55 : 0.0;
+  // The real "XMB Waves" visualizer wave sits in the UPPER-MIDDLE (~y0.40,
+  // measured from RPCS3 xmb-ref/music_vis/waves), inside the purple zone so the
+  // additive ribbon reads magenta (not gray). Small NDC lift up from the default.
+  const _mvLift = (musicPlayer && musicPlayer.vis === 0)
+                  ? ((window._mvLift != null) ? window._mvLift : 0.30) : 0.0;
   if (window._waveLines === true && waveCapLineIBO) {
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waveCapLineIBO);
     // Multi-pass strand thickening: 1px GL_LINES get sparse/wireframe at high
@@ -6655,15 +6676,16 @@ function drawBGWebGL(dt) {
   var _mvOn = (musicPlayer && musicPlayer.vis === 0) ? 1.0 : 0.0;
   gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uMusicVis'), _mvOn);
   if (_mvOn > 0.5) {
-    // Use the VIVID current theme hue (the per-month gradient anchor, or the
-    // manual Colour if one is chosen) for the top of the music gradient, then
-    // renormalize to a fixed bright value so the top band reads richly coloured
-    // (music2.mp4) regardless of time-of-day darkening.
-    var _mt = _monthBase;
-    if (dispHSV * _rev > 0.5) _mt = _manualTint;   // manual Colour selected
-    var _mx = Math.max(_mt[0], _mt[1], _mt[2]) || 1.0;
+    // FIXED purple peak colour (top-right), measured 1:1 from the real RPCS3
+    // capture (xmb-ref/music_vis/waves): peak sRGB ~ (122,55,143). This is the
+    // visualizer's OWN colour, independent of the XMB seasonal/theme hue. The
+    // peak scalar is tuned so the web composite output matches the measured
+    // gradient field (see verify pass). Hue R:G:B = 0.85:0.38:1.0.
+    var _peak = (window._mvPeak != null) ? window._mvPeak : 0.58;
+    // Hue pre-corrected for the composite tonemap green-lift so the FINAL output
+    // lands on the measured real ratio R:G:B = 0.86:0.38:1.0 (sRGB 115,51,133).
     gl.uniform3f(gl.getUniformLocation(bgShaderProgram, 'uMusicTop'),
-                 _mt[0]/_mx*0.62, _mt[1]/_mx*0.62, _mt[2]/_mx*0.62);
+                 0.82*_peak, 0.30*_peak, 1.00*_peak);
   }
   // Boot intro gradient ramp (coldboot1->coldboot2). bootGradientBrightness
   // is 1.0 once the intro is done; during boot it ramps the gradient up from
