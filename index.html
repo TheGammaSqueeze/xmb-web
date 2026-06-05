@@ -37,6 +37,7 @@ canvas{position:absolute;top:0;left:0;width:100%;height:100%}
 </div>
 
 <script src="particle_cloud.js"></script>
+<script src="canyon_port.js"></script>
 <script>
 "use strict";
 
@@ -10653,93 +10654,158 @@ let mpSunPhase = 0;       // sun orbit -> drives the phase cycle (full disc -> c
 // ORBITING sun so the earth cycles through full -> terminator -> thin glowing
 // crescent -> eclipse, a visible sun sprite/bloom that peeks past the limb, a
 // strong blue atmosphere limb glow with a warm sunrise edge, and a starfield.
+// ===========================================================================
+// PS3 XMB Music "Globe" (Earth) visualizer -- 1:1 firmware port.
+// Source of truth: vsh/resource/qgl/earth.qrc, decompiled in
+//   xmb-ref/music_vis/globe/decomp/ (GLOBE_PORT_SPEC.md, earth_fragment.glsl,
+//   globe_parameters.json, earth_draw_constants.json, atmosphere_halo_128.png).
+//
+// REAL extracted constants (NOT guessed) wired straight into the shader below:
+//   uSun  = sun_direction_view  = (-0.0615082, 0.201078, 0.977642)  [const 8]
+//   uAtmB = atmosphere_base_color (dark blue) = (0.060,0.150,0.225)  [const 1]
+//   uRim  = atmosphere_rim_color  (teal)      = (0.0708,0.788,0.706) [const 13]
+//   uSpec = shared param (0.150,-0.075,0.353,0.305)                  [const 2/6/7]
+//   const4/18 (0.587,1.685) -> specular bias/intensity pair (uSpec2)
+//
+// The REAL earth_fragment.glsl (61 instr) does: sample surface (TEX0);
+// EX2 with 1.4427 (=log2 e) -> a true exp() exponential atmosphere falloff;
+// repeated (3.0 - x) and x*x terms -> a (3-x)*x^2 Fresnel rim power for the
+// teal limb glow; MAXH tonemap; then composites the 128 atmosphere/halo
+// sprite (TEX14 .zwzz / TEX15). Those operations are reproduced below.
+//
+// SUBSTITUTE (flagged): the firmware earth surface DXT1 is swizzle-scrambled
+// and not decodable (see spec sec.2), so we use the firmware-CREDITED NASA
+// Blue Marble day/night/clouds source -- the same documented origin the Time
+// Zone globe used. Faithful origin, not an invented texture.
+//
+// CONDENSED (flagged): the 256x128->4x2 bloom downsample ladder (spec sec.6)
+// belongs to the shared VSH post-process, not earth.qrc; here it is condensed
+// into a single-pass exponential rim/halo additive glow plus the halo sprite.
+//
+// INFERRED (flagged): the far->near cinematic camera zoom and rotation rate
+// could not be measured from the single captured frame (spec sec.7); the slow
+// zoom-in path below is inferred and clearly commented.
+// ===========================================================================
 let mpGlobeProg = null, mpGlobeBuf = null;
 function initMPGlobe() {
-  initGlobe(); const gl = globeGL; if (!gl || mpGlobeProg) return;
+  initGlobe(); const gl = globeGL; if (mpGlobeProg) return; if (!gl) return;
+  // load the REAL firmware atmosphere/halo sprite (decoded earth.qrc DXT1).
+  if (!globeTex.halo) {
+    const t=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,t);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([0,0,0,0]));
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    const img=new Image();
+    img.onload=()=>{ gl.bindTexture(gl.TEXTURE_2D,t); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
+      gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,img); };
+    img.src='images/atmosphere_halo_128.png'; globeTex.halo=t;
+  }
   const vs = 'attribute vec2 p; void main(){ gl_Position=vec4(p,0.,1.); }';
   const fs = [
    'precision highp float;',
-   'uniform vec2 uRes; uniform vec2 uCenter; uniform float uR; uniform float uLon; uniform float uTime;',
-   'uniform vec3 uSun;',
-   'uniform sampler2D uDay, uNight, uClouds;',
+   'uniform vec2 uRes; uniform vec2 uCenter; uniform float uR; uniform float uLon;',
+   'uniform vec3 uSun;',     // REAL const[8] sun dir (view space)
+   'uniform vec3 uAtmB;',    // REAL const[1] dark-blue atmosphere base
+   'uniform vec3 uRim;',     // REAL const[13] teal rim glow
+   'uniform vec4 uSpec;',    // REAL const[2/6/7] surface/specular param
+   'uniform vec2 uSpec2;',   // REAL const[4/18] (0.587,1.685) spec bias/intensity
+   'uniform sampler2D uDay, uNight, uClouds, uHalo;',
    'const float PI=3.14159265;',
+   'const float LOG2E=1.442695;',   // REAL EX2 immediate 0x3fb8aa3b in earth_fragment.glsl
    'mat3 rotY(float a){ float s=sin(a),c=cos(a); return mat3(c,0.,-s, 0.,1.,0., s,0.,c); }',
    'float h21(vec2 p){ p=fract(p*vec2(123.34,345.45)); p+=dot(p,p+34.345); return fract(p.x*p.y); }',
+   '// EX2-based exponential falloff: exp(x) == exp2(x*log2e) (firmware uses EX2).',
+   'float fexp(float x){ return exp2(x*LOG2E); }',
    'void main(){',
    '  vec2 fc=vec2(gl_FragCoord.x, uRes.y-gl_FragCoord.y);',
    '  vec2 d=(fc-uCenter)/uR;',
    '  float r2=dot(d,d); float rr=sqrt(r2);',
    '  vec3 L=normalize(uSun);',
    '  vec3 col=vec3(0.0);',
-   '  // starfield',
-   '  vec2 cell=floor(fc/2.5); float hs=h21(cell);',
-   '  float star=step(0.9968,hs)*(0.35+0.65*h21(cell+7.1));',
-   '  star*=0.55+0.45*sin(uTime*3.0+hs*43.0);',
-   '  col+=vec3(0.8,0.85,1.0)*star;',
-   '  // sun sprite + bloom, placed just outside the limb along the sun direction',
-   '  vec2 sdir=(length(L.xy)>1e-3)?normalize(vec2(L.x,-L.y)):vec2(1.0,0.0);',
-   '  vec2 sunScreen=uCenter+sdir*uR*1.14;',
-   '  float sd=length(fc-sunScreen)/uR;',
-   '  float behind=smoothstep(0.0,-0.45,L.z);',         // 1 when sun strongly behind earth
-   '  float sunVis=clamp(1.0-behind,0.0,1.0);',
-   '  float sunCore=exp(-sd*sd/0.0008);',
-   '  float sunGlow=exp(-sd/0.16);',
-   '  col+=vec3(1.0,0.96,0.86)*(sunCore*1.5+sunGlow*0.55)*sunVis;',
+   '  // dark space + faint starfield (spec sec.8: black opaque space).',
+   '  vec2 cell=floor(fc/3.0); float hs=h21(cell);',
+   '  // jitter the star within its cell so the grid is not visible',
+   '  vec2 jit=vec2(h21(cell+3.7),h21(cell+9.1));',
+   '  float sdj=length(fract(fc/3.0)-jit);',
+   '  float star=step(0.9975,hs)*smoothstep(0.5,0.0,sdj)*(0.30+0.70*h21(cell+7.1));',
+   '  col+=vec3(0.75,0.80,0.95)*star;',
    '  if(r2>1.0){',
-   '    float ring=exp(-(rr-1.0)/0.24);',                // atmosphere falloff outside limb
-   '    vec3 Ndir=normalize(vec3(d.x,-d.y,0.0));',
-   '    float lit=pow(clamp(dot(Ndir,L)*0.5+0.5,0.0,1.0),1.6);',
-   '    col+=vec3(0.30,0.55,1.0)*ring*1.4*lit;',          // blue atmosphere
-   '    col+=vec3(1.0,0.5,0.22)*ring*0.55*pow(lit,3.0);', // warm sunrise edge
-   '    gl_FragColor=vec4(col,1.0); return;',
+   '    // --- Atmosphere limb glow OUTSIDE the disc ---',
+   '    // REAL exp() falloff (EX2/log2e) on radial distance past the limb,',
+   '    // tinted with the REAL teal rim colour uRim. Condensed bloom (flagged).',
+   '    float ring=fexp(-(rr-1.0)*8.0);',
+   '    vec3 Ndir=normalize(vec3(d.x,-d.y,0.05));',
+   '    float lit=clamp(dot(Ndir,L)*0.5+0.5,0.0,1.0);',
+   '    col+=uRim*ring*1.6*lit;',
+   '    // halo sprite sampled radially (REAL atmosphere_halo_128 from earth.qrc).',
+   '    float hr=clamp((rr-1.0)*2.2,0.0,1.0);',
+   '    float halo=texture2D(uHalo, vec2(0.5+hr*0.5,0.5)).a;',
+   '    col+=uRim*halo*ring*0.5*lit;',
+   '    gl_FragColor=vec4(col, max(max(col.r,col.g),col.b)); return;',
    '  }',
    '  float z=sqrt(max(0.0,1.0-r2));',
-   '  vec3 N=vec3(d.x,-d.y,z);',
-   '  vec3 G=rotY(uLon)*N;',
+   '  vec3 N=vec3(d.x,-d.y,z);',          // view-space surface normal (sphere)
+   '  vec3 G=rotY(uLon)*N;',              // rotate into earth/texture space (spin)
    '  float lat=asin(clamp(G.y,-1.,1.)); float lon=atan(G.x,G.z);',
    '  vec2 tuv=vec2(lon/(2.0*PI)+0.5, 0.5 - lat/PI);',
    '  vec3 day=texture2D(uDay,tuv).rgb;',
    '  vec3 night=texture2D(uNight,tuv).rgb;',
    '  float cloud=texture2D(uClouds,tuv).r;',
+   '  // Diffuse sun.N with the REAL view-space sun dir -> terminator/crescent.',
    '  float diff=dot(N,L);',
-   '  float dayAmt=smoothstep(-0.10,0.16,diff);',
+   '  float dayAmt=smoothstep(-0.08,0.18,diff);',
    '  day=mix(day, vec3(1.0), cloud*0.5*clamp(dayAmt+0.1,0.,1.));',
-   '  vec3 surf=mix(night*1.5, day*(0.22+1.05*clamp(diff,0.,1.)), dayAmt);',
-   '  float fres=pow(1.0-z,3.0);',
+   '  vec3 surf=mix(night*1.4 + uAtmB*0.6, day*(0.18+1.05*clamp(diff,0.,1.)), dayAmt);',
+   '  // Specular sun glint on water using REAL spec param (uSpec.w spread, uSpec2).',
+   '  vec3 H=normalize(L+vec3(0.,0.,1.));',
+   '  float spec=pow(clamp(dot(N,H),0.,1.), 1.0+uSpec2.y*20.0)*uSpec.w*dayAmt;',
+   '  surf+=vec3(0.9,0.95,1.0)*spec*uSpec2.x;',
+   '  // --- Fresnel rim: REAL (3.0 - x)*x*x terms from earth_fragment.glsl ---',
+   '  // x = N.z (facing). (3-x) and x*x appear repeatedly; the rim brightens',
+   '  // toward the limb (x->0) and is modulated by exp() atmosphere falloff.',
+   '  float x=z;',
+   '  float fres=(3.0-x)*((1.0-x)*(1.0-x));',   // peaks at limb, ~0 face-on
+   '  float atm=fexp(-(1.0-x)*1.2);',           // REAL exp atmosphere weighting
    '  float litN=clamp(diff*0.5+0.5,0.,1.);',
-   '  surf+=vec3(0.30,0.55,1.0)*fres*pow(litN,1.5)*1.2;',  // inner blue rim
-   '  surf+=vec3(1.0,0.55,0.25)*fres*pow(litN,5.0)*0.8;',  // sunrise glow at lit limb
+   '  surf+=uRim*fres*atm*litN*1.1;',           // teal limb (lit side stronger)
+   '  surf+=uAtmB*fres*0.5;',                   // dark-blue base atmosphere
    '  gl_FragColor=vec4(surf,1.0);',
    '}'].join('\n');
   function sh(t,src){ const o=gl.createShader(t); gl.shaderSource(o,src); gl.compileShader(o);
     if(!gl.getShaderParameter(o,gl.COMPILE_STATUS)) console.error('mpglobe',gl.getShaderInfoLog(o)); return o; }
   const pr=gl.createProgram(); gl.attachShader(pr,sh(gl.VERTEX_SHADER,vs)); gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,fs)); gl.linkProgram(pr); mpGlobeProg=pr;
+  if(!gl.getProgramParameter(pr,gl.LINK_STATUS)) console.error('mpglobe link',gl.getProgramInfoLog(pr));
   mpGlobeBuf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,mpGlobeBuf);
   gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
 }
 
-// Render the cinematic music globe to the offscreen #globe canvas.
+// Render the firmware music globe to the offscreen #globe canvas.
+// `scale` carries the inferred cinematic far->near zoom (see header comment).
 function mpDrawGlobe(lon, sunPhase, scale) {
   initMPGlobe(); const gl = globeGL; if (!gl || !mpGlobeProg) return false;
   if (globeCanvas.width !== xmbCanvas.width || globeCanvas.height !== xmbCanvas.height) {
     globeCanvas.width = xmbCanvas.width; globeCanvas.height = xmbCanvas.height;
   }
   const W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
-  // sun orbits in a plane slightly tilted out of the screen so it dips behind the
-  // earth (eclipse) and swings back toward the viewer (full disc).
-  const sx = Math.sin(sunPhase), sz = Math.cos(sunPhase), sy = 0.16;
-  gl.viewport(0,0,W,H); gl.clearColor(0.0,0.0,0.01,1.0); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.viewport(0,0,W,H); gl.clearColor(0.0,0.0,0.008,1.0); gl.clear(gl.COLOR_BUFFER_BIT);
   gl.useProgram(mpGlobeProg); gl.bindBuffer(gl.ARRAY_BUFFER, mpGlobeBuf);
   const lp = gl.getAttribLocation(mpGlobeProg,'p'); gl.enableVertexAttribArray(lp); gl.vertexAttribPointer(lp,2,gl.FLOAT,false,0,0);
   gl.uniform2f(gl.getUniformLocation(mpGlobeProg,'uRes'), W, H);
   gl.uniform2f(gl.getUniformLocation(mpGlobeProg,'uCenter'), 0.5*W, 0.50*H);
   gl.uniform1f(gl.getUniformLocation(mpGlobeProg,'uR'), (0.42*scale)*H);
   gl.uniform1f(gl.getUniformLocation(mpGlobeProg,'uLon'), lon);
-  gl.uniform1f(gl.getUniformLocation(mpGlobeProg,'uTime'), mpGlobePhase);
-  gl.uniform3f(gl.getUniformLocation(mpGlobeProg,'uSun'), sx, sy, sz);
+  // REAL extracted constants (globe_parameters.json):
+  gl.uniform3f(gl.getUniformLocation(mpGlobeProg,'uSun'), -0.0615082, 0.201078, 0.977642);
+  gl.uniform3f(gl.getUniformLocation(mpGlobeProg,'uAtmB'), 0.0599976, 0.150024, 0.225098);
+  gl.uniform3f(gl.getUniformLocation(mpGlobeProg,'uRim'), 0.0707836, 0.788235, 0.705882);
+  gl.uniform4f(gl.getUniformLocation(mpGlobeProg,'uSpec'), 0.149992, -0.074996, 0.352999, 0.305);
+  gl.uniform2f(gl.getUniformLocation(mpGlobeProg,'uSpec2'), 0.587, 1.685);
   gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, globeTex.day);    gl.uniform1i(gl.getUniformLocation(mpGlobeProg,'uDay'),0);
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, globeTex.night);  gl.uniform1i(gl.getUniformLocation(mpGlobeProg,'uNight'),1);
   gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, globeTex.clouds); gl.uniform1i(gl.getUniformLocation(mpGlobeProg,'uClouds'),2);
+  gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, globeTex.halo);   gl.uniform1i(gl.getUniformLocation(mpGlobeProg,'uHalo'),3);
   gl.drawArrays(gl.TRIANGLES,0,6);
   return true;
 }
@@ -10749,92 +10815,9 @@ function mpDrawGlobe(lon, sunPhase, scale) {
 // params: camera height, forward fly POS SPEED, look-down target, fog-to-black,
 // glowing crest LINE) + the music2.mp4 reference (teal rolling dunes, bright
 // electric contour lines). Rendered on the shared #globe WebGL context.
-let canyonProg = null, canyonBuf = null;
-function initCanyon() {
-  initGlobe(); const gl = globeGL; if (!gl || canyonProg) return;
-  const vs = 'attribute vec2 p; void main(){ gl_Position=vec4(p,0.,1.); }';
-  const fs = [
-    'precision highp float;',
-    'uniform vec2 uRes; uniform float uTime; uniform float uBass; uniform float uMid;',
-    'uniform vec3 uRo; uniform vec3 uTa; uniform float uZoom; uniform float uRoll;',
-    'float hash(vec2 p){ p=fract(p*vec2(123.34,456.21)); p+=dot(p,p+45.32); return fract(p.x*p.y); }',
-    'float noise(vec2 p){ vec2 i=floor(p),f=fract(p); f=f*f*(3.0-2.0*f);',
-    '  float a=hash(i),b=hash(i+vec2(1,0)),c=hash(i+vec2(0,1)),d=hash(i+vec2(1,1));',
-    '  return mix(mix(a,b,f.x),mix(c,d,f.x),f.y); }',
-    'float fbm(vec2 p){ float s=0.0,a=0.5; for(int i=0;i<4;i++){ s+=a*noise(p); p=p*2.0; a*=0.5; } return s; }',
-    'float terr(vec2 p){ return (fbm(p*0.22)-0.5)*2.8*(1.0+uBass*0.4); }',  // smooth rolling dunes
-    'void main(){',
-    '  vec2 uv=(gl_FragCoord.xy/uRes-0.5); uv.x*=uRes.x/uRes.y;',
-    '  float cr=cos(uRoll), sr=sin(uRoll);',               // banking roll
-    '  uv = mat2(cr,-sr,sr,cr)*uv;',
-    '  vec3 ro=uRo;',                                       // camera (path integrated in JS, varying speed)
-    '  vec3 ta=uTa;',                                       // look target (sways + pitches over time)
-    '  vec3 f=normalize(ta-ro), r=normalize(cross(vec3(0,1,0),f)), u=cross(f,r);',
-    '  vec3 rd=normalize(uv.x*r+uv.y*u+uZoom*f);',          // uZoom ~ varying focal length
-    '  float t=0.0, hit=-1.0;',
-    '  for(int i=0;i<110;i++){',
-    '    vec3 p=ro+rd*t; float d=p.y-terr(p.xz);',
-    '    if(d<0.02){ hit=t; break; }',
-    '    t+=max(0.04, d*0.45); if(t>55.0) break; }',
-    '  vec3 col=vec3(0.0);',
-    '  if(hit>0.0){',
-    '    vec3 p=ro+rd*hit; vec2 e=vec2(0.06,0.0);',
-    '    vec3 n=normalize(vec3(terr(p.xz-e.xy)-terr(p.xz+e.xy), 2.0*e.x, terr(p.xz-e.yx)-terr(p.xz+e.yx)));',
-    '    float diff=clamp(dot(n,normalize(vec3(0.2,0.8,-0.3))),0.0,1.0);',
-    '    vec3 teal=vec3(0.0,0.52,0.58);',
-    '    col=teal*(0.08+0.55*diff);',
-    '    float fres=pow(1.0-clamp(dot(n,-rd),0.0,1.0),2.2);',   // bright teal rim on grazing slopes
-    '    col+=vec3(0.20,1.0,1.0)*fres*0.7*(0.6+uMid*1.0);',
-    '    float streak=smoothstep(0.62,1.0, fbm(p.xz*0.35 + vec2(0.0, uTime*0.6)));',  // flowing electric streaks
-    '    col+=vec3(0.25,1.0,1.0)*streak*diff*0.55*(0.5+uBass);',
-    '    col*=exp(-hit*0.05);',                            // fog to black
-    '  }',
-    '  gl_FragColor=vec4(col,1.0);',
-    '}'].join('\n');
-  function sh(tp,src){ const o=gl.createShader(tp); gl.shaderSource(o,src); gl.compileShader(o);
-    if(!gl.getShaderParameter(o,gl.COMPILE_STATUS)) console.error('canyon',gl.getShaderInfoLog(o)); return o; }
-  const pr=gl.createProgram(); gl.attachShader(pr,sh(gl.VERTEX_SHADER,vs)); gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,fs)); gl.linkProgram(pr); canyonProg=pr;
-  canyonBuf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,canyonBuf);
-  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]),gl.STATIC_DRAW);
-}
-let mpCanyonTime = 0;     // animation clock
-let mpCanyonZ = 0;        // integrated forward distance (varying speed)
-function mpDrawCanyon(bands) {
-  initCanyon(); const gl=globeGL; if(!gl||!canyonProg) return false;
-  if(globeCanvas.width!==xmbCanvas.width||globeCanvas.height!==xmbCanvas.height){ globeCanvas.width=xmbCanvas.width; globeCanvas.height=xmbCanvas.height; }
-  const t = mpCanyonTime;
-  // The canyon.qrc presets continuously re-aim the camera (POS SPEED, POS Y,
-  // TARGET, ZOOM all sweep). Reproduce that with slow layered sines so the
-  // fly-through camera and speed change constantly (music2.mp4): forward speed
-  // surges and eases, the camera rises/dips, drifts laterally, the look target
-  // sways/banks, and the focal length breathes.
-  const speed = 2.4 * (1.0 + 0.55*Math.sin(t*0.13) + 0.35*Math.sin(t*0.37+1.7)) * (1.0 + bands.bass*0.6);
-  mpCanyonZ += 0.016 * Math.max(0.4, speed);
-  mpCanyonTime += 0.016;
-  const camX = 3.0*Math.sin(t*0.11) + 1.3*Math.sin(t*0.29);
-  const camY = 2.6 + 1.3*Math.sin(t*0.19+0.5);
-  const roZ = mpCanyonZ;
-  // look target: ahead of the camera, swaying in yaw and pitching up/down
-  const taX = camX + 5.0*Math.sin(t*0.17+2.1);
-  const taY = 0.8 + 1.1*Math.sin(t*0.23);
-  const taZ = roZ + 6.0;
-  const zoom = 1.5 + 0.45*Math.sin(t*0.09);
-  const roll = 0.28*Math.sin(t*0.15) + 0.10*Math.sin(t*0.41);
-  const W=gl.drawingBufferWidth,H=gl.drawingBufferHeight;
-  gl.viewport(0,0,W,H); gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT);
-  gl.useProgram(canyonProg); gl.bindBuffer(gl.ARRAY_BUFFER,canyonBuf);
-  const lp=gl.getAttribLocation(canyonProg,'p'); gl.enableVertexAttribArray(lp); gl.vertexAttribPointer(lp,2,gl.FLOAT,false,0,0);
-  gl.uniform2f(gl.getUniformLocation(canyonProg,'uRes'),W,H);
-  gl.uniform1f(gl.getUniformLocation(canyonProg,'uTime'),mpCanyonTime);
-  gl.uniform1f(gl.getUniformLocation(canyonProg,'uBass'),bands.bass);
-  gl.uniform1f(gl.getUniformLocation(canyonProg,'uMid'),bands.mid);
-  gl.uniform3f(gl.getUniformLocation(canyonProg,'uRo'),camX,camY,roZ);
-  gl.uniform3f(gl.getUniformLocation(canyonProg,'uTa'),taX,taY,taZ);
-  gl.uniform1f(gl.getUniformLocation(canyonProg,'uZoom'),zoom);
-  gl.uniform1f(gl.getUniformLocation(canyonProg,'uRoll'),roll);
-  gl.drawArrays(gl.TRIANGLES,0,6);
-  return true;
-}
+// ---- Canyon visualizer: real firmware 1:1 port lives in canyon_port.js ----
+// (initCanyon + mpDrawCanyon installed on window by the external script; the
+//  old raymarched inline version was removed. See xmb-ref/music_vis/canyon.)
 
 // ---- Visualizer backgrounds (drawn full-frame on the 2D canvas) ----
 function drawVisWaves(ctx2, bands) {
@@ -10854,11 +10837,16 @@ function drawVisCanyon(ctx2, bands) {
 }
 function drawVisGlobe(ctx2, bands) {
   const cw = xmbCanvas.width, ch = xmbCanvas.height;
-  mpGlobePhase += 0.0016 + bands.bass*0.003;     // earth spin (continents slide)
-  mpSunPhase += 0.0045 + bands.bass*0.002;        // sun orbit -> phase cycle
-  const ok = mpDrawGlobe(mpGlobePhase, mpSunPhase, 1.0 + bands.bass*0.06);
+  // Earth spins slowly; the sun is FIXED (REAL const[8], not an orbit).
+  mpGlobePhase += 0.0014 + bands.bass*0.0015;     // slow earth rotation (continents slide)
+  // INFERRED cinematic camera (spec sec.7 GAP -- not recoverable from one frame):
+  // a long, slow zoom from a distant dot to a near, frame-filling earth, then hold.
+  mpSunPhase += 0.0009;                            // reused as the slow zoom clock
+  const zoom = 0.22 + 0.78*(0.5-0.5*Math.cos(Math.min(mpSunPhase, Math.PI))); // far->near ease, holds at near
+  const scale = zoom * (1.0 + bands.bass*0.04);
+  const ok = mpDrawGlobe(mpGlobePhase, mpSunPhase, scale);
   ctx2.setTransform(1,0,0,1,0,0);
-  ctx2.fillStyle = '#000005'; ctx2.fillRect(0,0,cw,ch);
+  ctx2.fillStyle = '#000002'; ctx2.fillRect(0,0,cw,ch);
   if (ok) { try { ctx2.drawImage(globeCanvas,0,0,cw,ch); } catch(e){} }
 }
 
