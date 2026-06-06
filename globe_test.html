@@ -1,0 +1,208 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Globe 1:1</title>
+<style>html,body{margin:0;background:#000;overflow:hidden}#c{display:block}</style></head>
+<body><canvas id="c" width="1920" height="1080"></canvas>
+<script>
+// PS3 XMB Music "Globe" visualizer - 1:1 port (multi-pass: scene + HDR bloom).
+// Real firmware data: earth.qrc cube earth+clouds, 1024 starfield DDS, .mnu params.
+const P=new URLSearchParams(location.search);
+const f=(k,d)=>{const v=P.get(k);return v===null?d:parseFloat(v);};
+const cv=document.getElementById('c'), W=cv.width, H=cv.height;
+const gl=cv.getContext('webgl',{preserveDrawingBuffer:true,antialias:false,premultipliedAlpha:false});
+
+// firmware constants
+const ATM_BASE=[0.0599976,0.150024,0.225098], ATM_RIM=[0.0707836,0.788235,0.705882];
+const EXPOSURE=f('exp',0.789), WHITE=f('white',3.40918);
+const GLARE_LEVEL=f('glare',0.55), GLARE_THRESH=f('gthresh',0.62), BLOOM_RAD=f('brad',2.7);
+const FOVY=f('fovy',42.5);
+// camera/scene (URL-driven; animation overrides when t set)
+let camDist=f('dist',1.2), lookPitch=f('lpitch',-60), lookYaw=f('lyaw',0);
+let camYaw=f('yaw',0), camPitch=f('pitch',0);
+let sunYaw=f('syaw',15), sunPitch=f('spitch',80), earthSpin=f('spin',20), axialTilt=f('tilt',23.4);
+const starRot=f('starrot',0);
+
+const deg=a=>a*Math.PI/180;
+const FACE_ORDER=(P.get('faces')||'1,3,5,4,0,2').split(',').map(Number);
+
+function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))console.error('shader',gl.getShaderInfoLog(o),s);return o;}
+function prog(vs,fs){const p=gl.createProgram();gl.attachShader(p,sh(gl.VERTEX_SHADER,vs));gl.attachShader(p,sh(gl.FRAGMENT_SHADER,fs));gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))console.error('link',gl.getProgramInfoLog(p));return p;}
+const QVS='attribute vec2 p;varying vec2 vUV;void main(){vUV=p*0.5+0.5;gl_Position=vec4(p,0.,1.);}';
+
+// ---------- scene shader ----------
+const SCENE_FS=`precision highp float;
+varying vec2 vUV;
+uniform vec2 uRes;
+uniform vec3 uCamPos,uCamFwd,uCamUp,uCamRight; uniform float uTanHalfFov;
+uniform vec3 uSun; uniform mat3 uEarthRot,uStarRot;
+uniform samplerCube uEarth,uClouds; uniform sampler2D uStars;
+uniform vec3 uAtmBase,uAtmRim; uniform float uExposure,uWhite,uStarBright;
+const float PI=3.14159265;
+vec2 dir2uv(vec3 d){ float lon=atan(d.z,d.x); float lat=asin(clamp(d.y,-1.,1.)); return vec2(lon/(2.0*PI)+0.5, 0.5-lat/PI); }
+void main(){
+  vec2 uv=vUV*2.0-1.0; float aspect=uRes.x/uRes.y;
+  vec3 rd=normalize(uCamFwd+uCamRight*(uv.x*aspect*uTanHalfFov)+uCamUp*(uv.y*uTanHalfFov));
+  vec3 ro=uCamPos; vec3 L=normalize(uSun); vec3 col=vec3(0.0);
+  // real firmware starfield (1024 DDS) on the sky sphere
+  vec3 sdir=uStarRot*rd; vec3 stars=texture2D(uStars,dir2uv(sdir)).rgb;
+  // firmware stars are very dim (STARS FACTOR 0.000194); keep only brightest, faint.
+  col+=pow(stars,vec3(2.2))*uStarBright;
+  // ray-sphere earth (r=1)
+  float b=dot(ro,rd), c=dot(ro,ro)-1.0, disc=b*b-c; bool hit=false;
+  if(disc>0.0){ float t=-b-sqrt(disc);
+    if(t>0.0){ hit=true; vec3 pos=ro+rd*t; vec3 N=normalize(pos); vec3 tc=uEarthRot*N;
+      vec3 surf=textureCube(uEarth,tc).rgb; float cloud=textureCube(uClouds,tc).r;
+      float ndl=dot(N,L); float day=smoothstep(-0.04,0.16,ndl);
+      vec3 base=surf*vec3(1.5,1.62,1.85); base=mix(base,vec3(1.15,1.2,1.28),cloud*0.9*day);
+      vec3 lit=base*clamp(ndl,0.0,1.0)*2.1; vec3 night=surf*uAtmBase*0.5;
+      col=mix(night,lit,day);
+      float ndv=clamp(dot(N,-rd),0.0,1.0); float limb=pow(1.0-ndv,6.0);
+      float sunlit=clamp(ndl*0.7+0.35,0.0,1.0);
+      vec3 limbCol=mix(uAtmRim,vec3(0.9,0.97,1.05),sunlit*0.8);
+      col+=limbCol*limb*1.15*sunlit;
+    }
+  }
+  // atmosphere shell + forward scatter (backlit crescent). The limb glows in a
+  // thin ring all the way around (faint on the night side, bright toward the sun).
+  { float tca=dot(-ro,rd); vec3 closest=ro+rd*max(tca,0.0); float dmin=length(closest);
+    float band=exp(-max(dmin-1.0,0.0)*16.0); vec3 Pn=normalize(closest);
+    float sundot=dot(Pn,L);
+    float lit=clamp(sundot*0.8+0.25,0.0,1.0);
+    float fscat=pow(clamp(sundot,0.0,1.0),3.0);
+    float ring=0.18;                                  // faint full-limb ring (both sides)
+    vec3 atmCol=mix(uAtmRim,vec3(0.95,0.93,0.86),fscat*0.8);
+    if(!hit) col+=atmCol*band*(ring + 1.5*lit + 6.0*fscat);
+  }
+  // sun disc/glare (bloom will spread it)
+  float s=dot(rd,L);
+  if(s>0.0){ float occ=1.0;
+    if(disc>0.0){float ts=-b-sqrt(disc);if(ts>0.0){vec3 ps=ro+rd*ts;if(dot(normalize(ps),L)<-0.02)occ=0.0;}}
+    float gd=pow(clamp(s,0.0,1.0),8000.0)*180.0;
+    float gf=pow(clamp(s,0.0,1.0),250.0)*4.0;
+    col+=vec3(1.0,0.96,0.88)*(gd+gf)*occ;
+  }
+  // HDR tonemap (firmware EXPOSURE/WHITE LEVEL), TONEBEFORE=1 so glare extracts from this
+  col*=uExposure; float Wl=uWhite; col=(col*(1.0+col/(Wl*Wl)))/(1.0+col);
+  gl_FragColor=vec4(clamp(col,0.0,1.0),1.0);
+}`;
+
+const BRIGHT_FS=`precision highp float;varying vec2 vUV;uniform sampler2D uTex;uniform float uThresh;
+void main(){vec3 c=texture2D(uTex,vUV).rgb; gl_FragColor=vec4(max(c-uThresh,0.0)/max(1.0-uThresh,0.001),1.0);}`;
+const BLUR_FS=`precision highp float;varying vec2 vUV;uniform sampler2D uTex;uniform vec2 uDir;uniform float uRad;
+void main(){ vec3 s=vec3(0.0); float wsum=0.0;
+  for(int i=-8;i<=8;i++){ float fi=float(i); float w=exp(-fi*fi/(2.0*uRad*uRad));
+    s+=texture2D(uTex,vUV+uDir*fi).rgb*w; wsum+=w; }
+  gl_FragColor=vec4(s/wsum,1.0);
+}`;
+const COMP_FS=`precision highp float;varying vec2 vUV;uniform sampler2D uScene,uBloom;uniform float uGlare;
+void main(){ vec3 sc=texture2D(uScene,vUV).rgb; vec3 bl=texture2D(uBloom,vUV).rgb;
+  vec3 o=sc+bl*uGlare; gl_FragColor=vec4(clamp(o,0.0,1.0),1.0);}`;
+
+const sceneP=prog(QVS,SCENE_FS), brightP=prog(QVS,BRIGHT_FS), blurP=prog(QVS,BLUR_FS), compP=prog(QVS,COMP_FS);
+const quad=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,quad);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+function bindQuad(p){gl.bindBuffer(gl.ARRAY_BUFFER,quad);const l=gl.getAttribLocation(p,'p');gl.enableVertexAttribArray(l);gl.vertexAttribPointer(l,2,gl.FLOAT,false,0,0);}
+
+function makeFBO(w,h){const t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,w,h,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  const fb=gl.createFramebuffer();gl.bindFramebuffer(gl.FRAMEBUFFER,fb);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,t,0);
+  return {t,fb,w,h};}
+const sceneFBO=makeFBO(W,H);
+const bw=W>>1,bh=H>>1; const brightFBO=makeFBO(bw,bh),blurA=makeFBO(bw,bh),blurB=makeFBO(bw,bh);
+
+// textures
+let loaded=0,need=13;
+function cube(prefix){const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_CUBE_MAP,tex);
+  const T=[gl.TEXTURE_CUBE_MAP_POSITIVE_X,gl.TEXTURE_CUBE_MAP_NEGATIVE_X,gl.TEXTURE_CUBE_MAP_POSITIVE_Y,gl.TEXTURE_CUBE_MAP_NEGATIVE_Y,gl.TEXTURE_CUBE_MAP_POSITIVE_Z,gl.TEXTURE_CUBE_MAP_NEGATIVE_Z];
+  for(let i=0;i<6;i++)gl.texImage2D(T[i],0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([0,0,30,255]));
+  for(let i=0;i<6;i++){const im=new Image();im.onload=(function(i,im){return function(){gl.bindTexture(gl.TEXTURE_CUBE_MAP,tex);
+    gl.texImage2D(T[i],0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    loaded++;if(loaded>=need)ready();};})(i,im);im.src='globe_assets/'+prefix+'_face'+FACE_ORDER[i]+'.png';}
+  return tex;}
+const earthTex=cube('earth'), cloudTex=cube('clouds');
+const starTex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,starTex);
+gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([0,0,0,255]));
+{const im=new Image();im.onload=function(){gl.bindTexture(gl.TEXTURE_2D,starTex);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.REPEAT);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  loaded++;if(loaded>=need)ready();};im.src='globe_assets/starfield.png';}
+
+function dir(yaw,pitch){const y=deg(yaw),p=deg(pitch);return [Math.cos(p)*Math.sin(y),Math.sin(p),Math.cos(p)*Math.cos(y)];}
+function mul3(a,b){let r=new Array(9);for(let i=0;i<3;i++)for(let j=0;j<3;j++){r[i*3+j]=0;for(let k=0;k<3;k++)r[i*3+j]+=a[i*3+k]*b[k*3+j];}return r;}
+function rotY(a){const s=Math.sin(deg(a)),c=Math.cos(deg(a));return [c,0,s,0,1,0,-s,0,c];}
+function rotX(a){const s=Math.sin(deg(a)),c=Math.cos(deg(a));return [1,0,0,0,c,-s,0,s,c];}
+const U=(p,n)=>gl.getUniformLocation(p,n);
+
+function renderScene(){
+  gl.bindFramebuffer(gl.FRAMEBUFFER,sceneFBO.fb);gl.viewport(0,0,W,H);gl.clearColor(0,0,0,1);gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.useProgram(sceneP);bindQuad(sceneP);
+  const cp=dir(camYaw,camPitch).map(x=>x*camDist);
+  const fwd=[-Math.cos(deg(camPitch+lookPitch))*Math.sin(deg(camYaw+lookYaw)),-Math.sin(deg(camPitch+lookPitch)),-Math.cos(deg(camPitch+lookPitch))*Math.cos(deg(camYaw+lookYaw))];
+  let up=[0,1,0];
+  let right=[fwd[1]*up[2]-fwd[2]*up[1],fwd[2]*up[0]-fwd[0]*up[2],fwd[0]*up[1]-fwd[1]*up[0]];
+  const rl=Math.hypot(...right);right=right.map(x=>x/rl);
+  up=[right[1]*fwd[2]-right[2]*fwd[1],right[2]*fwd[0]-right[0]*fwd[2],right[0]*fwd[1]-right[1]*fwd[0]];
+  gl.uniform3f(U(sceneP,'uCamPos'),cp[0],cp[1],cp[2]);
+  gl.uniform3f(U(sceneP,'uCamFwd'),fwd[0],fwd[1],fwd[2]);
+  gl.uniform3f(U(sceneP,'uCamUp'),up[0],up[1],up[2]);
+  gl.uniform3f(U(sceneP,'uCamRight'),right[0],right[1],right[2]);
+  gl.uniform1f(U(sceneP,'uTanHalfFov'),Math.tan(deg(FOVY/2)));
+  gl.uniform2f(U(sceneP,'uRes'),W,H);
+  const sd=dir(sunYaw,sunPitch);gl.uniform3f(U(sceneP,'uSun'),sd[0],sd[1],sd[2]);
+  gl.uniformMatrix3fv(U(sceneP,'uEarthRot'),false,mul3(rotY(earthSpin),rotX(axialTilt)));
+  gl.uniformMatrix3fv(U(sceneP,'uStarRot'),false,rotY(starRot));
+  gl.uniform3f(U(sceneP,'uAtmBase'),...ATM_BASE);gl.uniform3f(U(sceneP,'uAtmRim'),...ATM_RIM);
+  gl.uniform1f(U(sceneP,'uExposure'),EXPOSURE);gl.uniform1f(U(sceneP,'uWhite'),WHITE);
+  gl.uniform1f(U(sceneP,'uStarBright'),f('starb',0.18));
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_CUBE_MAP,earthTex);gl.uniform1i(U(sceneP,'uEarth'),0);
+  gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_CUBE_MAP,cloudTex);gl.uniform1i(U(sceneP,'uClouds'),1);
+  gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D,starTex);gl.uniform1i(U(sceneP,'uStars'),2);
+  gl.drawArrays(gl.TRIANGLES,0,3);
+}
+function post(){
+  // bright pass
+  gl.bindFramebuffer(gl.FRAMEBUFFER,brightFBO.fb);gl.viewport(0,0,bw,bh);gl.useProgram(brightP);bindQuad(brightP);
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,sceneFBO.t);gl.uniform1i(U(brightP,'uTex'),0);gl.uniform1f(U(brightP,'uThresh'),GLARE_THRESH);
+  gl.drawArrays(gl.TRIANGLES,0,3);
+  // blur H
+  gl.bindFramebuffer(gl.FRAMEBUFFER,blurA.fb);gl.viewport(0,0,bw,bh);gl.useProgram(blurP);bindQuad(blurP);
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,brightFBO.t);gl.uniform1i(U(blurP,'uTex'),0);
+  gl.uniform2f(U(blurP,'uDir'),1.0/bw,0.0);gl.uniform1f(U(blurP,'uRad'),BLOOM_RAD);gl.drawArrays(gl.TRIANGLES,0,3);
+  // blur V
+  gl.bindFramebuffer(gl.FRAMEBUFFER,blurB.fb);gl.viewport(0,0,bw,bh);
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,blurA.t);gl.uniform2f(U(blurP,'uDir'),0.0,1.0/bh);gl.drawArrays(gl.TRIANGLES,0,3);
+  // second wider blur for soft halo
+  gl.bindFramebuffer(gl.FRAMEBUFFER,blurA.fb);
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,blurB.t);gl.uniform2f(U(blurP,'uDir'),2.5/bw,0.0);gl.uniform1f(U(blurP,'uRad'),BLOOM_RAD*2.0);gl.drawArrays(gl.TRIANGLES,0,3);
+  gl.bindFramebuffer(gl.FRAMEBUFFER,blurB.fb);
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,blurA.t);gl.uniform2f(U(blurP,'uDir'),0.0,2.5/bh);gl.drawArrays(gl.TRIANGLES,0,3);
+  // composite to screen
+  gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,W,H);gl.useProgram(compP);bindQuad(compP);
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,sceneFBO.t);gl.uniform1i(U(compP,'uScene'),0);
+  gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,blurB.t);gl.uniform1i(U(compP,'uBloom'),1);
+  gl.uniform1f(U(compP,'uGlare'),GLARE_LEVEL);gl.drawArrays(gl.TRIANGLES,0,3);
+}
+// animation keyframes (optional): t in [0,1] over the captured 3-min sequence.
+let KF=null; try{ if(P.get('kf')) KF=JSON.parse(decodeURIComponent(P.get('kf'))); }catch(e){}
+function applyAnim(tt){
+  if(!KF) return;
+  // KF = [{t,dist,lpitch,lyaw,syaw,spitch,spin,yaw,pitch},...] linear interp
+  let a=KF[0],b=KF[KF.length-1];
+  for(let i=0;i<KF.length-1;i++){ if(tt>=KF[i].t && tt<=KF[i+1].t){a=KF[i];b=KF[i+1];break;} }
+  const span=Math.max(1e-6,b.t-a.t); const u=Math.min(1,Math.max(0,(tt-a.t)/span));
+  const L=(k)=>a[k]+(b[k]-a[k])*u;
+  camDist=L('dist');lookPitch=L('lpitch');lookYaw=L('lyaw');camYaw=L('yaw');camPitch=L('pitch');
+  sunYaw=L('syaw');sunPitch=L('spitch');earthSpin=L('spin');
+}
+function frame(){ renderScene(); post(); window.__rendered=true; }
+let started=false;
+function ready(){ if(started)return; started=true;
+  const tParam=P.get('t');
+  if(tParam!==null && KF){ applyAnim(parseFloat(tParam)); frame(); }
+  else if(P.get('anim')==='1'){ const t0=performance.now(); const dur=parseFloat(P.get('dur')||'181')*1000;
+    (function loop(){ const tt=((performance.now()-t0)%dur)/dur; applyAnim(tt); frame(); requestAnimationFrame(loop); })(); }
+  else frame();
+}
+window.__setT=function(tt){ applyAnim(tt); frame(); };
+</script></body></html>

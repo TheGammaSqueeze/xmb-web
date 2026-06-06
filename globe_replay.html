@@ -1,0 +1,132 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Globe verbatim replay</title>
+<style>html,body{margin:0;background:#000;overflow:hidden}#c{display:block}</style></head>
+<body><canvas id="c" width="1920" height="1080"></canvas>
+<script>
+// VERBATIM replay of the real PS3 earth draw: real mesh (in_pos/in_tc0), real
+// vertex program math, real captured constants (MVP + camera basis), real cube earth.
+// No hand-written approximation: geometry+camera are the firmware's, ported 1:1.
+const P=new URLSearchParams(location.search);
+const f=(k,d)=>{const v=P.get(k);return v===null?d:parseFloat(v);};
+const cv=document.getElementById('c'),W=cv.width,Hh=cv.height;
+const gl=cv.getContext('webgl',{preserveDrawingBuffer:true,antialias:true});
+// basis permutation (c5,c6,c7 from the 3 orthonormal vectors) + earth orientation, tunable
+const PERM=(P.get('perm')||'2,0,1').split(',').map(Number);   // indices into basis[]
+const EROT=[f('erx',0),f('ery',0),f('erz',0)];
+const deg=a=>a*Math.PI/180;
+
+const VS=`precision highp float;
+attribute vec4 in_pos; attribute vec4 in_tc0;
+uniform vec4 mvp0,mvp1,mvp2,mvp3; uniform float uClipScale; uniform vec3 c5,c6,c7,c8;
+varying vec3 vN; varying vec2 vTC;
+void main(){
+  // --- verbatim vertex-program position generation (vp 3f6eeb47aca4477d) ---
+  // r0 = unit-sphere world position generated from real camera basis + tc0.
+  float A=1.0/sqrt(max(dot(c8,c8),1e-10));   // 1/|eye|
+  float w=in_pos.w;
+  float B=sqrt(max((1.0/A)*(1.0/A)-w*w,1e-10));
+  float s=A*w*w;
+  float t=A*B*w;
+  vec3 r0 = s*c5 + t*(in_tc0.z*c7 + in_tc0.w*c6);
+  vN=normalize(r0); vTC=in_tc0.xy;
+  // project with the REAL captured RSX MVP (c256-259), then apply the RSX
+  // viewport scale_offset that RPCS3 applies post-program (uClipScale ~0.5).
+  vec4 p=vec4(r0,1.0);
+  vec4 clip=vec4(dot(p,mvp0),dot(p,mvp1),dot(p,mvp2),dot(p,mvp3));
+  clip.xy*=uClipScale;
+  clip.z=(clip.z*2.0 - clip.w);   // RSX->GL depth remap (from vp main)
+  gl_Position=clip;
+}`;
+const FS=`precision highp float;
+varying vec3 vN; varying vec2 vTC;
+uniform samplerCube uEarth, uClouds; uniform vec3 uSun; uniform mat3 uErot; uniform float uDebug;
+void main(){
+  vec3 N=normalize(uErot*vN);
+  vec3 surf=textureCube(uEarth,N).rgb;
+  float cloud=textureCube(uClouds,N).r;
+  float ndl=dot(normalize(vN),normalize(uSun));
+  float day=smoothstep(-0.05,0.18,ndl);
+  vec3 base=surf*vec3(1.5,1.62,1.85); base=mix(base,vec3(1.2),cloud*0.9*day);
+  vec3 col=mix(surf*0.04, base*clamp(ndl,0.0,1.0)*2.0, day);
+  gl_FragColor=vec4(col,1.0);
+  // debug: show unlit geometry/texture to verify mesh+MVP placement
+  if(uDebug>0.5) gl_FragColor=vec4(surf*1.6+vec3(0.05),1.0);
+}`;
+function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))console.error(gl.getShaderInfoLog(o));return o;}
+const prog=gl.createProgram();gl.attachShader(prog,sh(gl.VERTEX_SHADER,VS));gl.attachShader(prog,sh(gl.FRAGMENT_SHADER,FS));gl.linkProgram(prog);
+if(!gl.getProgramParameter(prog,gl.LINK_STATUS))console.error(gl.getProgramInfoLog(prog));
+
+const FACE_ORDER=(P.get('faces')||'1,3,5,4,0,2').split(',').map(Number);
+let want=0,got=0;
+function cube(prefix){const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_CUBE_MAP,tex);
+  const T=[gl.TEXTURE_CUBE_MAP_POSITIVE_X,gl.TEXTURE_CUBE_MAP_NEGATIVE_X,gl.TEXTURE_CUBE_MAP_POSITIVE_Y,gl.TEXTURE_CUBE_MAP_NEGATIVE_Y,gl.TEXTURE_CUBE_MAP_POSITIVE_Z,gl.TEXTURE_CUBE_MAP_NEGATIVE_Z];
+  for(let i=0;i<6;i++)gl.texImage2D(T[i],0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([0,0,20,255]));
+  want+=6;
+  for(let i=0;i<6;i++){const im=new Image();im.onload=(function(i,im){return function(){gl.bindTexture(gl.TEXTURE_CUBE_MAP,tex);
+    gl.texImage2D(T[i],0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    got++;tick();};})(i,im);im.src='globe_assets/'+prefix+'_face'+FACE_ORDER[i]+'.png';}
+  return tex;}
+const earthTex=cube('earth'), cloudTex=cube('clouds');
+
+let consts=null, meshes=[];
+function norm(v){const l=Math.hypot(v[0],v[1],v[2])||1;return [v[0]/l,v[1]/l,v[2]/l];}
+function cross(a,b){return [a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];}
+function dot(a,b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];}
+function mat4mul(a,b){const r=new Array(16);for(let c=0;c<4;c++)for(let rr=0;rr<4;rr++){let s=0;for(let k=0;k<4;k++)s+=a[k*4+rr]*b[c*4+k];r[c*4+rr]=s;}return r;}
+function rotM(rx,ry,rz){const cx=Math.cos(deg(rx)),sx=Math.sin(deg(rx)),cy=Math.cos(deg(ry)),sy=Math.sin(deg(ry)),cz=Math.cos(deg(rz)),sz=Math.sin(deg(rz));
+  // Rz*Ry*Rx
+  return [cy*cz, cy*sz, -sy,
+          sx*sy*cz-cx*sz, sx*sy*sz+cx*cz, sx*cy,
+          cx*sy*cz+sx*sz, cx*sy*sz-sx*cz, cx*cy];}
+async function loadMeshN(nm){
+  const [pb,tb,ib]=await Promise.all([
+   fetch('globe_assets/mesh/'+nm+'_pos.bin').then(r=>r.arrayBuffer()),
+   fetch('globe_assets/mesh/'+nm+'_tc0.bin').then(r=>r.arrayBuffer()),
+   fetch('globe_assets/mesh/'+nm+'_idx.bin').then(r=>r.arrayBuffer())]);
+  const pos=new Float32Array(pb),tc=new Float32Array(tb),idx=new Uint32Array(ib);
+  const pbuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,pbuf);gl.bufferData(gl.ARRAY_BUFFER,pos,gl.STATIC_DRAW);
+  const tbuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,tbuf);gl.bufferData(gl.ARRAY_BUFFER,tc,gl.STATIC_DRAW);
+  const ext=gl.getExtension('OES_element_index_uint');
+  const ibuf=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ibuf);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,idx,gl.STATIC_DRAW);
+  return {pbuf,tbuf,ibuf,n:idx.length};
+}
+async function init(){
+  consts=await fetch('globe_assets/earth_consts.json').then(r=>r.json());
+  const names=(consts.meshes||[{pos:'d020'},{pos:'d021'}]).map(m=>m.pos.replace('_pos',''));
+  meshes=[]; for(const nm of names) meshes.push(await loadMeshN(nm));
+  ready=true; tick();
+}
+let ready=false;
+function tick(){ if(!ready||got<want) return; draw(); }
+function draw(){
+  gl.viewport(0,0,W,Hh);gl.clearColor(0,0,0,1);gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST);gl.clear(gl.DEPTH_BUFFER_BIT);gl.clearDepth(1.0);gl.depthFunc(gl.LEQUAL);
+  gl.useProgram(prog);
+  const U=n=>gl.getUniformLocation(prog,n);
+  // REAL captured RSX MVP rows (c256-259)
+  const m=consts.mvp;
+  gl.uniform4fv(U('mvp0'),m[0]);gl.uniform4fv(U('mvp1'),m[1]);gl.uniform4fv(U('mvp2'),m[2]);gl.uniform4fv(U('mvp3'),m[3]);
+  gl.uniform1f(U('uClipScale'), f('cscale',0.5));
+  const bas=consts.basis;
+  // verified mapping: c5 = -basis[2], c6 = basis[0], c7 = basis[1] (projects on-screen, no clip scale)
+  gl.uniform3fv(U('c5'),bas[PERM[0]].slice(0,3).map(x=>-x));
+  gl.uniform3fv(U('c6'),bas[PERM[1]].slice(0,3));
+  gl.uniform3fv(U('c7'),bas[PERM[2]].slice(0,3));
+  gl.uniform3fv(U('c8'),consts.eye.slice(0,3));
+  gl.uniform3fv(U('uSun'),consts.eye.slice(0,3)); // placeholder: lit toward camera; real sun next
+  gl.uniformMatrix3fv(U('uErot'),false,rotM(EROT[0],EROT[1],EROT[2]));
+  gl.uniform1f(U('uDebug'), (new URLSearchParams(location.search)).get('debug')?1:0);
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_CUBE_MAP,earthTex);gl.uniform1i(U('uEarth'),0);
+  gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_CUBE_MAP,cloudTex);gl.uniform1i(U('uClouds'),1);
+  const pl=gl.getAttribLocation(prog,'in_pos'),tl=gl.getAttribLocation(prog,'in_tc0');
+  for(const mesh of meshes){
+    gl.bindBuffer(gl.ARRAY_BUFFER,mesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,gl.FLOAT,false,0,0);
+    gl.bindBuffer(gl.ARRAY_BUFFER,mesh.tbuf);gl.enableVertexAttribArray(tl);gl.vertexAttribPointer(tl,4,gl.FLOAT,false,0,0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,mesh.ibuf);
+    gl.drawElements(gl.TRIANGLE_STRIP,mesh.n,gl.UNSIGNED_INT,0);
+  }
+  window.__rendered=true;
+}
+init();
+</script></body></html>

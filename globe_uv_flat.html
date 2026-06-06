@@ -1,0 +1,94 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Globe uvsphere</title>
+<style>html,body{margin:0;background:#000;overflow:hidden}#c{display:block}</style></head>
+<body><canvas id="c" width="1920" height="1080"></canvas>
+<script>
+// Earth = unit sphere (verified from the real atmosphere vp), projected by the REAL
+// captured camera MVP (c256-259, frame 10560), textured with the REAL firmware cube
+// earth/clouds, lit by the real sun dir. Geometry model + camera + textures are real.
+const P=new URLSearchParams(location.search), f=(k,d)=>{const v=P.get(k);return v===null?d:parseFloat(v)};
+const cv=document.getElementById('c'),W=cv.width,Hh=cv.height;
+const gl=cv.getContext('webgl',{preserveDrawingBuffer:true,antialias:true});
+const EROT=[f('erx',0),f('ery',0),f('erz',0)], FLIPY=f('flipy',1);
+const deg=a=>a*Math.PI/180;
+const VS=`precision highp float;
+attribute vec3 pos;
+uniform vec4 mvp0,mvp1,mvp2,mvp3; uniform float uFlipY;
+uniform vec2 uVpScale, uVpOffset, uTarget; uniform float uUseVp;
+varying vec3 vN;
+void main(){
+  vN=pos;
+  vec4 p=vec4(pos,1.0);
+  vec4 clip=vec4(dot(p,mvp0),dot(p,mvp1),dot(p,mvp2),dot(p,mvp3));
+  if(uUseVp>0.5){
+    // RSX viewport transform: clip -> window px -> GL NDC over the render target size.
+    vec2 ndc=clip.xy/clip.w;
+    vec2 win=ndc*uVpScale + uVpOffset;          // RSX window pixels
+    vec2 g=(win/(uTarget*0.5)) - 1.0;           // -> GL NDC [-1,1]
+    clip.xy=g*clip.w;
+  }
+  clip.z=(clip.z*2.0 - clip.w);
+  clip.y*=uFlipY;
+  gl_Position=clip;
+}`;
+const FS=`precision highp float;
+varying vec3 vN; uniform samplerCube uEarth,uClouds; uniform vec3 uSun; uniform mat3 uErot;
+void main(){
+  vec3 N=normalize(vN); vec3 Nt=normalize(uErot*N);
+  vec3 surf=textureCube(uEarth,Nt).rgb; float cloud=textureCube(uClouds,Nt).r;
+  float ndl=dot(N,normalize(uSun));
+  float day=smoothstep(-0.05,0.18,ndl);
+  vec3 base=surf*vec3(1.5,1.62,1.85); base=mix(base,vec3(1.2),cloud*0.9*day);
+  vec3 col=vec3(0.5,0.6,0.8);
+  gl_FragColor=vec4(col,1.0);
+}`;
+function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))console.error(gl.getShaderInfoLog(o));return o;}
+const prog=gl.createProgram();gl.attachShader(prog,sh(gl.VERTEX_SHADER,VS));gl.attachShader(prog,sh(gl.FRAGMENT_SHADER,FS));gl.linkProgram(prog);
+// unit UV sphere
+const LAT=128,LON=256, verts=[],idx=[];
+for(let i=0;i<=LAT;i++){const th=Math.PI*i/LAT;for(let j=0;j<=LON;j++){const ph=2*Math.PI*j/LON;
+  verts.push(Math.sin(th)*Math.cos(ph),Math.cos(th),Math.sin(th)*Math.sin(ph));}}
+for(let i=0;i<LAT;i++)for(let j=0;j<LON;j++){const a=i*(LON+1)+j,b=a+LON+1;idx.push(a,b,a+1,b,b+1,a+1);}
+gl.getExtension('OES_element_index_uint');
+const pbuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,pbuf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(verts),gl.STATIC_DRAW);
+const ibuf=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ibuf);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint32Array(idx),gl.STATIC_DRAW);
+const NID=idx.length;
+const FACE_ORDER=(P.get('faces')||'1,3,5,4,0,2').split(',').map(Number);
+let want=0,got=0;
+function cube(prefix){const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_CUBE_MAP,tex);
+  const T=[gl.TEXTURE_CUBE_MAP_POSITIVE_X,gl.TEXTURE_CUBE_MAP_NEGATIVE_X,gl.TEXTURE_CUBE_MAP_POSITIVE_Y,gl.TEXTURE_CUBE_MAP_NEGATIVE_Y,gl.TEXTURE_CUBE_MAP_POSITIVE_Z,gl.TEXTURE_CUBE_MAP_NEGATIVE_Z];
+  for(let i=0;i<6;i++)gl.texImage2D(T[i],0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([0,0,20,255]));
+  want+=6;
+  for(let i=0;i<6;i++){const im=new Image();im.onload=(function(i,im){return function(){gl.bindTexture(gl.TEXTURE_CUBE_MAP,tex);
+    gl.texImage2D(T[i],0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    got++;draw();};})(i,im);im.src='globe_assets/'+prefix+'_face'+FACE_ORDER[i]+'.png';}
+  return tex;}
+const earthTex=cube('earth'),cloudTex=cube('clouds');
+let data=null;
+function rotM(rx,ry,rz){const cx=Math.cos(deg(rx)),sx=Math.sin(deg(rx)),cy=Math.cos(deg(ry)),sy=Math.sin(deg(ry)),cz=Math.cos(deg(rz)),sz=Math.sin(deg(rz));
+  return [cy*cz,cy*sz,-sy, sx*sy*cz-cx*sz,sx*sy*sz+cx*cz,sx*cy, cx*sy*cz+sx*sz,cx*sy*sz-sx*cz,cx*cy];}
+async function init(){ data=await fetch('globe_assets/uv_consts.json').then(r=>r.json()); draw(); }
+function draw(){
+  if(!data||got<want) return;
+  gl.viewport(0,0,W,Hh);gl.clearColor(0,0,0,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);
+  gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
+  const m=data.mvp;
+  gl.uniform4fv(U('mvp0'),m[0]);gl.uniform4fv(U('mvp1'),m[1]);gl.uniform4fv(U('mvp2'),m[2]);gl.uniform4fv(U('mvp3'),m[3]);
+  gl.uniform1f(U('uFlipY'),FLIPY);
+  const vp=data.viewport;
+  gl.uniform1f(U('uUseVp'), vp?1:0);
+  if(vp){ gl.uniform2f(U('uVpScale'),vp.scale[0],vp.scale[1]); gl.uniform2f(U('uVpOffset'),vp.offset[0],vp.offset[1]); gl.uniform2f(U('uTarget'),vp.target[0],vp.target[1]); }
+  gl.uniform3fv(U('uSun'),data.sun);
+  gl.uniformMatrix3fv(U('uErot'),false,rotM(EROT[0],EROT[1],EROT[2]));
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_CUBE_MAP,earthTex);gl.uniform1i(U('uEarth'),0);
+  gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_CUBE_MAP,cloudTex);gl.uniform1i(U('uClouds'),1);
+  const pl=gl.getAttribLocation(prog,'pos');
+  gl.bindBuffer(gl.ARRAY_BUFFER,pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,3,gl.FLOAT,false,0,0);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ibuf);
+  gl.drawElements(gl.TRIANGLES,NID,gl.UNSIGNED_INT,0);
+  window.__rendered=true;
+}
+init();
+</script></body></html>

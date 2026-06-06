@@ -1,0 +1,95 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Globe surface verbatim</title>
+<style>html,body{margin:0;background:#000;overflow:hidden}#c{display:block}</style></head>
+<body><canvas id="c" width="1920" height="1080"></canvas>
+<script>
+// Verbatim earth-surface pass: real cube-corner patches (c256-258) bilinear-interp +
+// normalize to sphere (vp 0f331863), projected by real captured MVP (c260-263),
+// earth sampled by the surface normal from the real firmware cube textures.
+const P=new URLSearchParams(location.search), f=(k,d)=>{const v=P.get(k);return v===null?d:parseFloat(v)};
+const cv=document.getElementById('c'),W=cv.width,Hh=cv.height;
+const gl=cv.getContext('webgl',{preserveDrawingBuffer:true,antialias:true});
+const BL=P.get('bl')||'0'; // bilinear pairing variant
+const VS=`precision highp float;
+attribute vec4 in_pos;
+uniform vec4 mvp0,mvp1,mvp2,mvp3; uniform vec3 cA,cB,cC,cD;
+varying vec3 vN;
+void main(){
+  float u=in_pos.x, v=in_pos.z;
+  vec3 p = cA + u*(cC-cA) + v*(cB-cA) + u*v*(cA-cB-cC+cD); // bilinear over cube quad
+  p = normalize(p);                                         // -> unit sphere (vp normalizes)
+  vN=p;
+  vec4 P4=vec4(p,1.0);
+  gl_PointSize=4.0; vec4 clip=vec4(dot(P4,mvp0),dot(P4,mvp1),dot(P4,mvp2),dot(P4,mvp3));
+  clip.z=0.0;
+  gl_Position=clip;
+}`;
+const FS=`precision highp float;
+varying vec3 vN; uniform samplerCube uEarth,uClouds; uniform vec3 uSun;
+void main(){
+  vec3 N=normalize(vN);
+  vec3 surf=textureCube(uEarth,N).rgb;
+  float cloud=textureCube(uClouds,N).r;
+  float ndl=dot(N,normalize(uSun));
+  float day=smoothstep(-0.05,0.18,ndl);
+  vec3 base=surf*vec3(1.5,1.62,1.85); base=mix(base,vec3(1.2),cloud*0.9*day);
+  vec3 col=mix(surf*0.05, base*clamp(ndl,0.0,1.0)*2.0, day);
+  gl_FragColor=vec4(0.2,0.9,0.3,1.0);
+}`;
+function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))console.error(gl.getShaderInfoLog(o));return o;}
+const prog=gl.createProgram();gl.attachShader(prog,sh(gl.VERTEX_SHADER,VS));gl.attachShader(prog,sh(gl.FRAGMENT_SHADER,FS));gl.linkProgram(prog);
+if(!gl.getProgramParameter(prog,gl.LINK_STATUS))console.error(gl.getProgramInfoLog(prog));
+const FACE_ORDER=(P.get('faces')||'1,3,5,4,0,2').split(',').map(Number);
+let want=0,got=0;
+function cube(prefix){const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_CUBE_MAP,tex);
+  const T=[gl.TEXTURE_CUBE_MAP_POSITIVE_X,gl.TEXTURE_CUBE_MAP_NEGATIVE_X,gl.TEXTURE_CUBE_MAP_POSITIVE_Y,gl.TEXTURE_CUBE_MAP_NEGATIVE_Y,gl.TEXTURE_CUBE_MAP_POSITIVE_Z,gl.TEXTURE_CUBE_MAP_NEGATIVE_Z];
+  for(let i=0;i<6;i++)gl.texImage2D(T[i],0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([0,0,20,255]));
+  want+=6;
+  for(let i=0;i<6;i++){const im=new Image();im.onload=(function(i,im){return function(){gl.bindTexture(gl.TEXTURE_CUBE_MAP,tex);
+    gl.texImage2D(T[i],0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    got++;draw();};})(i,im);im.src='globe_assets/'+prefix+'_face'+FACE_ORDER[i]+'.png';}
+  return tex;}
+const earthTex=cube('earth'),cloudTex=cube('clouds');
+let data=null, mesh=null;
+async function loadMesh(){
+  const [pb,ib]=await Promise.all([
+   fetch('globe_assets/mesh/live_surf0_pos.bin').then(r=>r.arrayBuffer()),
+   fetch('globe_assets/mesh/live_surf0_idx.bin').then(r=>r.arrayBuffer())]);
+  const pos=new Float32Array(pb), idx=new Uint32Array(ib);
+  gl.getExtension('OES_element_index_uint');
+  // WebGL1 has no primitive restart: split into sub-strips at 0xFFFFFFFF, rebuild a
+  // clean index buffer with per-substrip {offset,count} ranges.
+  const clean=[]; const ranges=[]; let run=[];
+  const flush=()=>{ if(run.length>=3){ ranges.push({off:clean.length, cnt:run.length}); for(const x of run) clean.push(x);} run=[]; };
+  for(let i=0;i<idx.length;i++){ if(idx[i]===0xFFFFFFFF){flush();} else run.push(idx[i]); }
+  flush();
+  const cidx=new Uint32Array(clean);
+  const pbuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,pbuf);gl.bufferData(gl.ARRAY_BUFFER,pos,gl.STATIC_DRAW);
+  const ibuf=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ibuf);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,cidx,gl.STATIC_DRAW);
+  return {pbuf,ibuf,ranges};
+}
+async function init(){ data=await fetch('globe_assets/surf_render.json').then(r=>r.json()); mesh=await loadMesh(); draw(); }
+function col(c,i){return [c['c256'][i],c['c257'][i],c['c258'][i]];}
+function draw(){
+  if(!data||!mesh||got<want){console.log('draw early data='+!!data+' mesh='+!!mesh+' got='+got+'/'+want);return;} console.log('DRAWING patches='+data.patches.length+' ranges='+mesh.ranges.length);
+  gl.viewport(0,0,W,Hh);gl.clearColor(0,0,0,1);gl.clear(gl.COLOR_BUFFER_BIT);
+  
+  gl.useProgram(prog); const U=n=>gl.getUniformLocation(prog,n);
+  const m=data.mvp;
+  gl.uniform4fv(U('mvp0'),m[0]);gl.uniform4fv(U('mvp1'),m[1]);gl.uniform4fv(U('mvp2'),m[2]);gl.uniform4fv(U('mvp3'),m[3]);
+  gl.uniform3fv(U('uSun'),data.sun);
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_CUBE_MAP,earthTex);gl.uniform1i(U('uEarth'),0);
+  gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_CUBE_MAP,cloudTex);gl.uniform1i(U('uClouds'),1);
+  const pl=gl.getAttribLocation(prog,'in_pos');
+  gl.bindBuffer(gl.ARRAY_BUFFER,mesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,gl.FLOAT,false,0,0);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,mesh.ibuf);
+  for(const c of data.patches){
+    // corners: A=.x col, B=.w col, C=.y col, D=.z col of (c256,c257,c258)
+    gl.uniform3fv(U('cA'),col(c,0)); gl.uniform3fv(U('cB'),col(c,3)); gl.uniform3fv(U('cC'),col(c,1)); gl.uniform3fv(U('cD'),col(c,2));
+    gl.drawArrays(gl.POINTS,0,289);
+  }
+  console.log('uintExt='+!!gl.getExtension('OES_element_index_uint')+' glErr='+gl.getError()+' ranges0='+JSON.stringify(mesh.ranges[0])+' posLen?');window.__rendered=true;
+}
+init();
+</script></body></html>

@@ -1,0 +1,136 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Globe composite</title>
+<style>html,body{margin:0;background:#000;overflow:hidden}#c{display:block}</style></head>
+<body><canvas id="c" width="1920" height="1080"></canvas>
+<script>
+// COHERENT composite (frame 15961): earth surface (verbatim surface vp, 13 real patches) + atmosphere
+// shell (verbatim atmosphere vp 3f6eeb47 + ported atmosphere fp + real scatter LUT) alpha-blended on
+// top, SAME camera (shared 15961 constants). Earth shading is interim cube-earth (flagged) pending the
+// per-frame surface-fp tiles; GEOMETRY + atmosphere are verbatim. Proves multi-pass composition.
+const P=new URLSearchParams(location.search),f=(k,d)=>{const v=P.get(k);return v===null?d:parseFloat(v)};
+const cv=document.getElementById('c'),W=cv.width,Hh=cv.height;
+const gl=cv.getContext('webgl2',{preserveDrawingBuffer:true,antialias:true});
+gl.getExtension('OES_element_index_uint');
+const FACE_ORDER=(P.get('faces')||'1,3,5,4,0,2').split(',').map(Number);
+const FLIPY=f('flipy',1), CS=f('cscale',0.5);
+function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))console.error(gl.getShaderInfoLog(o));return o;}
+function prog(vs,fs){const p=gl.createProgram();gl.attachShader(p,sh(35633,vs));gl.attachShader(p,sh(35632,fs));gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))console.error(gl.getProgramInfoLog(p));return p;}
+// ---------- EARTH (surface vp verbatim) ----------
+const E_VS=`#version 300 es
+precision highp float;
+in vec3 in_pos; uniform vec4 vc[26]; uniform float uFlipY;
+out vec4 vtc1;
+void main(){
+ vec4 ip=vec4(in_pos,1.0);
+ vec3 A=vec3(vc[0].x,vc[1].x,vc[2].x),B=vec3(vc[0].y,vc[1].y,vc[2].y),C=vec3(vc[0].z,vc[1].z,vc[2].z),D=vec3(vc[0].w,vc[1].w,vc[2].w);
+ vec3 BA=B-A,CD=C-D;
+ vec3 r1=ip.x*CD+D,r0=ip.x*BA+A; vec3 dv=r1-r0; r0=ip.y*dv+r0;
+ vec3 sp=r0*inversesqrt(max(dot(r0,r0),1e-10));
+ vec4 clip=vec4(dot(vec4(sp,1.),vc[3]),dot(vec4(sp,1.),vc[4]),dot(vec4(sp,1.),vc[5]),dot(vec4(sp,1.),vc[6]));
+ vtc1=vec4(sp,1.); clip.z=clip.z*2.0-clip.w; clip.y*=uFlipY; gl_Position=clip;
+}`;
+const E_FS=`#version 300 es
+precision highp float;
+in vec4 vtc1; uniform samplerCube uEarth,uClouds; uniform vec3 uSun; out vec4 o;
+void main(){vec3 N=normalize(vtc1.xyz);vec3 s=texture(uEarth,N).rgb;float cl=texture(uClouds,N).r;
+ float ndl=dot(N,normalize(uSun));float day=smoothstep(-0.05,0.18,ndl);
+ vec3 base=s*vec3(1.5,1.62,1.85);base=mix(base,vec3(1.2),cl*0.9*day);
+ o=vec4(mix(s*0.05,base*clamp(ndl,0.,1.)*2.,day),1.);}`;
+// ---------- ATMOSPHERE (vp 3f6eeb47 verbatim + fp 63d3246d ported) ----------
+const A_VS=`#version 300 es
+precision highp float;
+in vec4 in_pos; in vec4 in_tc0;
+uniform vec4 mvp0,mvp1,mvp2,mvp3; uniform float uClipScale,uFlipY; uniform vec3 c5,c6,c7,c8;
+out vec2 vTC;
+void main(){
+ float A=1.0/sqrt(max(dot(c8,c8),1e-10));float w=in_pos.w;float B=sqrt(max((1.0/A)*(1.0/A)-w*w,1e-10));
+ float s=A*w*w,t=A*B*w; vec3 r0=s*c5+t*(in_tc0.z*c7+in_tc0.w*c6); vTC=in_tc0.xy;
+ vec4 p=vec4(r0,1.0); vec4 clip=vec4(dot(p,mvp0),dot(p,mvp1),dot(p,mvp2),dot(p,mvp3));
+ clip.xy*=uClipScale; clip.z=clip.z*2.0-clip.w; clip.y*=uFlipY; gl_Position=clip;
+}`;
+const A_FS=`#version 300 es
+precision highp float;
+in vec2 vTC; out vec4 ocol0; uniform sampler2D tex0,tex14,tex15;
+vec4 fc[17];
+void initc(){fc[0]=vec4(1.,0.,0.,0.);fc[1]=vec4(1.6,0.733038,0.2,0.608);fc[2]=vec4(10.4,0.2,-4.,3.5);
+ fc[3]=vec4(1e38,0.,0.,0.);fc[4]=vec4(10.4,0.2,-4.,3.5);fc[5]=vec4(1.6,0.733038,0.2,0.608);fc[6]=vec4(1.,0.,0.,0.);
+ fc[7]=vec4(1e38,0.,0.,0.);fc[8]=vec4(10.4,0.2,-4.,3.5);fc[9]=vec4(1.6,0.733038,0.2,0.608);fc[10]=vec4(3.,0.,0.,0.);
+ fc[11]=vec4(1.4427,0.,0.,0.);fc[12]=vec4(10.4,0.2,-4.,3.5);fc[13]=vec4(3.,0.,0.,0.);fc[14]=vec4(3.,0.,0.,0.);fc[15]=vec4(3.,0.,0.,0.);fc[16]=vec4(2.176,0.,0.,0.);}
+float pc(float x,float a,float b){return (x!=x)?0.:clamp(x,a,b);} float fma1(float a,float b,float c){return a*b+c;}
+void main(){initc();vec4 tc0=vec4(vTC,0.,1.);vec4 r0=vec4(0.),r1=vec4(0.),r2=vec4(0.),r3=vec4(0.),h2=vec4(0.);
+ r1.x=fc[0].x;r1.z=fc[0].z;r1.y=1.0/fc[1].z;r0.x=fc[2].w;r0.y=fc[2].z;r0.w=(-r0.y+fc[3].x);r1.xyz=tc0.xyz*r1.xyz;
+ r3.y=pc(r0.w/-fc[4].z,0.,1.);r0.w=fc[5].w;r3.x=(-r0.w+fc[6].x);r3.w=r3.y*r3.y;r2.w=r3.y*2.;
+ r2.y=pc(fc[7].x/r0.x,0.,1.);r2.x=r2.y*r2.y;r1.w=r2.y*2.;r0.xyz=texture(tex0,r1.xy).xyz;
+ r1.x=(-r1.x*fc[8].x);r1.z=(r1.y+-fc[9].w);r3.x=pc(r1.z/r3.x,0.,1.);r3.z=(-r1.w+fc[10].x);r3.y=r2.x*r3.z;r0.w=r1.x*fc[11].x;
+ r1.x=pc(r1.y/fc[12].y,0.,1.);r1.w=(-r2.x+fc[13].x);r2.x=fma1(r3.w,r1.w,-r3.y);r1.w=r1.x*2.;r1.w=(-r1.w+fc[14].x);r1.x=r1.x*r1.x;r1.x=r1.x*r1.w;
+ r1.w=r3.x*2.;r1.w=(-r1.w+fc[15].x);r1.y=r3.x*r3.x;r1.y=r1.y*r1.w;r0.w=exp2(r0.w);r0.w=r2.x*r0.w;
+ r0.xyz=r0.xyz*fc[16].x;r0.xyz=(-r1.y*r0.xyz+r0.xyz);r0.w=(-r1.x*r0.w+r0.w);r0.xyz=((r0.w*r0.xyz+r0.xyz)*8.0);
+ h2.w=max(r0.x,r0.y);h2.z=r0.z;r0.xy=texture(tex15,r0.xy).xy;r0.z=texture(tex14,vec2(h2.z,h2.w)).z;
+ float a=clamp(max(max(r0.x,r0.y),r0.z),0.,1.);   // atmosphere alpha from scatter intensity
+ ocol0=vec4(r0.xyz,a);}`;
+const eProg=prog(E_VS,E_FS), aProg=prog(A_VS,A_FS);
+// textures
+let want=0,got=0;
+function cube(prefix){const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_CUBE_MAP,tex);
+ const T=[34069,34070,34071,34072,34073,34074];
+ for(let i=0;i<6;i++)gl.texImage2D(T[i],0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([0,0,20,255]));
+ want+=6;for(let i=0;i<6;i++){const im=new Image();im.onload=(function(i){return function(){gl.bindTexture(gl.TEXTURE_CUBE_MAP,tex);
+  gl.texImage2D(T[i],0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);gl.texParameteri(34067,10241,9729);gl.texParameteri(34067,10240,9729);
+  gl.texParameteri(34067,10242,33071);gl.texParameteri(34067,10243,33071);got++;draw();};})(i);im.src='globe_assets/'+prefix+'_face'+FACE_ORDER[i]+'.png';}
+ return tex;}
+function tex2d(src){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));want++;
+ const im=new Image();im.onload=function(){gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,6408,5121,im);gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;draw();};im.src=src;return t;}
+const earthTex=cube('earth'),cloudTex=cube('clouds');
+const lutTex=tex2d('globe_assets/atm_LUT.png'),r14=tex2d('globe_assets/atm_ramp14.png'),r15=tex2d('globe_assets/atm_ramp15.png');
+// data
+let SV=null,AV=null,eMesh=null,aMesh=null;
+async function loadAtmMesh(nm){const [pb,tb,ib]=await Promise.all([fetch('globe_assets/mesh/'+nm+'_pos.bin').then(r=>r.arrayBuffer()),fetch('globe_assets/mesh/'+nm+'_tc0.bin').then(r=>r.arrayBuffer()),fetch('globe_assets/mesh/'+nm+'_idx.bin').then(r=>r.arrayBuffer())]);
+ const pos=new Float32Array(pb),tc=new Float32Array(tb),idx=new Uint32Array(ib);
+ const pbuf=gl.createBuffer();gl.bindBuffer(34962,pbuf);gl.bufferData(34962,pos,35044);
+ const tbuf=gl.createBuffer();gl.bindBuffer(34962,tbuf);gl.bufferData(34962,tc,35044);
+ const ibuf=gl.createBuffer();gl.bindBuffer(34963,ibuf);gl.bufferData(34963,idx,35044);return {pbuf,tbuf,ibuf,n:idx.length};}
+async function init(){
+ SV=await fetch('globe_assets/surface_verbatim.json').then(r=>r.json());
+ AV=await fetch('globe_assets/atm_consts_15961.json').then(r=>r.json());
+ const pos=new Float32Array(await fetch('globe_assets/mesh/live_surf0_pos.bin').then(r=>r.arrayBuffer()));
+ const xyz=[];for(let i=0;i<289;i++)xyz.push(pos[i*4],pos[i*4+1],pos[i*4+2]);
+ const idx=[];const N=17;for(let i=0;i<N-1;i++)for(let j=0;j<N-1;j++){const a=i*N+j,b=a+N;idx.push(a,b,a+1,b,b+1,a+1);}
+ const pbuf=gl.createBuffer();gl.bindBuffer(34962,pbuf);gl.bufferData(34962,new Float32Array(xyz),35044);
+ const ibuf=gl.createBuffer();gl.bindBuffer(34963,ibuf);gl.bufferData(34963,new Uint16Array(idx),35044);
+ eMesh={pbuf,ibuf,n:idx.length};
+ aMesh=await loadAtmMesh('c0'); draw();
+}
+function buildVC(corners){const s=SV.shared;const vc=new Float32Array(26*4);const set=(i,a)=>{vc[i*4]=a[0];vc[i*4+1]=a[1];vc[i*4+2]=a[2];vc[i*4+3]=a[3];};
+ set(0,corners[0]);set(1,corners[1]);set(2,corners[2]);
+ const map={3:260,4:261,5:262,6:263,7:264,8:265,9:268,10:269,11:270,12:454,13:455,14:456,15:457,16:458,17:459,18:460,19:461,20:462,21:463,22:464,23:465,24:466,25:467};
+ for(const k in map){const v=s[map[k]];if(v)set(+k,v);} return vc;}
+function draw(){
+ if(!SV||!AV||!eMesh||!aMesh||got<want)return;
+ gl.viewport(0,0,W,Hh);gl.clearColor(0,0,0,1);gl.clear(16384|256);
+ // EARTH pass
+ gl.enable(2929);gl.depthFunc(515);gl.disable(3042);
+ gl.useProgram(eProg);let U=n=>gl.getUniformLocation(eProg,n);
+ gl.uniform1f(U('uFlipY'),FLIPY);
+ const ws=(P.get('ws')||'0,-0.423,0.906').split(',').map(Number);const L=Math.hypot(...ws)||1;gl.uniform3f(U('uSun'),ws[0]/L,ws[1]/L,ws[2]/L);
+ gl.activeTexture(33984);gl.bindTexture(34067,earthTex);gl.uniform1i(U('uEarth'),0);
+ gl.activeTexture(33985);gl.bindTexture(34067,cloudTex);gl.uniform1i(U('uClouds'),1);
+ let pl=gl.getAttribLocation(eProg,'in_pos');gl.bindBuffer(34962,eMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,3,5126,false,0,0);
+ gl.bindBuffer(34963,eMesh.ibuf);
+ for(const c of SV.corners){gl.uniform4fv(U('vc'),buildVC(c));gl.drawElements(4,eMesh.n,5123,0);}
+ // ATMOSPHERE pass (alpha blend over earth)
+ gl.depthMask(false);gl.enable(3042);gl.blendFunc(770,771);
+ gl.useProgram(aProg);U=n=>gl.getUniformLocation(aProg,n);
+ const m=AV.mvp;gl.uniform4fv(U('mvp0'),m[0]);gl.uniform4fv(U('mvp1'),m[1]);gl.uniform4fv(U('mvp2'),m[2]);gl.uniform4fv(U('mvp3'),m[3]);
+ gl.uniform1f(U('uClipScale'),CS);gl.uniform1f(U('uFlipY'),FLIPY);
+ const negc465=AV.basis[2].map(x=>-x);  // c5 = -c465
+ gl.uniform3fv(U('c5'),negc465.slice(0,3));gl.uniform3fv(U('c6'),AV.basis[0].slice(0,3));gl.uniform3fv(U('c7'),AV.basis[1].slice(0,3));
+ gl.uniform3fv(U('c8'),AV.eye.slice(0,3));
+ gl.activeTexture(33984);gl.bindTexture(3553,lutTex);gl.uniform1i(U('tex0'),0);
+ gl.activeTexture(33985);gl.bindTexture(3553,r14);gl.uniform1i(U('tex14'),1);
+ gl.activeTexture(33986);gl.bindTexture(3553,r15);gl.uniform1i(U('tex15'),2);
+ pl=gl.getAttribLocation(aProg,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
+ let tl=gl.getAttribLocation(aProg,'in_tc0');gl.bindBuffer(34962,aMesh.tbuf);gl.enableVertexAttribArray(tl);gl.vertexAttribPointer(tl,4,5126,false,0,0);
+ gl.bindBuffer(34963,aMesh.ibuf);gl.drawElements(5,aMesh.n,5125,0);
+ window.__rendered=true;
+}
+init();
+</script></body></html>

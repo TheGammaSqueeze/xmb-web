@@ -13,3 +13,5 @@ n023055ts.ttf
 node_modules/
 wave_bg_raw*
 xmb_bg*
+_*.txt
+_uvtest_*.html

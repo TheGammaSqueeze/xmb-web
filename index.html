@@ -38,6 +38,7 @@ canvas{position:absolute;top:0;left:0;width:100%;height:100%}
 
 <script src="particle_cloud.js"></script>
 <script src="canyon_port.js"></script>
+<script src="globe_mp.js"></script>
 <script>
 "use strict";
 
@@ -10619,13 +10620,15 @@ function mpCycleVis() {
   musicPlayer.vis = (musicPlayer.vis + 1) % MP_VIS.length;
   mpVisName = {text: MP_VIS[musicPlayer.vis], start: performance.now()};
   if (musicPlayer.vis === 1) initCanyon();
-  else if (musicPlayer.vis === 2) initMPGlobe();
+  else if (musicPlayer.vis === 2) MPGlobe.start(mpGlobe2Canvas);   // verbatim firmware globe port
+  if (musicPlayer.vis !== 2) MPGlobe.stop();
   playNav2();
 }
 function closeMusicPlayer() {
   if (mpAudio) mpAudio.pause();
   musicPlayer = null;
   if (globeCanvas) globeCanvas.style.display = 'none';
+  if (window.MPGlobe) MPGlobe.stop();
   playNav();
 }
 function mpFmt(s) {
@@ -10686,6 +10689,9 @@ let mpSunPhase = 0;       // sun orbit -> drives the phase cycle (full disc -> c
 // could not be measured from the single captured frame (spec sec.7); the slow
 // zoom-in path below is inferred and clearly commented.
 // ===========================================================================
+// Offscreen WebGL2 canvas for the VERBATIM firmware globe port (globe_mp.js). Separate context from
+// the WebGL1 Time Zone globe; rendered each frame then composited onto the 2D music canvas.
+let mpGlobe2Canvas = document.createElement('canvas');
 let mpGlobeProg = null, mpGlobeBuf = null;
 function initMPGlobe() {
   initGlobe(); const gl = globeGL; if (mpGlobeProg) return; if (!gl) return;
@@ -10837,17 +10843,14 @@ function drawVisCanyon(ctx2, bands) {
 }
 function drawVisGlobe(ctx2, bands) {
   const cw = xmbCanvas.width, ch = xmbCanvas.height;
-  // Earth spins slowly; the sun is FIXED (REAL const[8], not an orbit).
-  mpGlobePhase += 0.0014 + bands.bass*0.0015;     // slow earth rotation (continents slide)
-  // INFERRED cinematic camera (spec sec.7 GAP -- not recoverable from one frame):
-  // a long, slow zoom from a distant dot to a near, frame-filling earth, then hold.
-  mpSunPhase += 0.0009;                            // reused as the slow zoom clock
-  const zoom = 0.22 + 0.78*(0.5-0.5*Math.cos(Math.min(mpSunPhase, Math.PI))); // far->near ease, holds at near
-  const scale = zoom * (1.0 + bands.bass*0.04);
-  const ok = mpDrawGlobe(mpGlobePhase, mpSunPhase, scale);
+  // VERBATIM firmware globe (globe_mp.js): real 24-patch surface vp+fp + camera.path animation.
+  // (The old hand-tuned approximation -- substitute textures, inferred zoom -- is replaced.)
+  MPGlobe.start(mpGlobe2Canvas);                   // idempotent (no-op once running)
+  if (mpGlobe2Canvas.width !== cw || mpGlobe2Canvas.height !== ch) { mpGlobe2Canvas.width = cw; mpGlobe2Canvas.height = ch; }
+  MPGlobe.tick();
   ctx2.setTransform(1,0,0,1,0,0);
   ctx2.fillStyle = '#000002'; ctx2.fillRect(0,0,cw,ch);
-  if (ok) { try { ctx2.drawImage(globeCanvas,0,0,cw,ch); } catch(e){} }
+  try { if (MPGlobe.ready()) ctx2.drawImage(mpGlobe2Canvas, 0,0,cw,ch); } catch(e){}
 }
 
 function drawMusicPlayer(ctx2) {

@@ -1,0 +1,198 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#000}#c{display:block}</style></head>
+<body><canvas id="c" width="1920" height="1080"></canvas><script>
+const P=new URLSearchParams(location.search),f=(k,d)=>{const v=P.get(k);return v===null?d:parseFloat(v)};
+const gl=document.getElementById('c').getContext('webgl2',{preserveDrawingBuffer:true,antialias:true});
+gl.getExtension('OES_element_index_uint');
+const VS=`#version 300 es
+precision highp float;
+in vec4 in_pos; uniform vec4 vc[26]; uniform float uFlipY;
+out vec4 tc0; out vec3 vN; out vec3 vL;
+float fma1(float a,float b,float c){return a*b+c;}
+vec3 fma3(vec3 a,vec3 b,vec3 c){return a*b+c;}
+vec2 fma2(vec2 a,vec2 b,vec2 c){return a*b+c;}
+void main(){
+vec4 ip = in_pos;  // real vec4 grid params (u,v,u,v)
+  vec4 r0=vec4(0.), r1=vec4(0.), r2=vec4(0.), r3=vec4(0.), r4=vec4(0.), r5=vec4(0.), r6=vec4(0.), r7=vec4(0.), cc0=vec4(0.);
+  vec4 d12=vec4(0,0,0,1), d10=vec4(0,0,0,1), d7=vec4(0,0,0,1), d15=vec4(0,0,0,1),
+       d11=vec4(0,0,0,1), d8=vec4(0,0,0,1), d9=vec4(0,0,0,1), d0=vec4(0,0,0,1),
+       d14=vec4(0,0,0,1), d6=vec4(0,0,0,1), d13=vec4(0,0,0,1);
+
+  // RPCS3: dst_reg12.yz = vc[12].xxyx.yz  ->  (vc12.x, vc12.y)
+  d12.y = vc[12].x; d12.z = vc[12].y;
+  r7.xy = (ip.zw + -ip.xy);
+  d10.z = vc[14].y;
+  r0.w = (-vc[21].x + vc[21].y);
+  r2.w = (vc[12].z + ip.x);
+  r1.w = vc[15].w;
+  r3.x = vc[0].z; r3.y = vc[1].z; r3.z = vc[2].z;     // corner C
+  r1.x = vc[0].w; r1.y = vc[1].w; r1.z = vc[2].w;     // corner D
+  r2.x = vc[0].y; r2.y = vc[1].y; r2.z = vc[2].y;     // corner B
+  r0.x = vc[0].x; r0.y = vc[1].x; r0.z = vc[2].x;     // corner A
+  r2.xyz = (r2.xyz + -r0.xyz);     // B-A
+  r4.xyz = (r3.xyz + -r1.xyz);     // C-D
+  r1.w = (-vc[16].y + r1.w);
+  r5.xyz = fma3(r4.xyz, r2.www, r1.xyz);
+  r3.xyz = fma3(ip.zzz, r4.xyz, r1.xyz);
+  r1.xyz = fma3(ip.xxx, r4.xyz, r1.xyz);
+  r6.xyz = fma3(r2.xyz, r2.www, r0.xyz);
+  r4.xyz = fma3(ip.zzz, r2.xyz, r0.xyz);
+  r0.xyz = fma3(ip.xxx, r2.xyz, r0.xyz);
+  r2.xyz = (r5.xyz + -r6.xyz);
+  r1.xyz = (r1.xyz + -r0.xyz);
+  r3.xyz = (r3.xyz + -r4.xyz);
+  r0.xyz = fma3(ip.yyy, r1.xyz, r0.xyz);
+  r1.xyz = fma3(ip.yyy, r2.xyz, r6.xyz);
+  r2.w = dot(r0.xyz, r0.xyz);
+  r2.xyz = fma3(ip.www, r3.xyz, r4.xyz);
+  r3.x = dot(r1.xyz, r1.xyz);
+  r2.w = inversesqrt(max(r2.w, 1e-10));
+  r4.xyz = (-r0.xyz + r2.xyz);
+  r2.xyz = (r2.www * r0.xyz);              // normalized surface position (unit sphere)
+  r3.w = inversesqrt(max(r3.x, 1e-10));
+  r3.xyz = (-vc[18].xyz + r2.xyz);         // eye -> pos
+  r1.xyz = fma3(r3.www, r1.xyz, -r2.xyz);
+  r3.y = dot(r3.xyz, r3.xyz);
+  r2.y = (1.0 / vc[22].w);
+  r3.x = dot(r1.xyz, r1.xyz);
+  r2.x = (1.0 / r0.w);
+  d10.x = vc[14].y;
+  r0.w = inversesqrt(max(r3.y, 1e-10));
+  r2.w = vc[14].w;
+  r3.x = inversesqrt(max(r3.x, 1e-10));
+  r3.w = (r2.y * vc[12].w);
+  r0.w = (1.0 / r0.w);
+  r0.w = (-vc[21].x + r0.w);
+  r1.xyz = (r3.x * r1.xyz);
+  r0.w = clamp((r0.w * r2.x), 0.0, 1.0);
+  r2.x = fma1(-r0.w, vc[15].x, vc[15].y);
+  r0.w = (r0.w * r0.w);
+  r0.w = (r0.w * r2.x);
+  r0.xyz = fma3(r0.www, r4.xyz, r0.xyz);
+  r2.xy = fma2(r0.ww, r7.xy, ip.xy);
+  r2.z = dot(r0.xyz, r0.xyz);
+  // RSX r2.xxxy.zw == (r2.x, r2.y); c24.zzzz.zw==(c24.z,c24.z); c24.xxxy.zw==(c24.x,c24.y)
+  d7.zw = fma2(vec2(r2.x, r2.y), vc[24].zz, vc[24].xy);
+  d7.xy = fma2(vec2(r2.x, r2.y), vc[25].zz, vc[25].xy);
+  d15.zw = fma2(vec2(r2.x, r2.y), vc[22].zz, vc[22].xy);
+  d11.x = r0.w;
+  r2.z = inversesqrt(max(r2.z, 1e-10));
+  d15.xy = fma2(vec2(r2.x, r2.y), vc[23].zz, vc[23].xy);
+  r2.xyz = (r2.z * r0.xyz);                // normalized view-ish vector
+  r4.xyz = (r2.yzx * r1.zxy);
+  d8.xyz = r2.xyz;                         // tc1 = view normal/tangent frame vec
+  r5.y = dot(vec4(r2.xyz,1.0), vc[10]);
+  r5.x = dot(vec4(r2.xyz,1.0), vc[9]);
+  r6.x = dot(r2.xyz, vc[17].xyz);
+  r0.w = dot(vec4(r2.xyz,1.0), vc[6]);
+  r0.z = dot(vec4(r2.xyz,1.0), vc[5]);
+  r4.w = dot(vec4(r2.xyz,1.0), vc[11]);
+  r0.y = dot(vec4(r2.xyz,1.0), vc[4]);
+  r0.x = dot(vec4(r2.xyz,1.0), vc[3]);     // r0 = MVP * spherePos = CLIP
+  r5.w = dot(vec4(r2.xyz,1.0), vc[8]);
+  r5.z = dot(vec4(r2.xyz,1.0), vc[7]);
+  r3.xyz = (vc[18].xyz + -r2.xyz);
+  d9.xy = (r0.xy + -r5.zw);
+  r4.xyz = fma3(r2.zxy, r1.yzx, -r4.xyz);
+  r5.w = (-vc[16].y + r4.w);
+  d0 = r0;                                  // CLIP position
+  r0.xyz = fma3(-r2.xyz, r6.xxx, vc[17].xyz);
+  r5.z = r4.w;
+  r0.w = (1.0 / r1.w);
+  r4.w = dot(r3.xyz, r3.xyz);
+  d12.x = (r5.w * r0.w);
+  r1.w = dot(r4.xyz, r4.xyz);
+  r0.w = dot(r5.xyz, vc[19].xyz);
+  r6.x = dot(r1.xyz, r0.xyz);
+  r4.w = inversesqrt(max(r4.w, 1e-10));
+  r5.xyz = fma3(-r0.www, vc[19].xyz, r5.xyz);
+  r0.w = min(r0.w, vc[15].w);
+  r1.w = inversesqrt(max(r1.w, 1e-10));
+  r3.xyz = (r4.www * r3.xyz);
+  r0.w = max(r0.w, vc[14].x);
+  r4.xyz = (r1.www * r4.xyz);
+  r1.w = dot(r5.xyz, r5.xyz);
+  r6.w = dot(r2.xyz, r3.xyz);
+  r4.w = (r0.w < vc[14].y) ? 1.0 : 0.0;
+  r6.z = (vc[15].w + -abs(r0.w));
+  r5.w = fma1(r2.w, abs(r0.w), vc[13].x);
+  d14.xyz = r3.xyz;                         // tc7
+  r6.y = dot(r4.xyz, r0.xyz);
+  r0.xyz = fma3(-r2.xyz, r6.www, r3.xyz);
+  r2.x = fma1(abs(r0.w), r5.w, -vc[13].y);
+  d6.xy = (r3.w * r6.xy);
+  r2.y = inversesqrt(max(r1.w, 1e-10));
+  r1.w = dot(r0.xyz, r4.xyz);
+  r2.z = inversesqrt(max(r6.z, 1e-10));
+  r1.z = dot(r0.xyz, r1.xyz);
+  r0.w = fma1(abs(r0.w), r2.x, vc[13].z);
+  r0.xyz = (r2.yyy * r5.xyz);
+  r1.x = (1.0 / r2.z);
+  r0.x = dot(r0.xyz, vc[20].xyz);
+  r0.y = (r0.w * r1.x);
+  r0.x = min(r0.x, vc[15].w);
+  r0.z = (r4.w * r0.y);
+  r0.y = fma1(-r0.z, vc[15].x, r0.y);
+  r0.x = max(r0.x, vc[14].x);
+  r1.x = (1.0 / r2.y);
+  r0.y = fma1(r4.w, vc[14].z, r0.y);
+  r0.z = fma1(abs(r0.x), r2.w, vc[13].x);
+  r0.w = (vc[15].w + -abs(r0.x));
+  r0.z = fma1(abs(r0.x), r0.z, -vc[13].y);
+  d13.xy = (r1.zw * r3.w);
+  r0.w = inversesqrt(max(r0.w, 1e-10));
+  r0.z = fma1(abs(r0.x), r0.z, vc[13].z);
+  cc0.x = (r1.x < vc[15].z) ? 1.0 : 0.0;
+  r0.w = (1.0 / r0.w);
+  r0.x = (r0.x < vc[14].y) ? 1.0 : 0.0;
+  r0.z = (r0.z * r0.w);
+  r1.x = (1.0 / vc[16].x);
+  r0.w = (r0.x * r0.z);
+  r0.z = fma1(-r0.w, vc[15].x, r0.z);
+  r0.x = fma1(r0.x, vc[14].z, r0.z);
+  d10.y = (r0.y * r1.x);
+  d10.x = (cc0.x == 0.0) ? (r0.x * vc[13].w) : d10.x;
+
+  
+  tc0=d7; vN=d14.xyz; vL=d8.xyz;
+  vec3 _A=vec3(vc[0].x,vc[1].x,vc[2].x),_B=vec3(vc[0].y,vc[1].y,vc[2].y),_C=vec3(vc[0].z,vc[1].z,vc[2].z),_D=vec3(vc[0].w,vc[1].w,vc[2].w);
+  vec3 _BA=_B-_A,_CD=_C-_D; vec3 _e=ip.x*_CD+_D,_g=ip.x*_BA+_A; vec3 spG=normalize(ip.y*(_e-_g)+_g);
+  vec4 clip=vec4(dot(vec4(spG,1.),vc[3]),dot(vec4(spG,1.),vc[4]),dot(vec4(spG,1.),vc[5]),dot(vec4(spG,1.),vc[6]));
+  clip.z=clip.z*2.0-clip.w; clip.y*=uFlipY; gl_Position=clip;
+}`,FS=`#version 300 es
+precision highp float;
+in vec4 tc0; in vec3 vN; in vec3 vL; uniform sampler2D tex0; uniform vec3 uSun, uCol; out vec4 o;
+void main(){ o=vec4(uCol,1.0); }`;
+function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))console.error(gl.getShaderInfoLog(o));return o;}
+const vso=sh(35633,VS),fso=sh(35632,FS);window.__vslog=gl.getShaderInfoLog(vso);window.__fslog=gl.getShaderInfoLog(fso);const prog=gl.createProgram();gl.attachShader(prog,vso);gl.attachShader(prog,fso);gl.linkProgram(prog);
+if(!gl.getProgramParameter(prog,gl.LINK_STATUS))console.error('LINK',gl.getProgramInfoLog(prog));
+let D=null,eMesh=null,want=0,got=0,tex={};
+function loadTile(path){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));want++;
+ const im=new Image();im.onload=function(){gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,6408,5121,im);gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;draw();};im.src='globe_assets/'+path;return t;}
+async function init(){
+ D=await fetch('globe_assets/tz_lit.json').then(r=>r.json());
+ for(const p of D.patches) p._t=loadTile(p.tile);
+ const pos=new Float32Array(await fetch('globe_assets/mesh/live_surf0_pos.bin').then(r=>r.arrayBuffer()));
+ const xyz=[];for(let i=0;i<289;i++)xyz.push(pos[i*4],pos[i*4+1],pos[i*4+2],pos[i*4+3]);
+ const idx=[];const N=17;for(let i=0;i<N-1;i++)for(let j=0;j<N-1;j++){const a=i*N+j,b=a+N;idx.push(a,b,a+1,b,b+1,a+1);}
+ const pb=gl.createBuffer();gl.bindBuffer(34962,pb);gl.bufferData(34962,new Float32Array(xyz),35044);
+ const ib=gl.createBuffer();gl.bindBuffer(34963,ib);gl.bufferData(34963,new Uint16Array(idx),35044);
+ eMesh={pb,ib,n:idx.length};draw();
+}
+function buildVC(corners){const s=D.shared;const vc=new Float32Array(104);const set=(i,a)=>{vc[i*4]=a[0];vc[i*4+1]=a[1];vc[i*4+2]=a[2];vc[i*4+3]=a[3];};
+ set(0,corners[0]);set(1,corners[1]);set(2,corners[2]);
+ const map={3:260,4:261,5:262,6:263,7:264,8:265,9:268,10:269,11:270,12:454,13:455,14:456,15:457,16:458,17:459,18:460,19:461,20:462,21:463,22:464,23:465,24:466,25:467};
+ for(const k in map){const v=s[map[k]];if(v)set(+k,v);}return vc;}
+function draw(){
+ window.__st={D:!!D,mesh:!!eMesh,got:got,want:want};if(!D||!eMesh||got<want)return;
+ gl.viewport(0,0,1920,1080);gl.clearColor(0,0,0,1);gl.clear(16640);gl.enable(2929);gl.depthFunc(515);
+ gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
+ gl.uniform1f(U('uFlipY'),f('flipy',1));
+ const ws=(P.get('ws')||'-0.5,0.6,0.6').split(',').map(Number);const L=Math.hypot(...ws)||1;gl.uniform3f(U('uSun'),ws[0]/L,ws[1]/L,ws[2]/L);
+ const pl=gl.getAttribLocation(prog,'in_pos');gl.bindBuffer(34962,eMesh.pb);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
+ gl.bindBuffer(34963,eMesh.ib);
+ gl.activeTexture(33984);
+ for(const p of D.patches){gl.uniform4fv(U('vc'),buildVC(p.corners));gl.bindTexture(3553,p._t);gl.uniform1i(U('tex0'),0);gl.drawElements(4,eMesh.n,5123,0);}
+ {var px=new Uint8Array(4);gl.readPixels(960,540,1,1,6408,5121,px);var px2=new Uint8Array(4);gl.readPixels(700,540,1,1,6408,5121,px2);window.__px=[Array.from(px),Array.from(px2)];}window.__rendered=true;
+}
+init();
+</script></body></html>

@@ -1,0 +1,460 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#000}#c{display:block}</style></head>
+<body><canvas id="c" width="1920" height="1080"></canvas><script>
+const P=new URLSearchParams(location.search),f=(k,d)=>{const v=P.get(k);return v===null?d:parseFloat(v)};
+const gl=document.getElementById('c').getContext('webgl2',{preserveDrawingBuffer:true,antialias:true});
+gl.getExtension('OES_element_index_uint'); gl.getExtension('EXT_color_buffer_float'); gl.getExtension('OES_texture_float_linear');
+const VS=`#version 300 es
+precision highp float;
+in vec4 in_pos; uniform vec4 vc[26]; uniform float uFlipY;
+out vec4 tc0,tc3,tc4,tc5,tc6,tc8,tc9; out vec3 vN; out vec3 vL;
+float fma1(float a,float b,float c){return a*b+c;}
+vec3 fma3(vec3 a,vec3 b,vec3 c){return a*b+c;}
+vec2 fma2(vec2 a,vec2 b,vec2 c){return a*b+c;}
+void main(){
+vec4 ip = in_pos;
+  vec4 r0=vec4(0.), r1=vec4(0.), r2=vec4(0.), r3=vec4(0.), r4=vec4(0.), r5=vec4(0.), r6=vec4(0.), r7=vec4(0.), cc0=vec4(0.);
+  vec4 d12=vec4(0,0,0,1), d10=vec4(0,0,0,1), d7=vec4(0,0,0,1), d15=vec4(0,0,0,1),
+       d11=vec4(0,0,0,1), d8=vec4(0,0,0,1), d9=vec4(0,0,0,1), d0=vec4(0,0,0,1),
+       d14=vec4(0,0,0,1), d6=vec4(0,0,0,1), d13=vec4(0,0,0,1);
+
+  // RPCS3: dst_reg12.yz = vc[12].xxyx.yz  ->  (vc12.x, vc12.y)
+  d12.y = vc[12].x; d12.z = vc[12].y;
+  r7.xy = (ip.zw + -ip.xy);
+  d10.z = vc[14].y;
+  r0.w = (-vc[21].x + vc[21].y);
+  r2.w = (vc[12].z + ip.x);
+  r1.w = vc[15].w;
+  r3.x = vc[0].z; r3.y = vc[1].z; r3.z = vc[2].z;     // corner C
+  r1.x = vc[0].w; r1.y = vc[1].w; r1.z = vc[2].w;     // corner D
+  r2.x = vc[0].y; r2.y = vc[1].y; r2.z = vc[2].y;     // corner B
+  r0.x = vc[0].x; r0.y = vc[1].x; r0.z = vc[2].x;     // corner A
+  r2.xyz = (r2.xyz + -r0.xyz);     // B-A
+  r4.xyz = (r3.xyz + -r1.xyz);     // C-D
+  r1.w = (-vc[16].y + r1.w);
+  r5.xyz = fma3(r4.xyz, r2.www, r1.xyz);
+  r3.xyz = fma3(ip.zzz, r4.xyz, r1.xyz);
+  r1.xyz = fma3(ip.xxx, r4.xyz, r1.xyz);
+  r6.xyz = fma3(r2.xyz, r2.www, r0.xyz);
+  r4.xyz = fma3(ip.zzz, r2.xyz, r0.xyz);
+  r0.xyz = fma3(ip.xxx, r2.xyz, r0.xyz);
+  r2.xyz = (r5.xyz + -r6.xyz);
+  r1.xyz = (r1.xyz + -r0.xyz);
+  r3.xyz = (r3.xyz + -r4.xyz);
+  r0.xyz = fma3(ip.yyy, r1.xyz, r0.xyz);
+  r1.xyz = fma3(ip.yyy, r2.xyz, r6.xyz);
+  r2.w = dot(r0.xyz, r0.xyz);
+  r2.xyz = fma3(ip.www, r3.xyz, r4.xyz);
+  r3.x = dot(r1.xyz, r1.xyz);
+  r2.w = inversesqrt(max(r2.w, 1e-10));
+  r4.xyz = (-r0.xyz + r2.xyz);
+  r2.xyz = (r2.www * r0.xyz);              // normalized surface position (unit sphere)
+  r3.w = inversesqrt(max(r3.x, 1e-10));
+  r3.xyz = (-vc[18].xyz + r2.xyz);         // eye -> pos
+  r1.xyz = fma3(r3.www, r1.xyz, -r2.xyz);
+  r3.y = dot(r3.xyz, r3.xyz);
+  r2.y = (1.0 / vc[22].w);
+  r3.x = dot(r1.xyz, r1.xyz);
+  r2.x = (1.0 / r0.w);
+  d10.x = vc[14].y;
+  r0.w = inversesqrt(max(r3.y, 1e-10));
+  r2.w = vc[14].w;
+  r3.x = inversesqrt(max(r3.x, 1e-10));
+  r3.w = (r2.y * vc[12].w);
+  r0.w = (1.0 / r0.w);
+  r0.w = (-vc[21].x + r0.w);
+  r1.xyz = (r3.x * r1.xyz);
+  r0.w = clamp((r0.w * r2.x), 0.0, 1.0);
+  r2.x = fma1(-r0.w, vc[15].x, vc[15].y);
+  r0.w = (r0.w * r0.w);
+  r0.w = (r0.w * r2.x);
+  r0.xyz = fma3(r0.www, r4.xyz, r0.xyz);
+  r2.xy = fma2(r0.ww, r7.xy, ip.xy);
+  r2.z = dot(r0.xyz, r0.xyz);
+  // RSX r2.xxxy.zw == (r2.x, r2.y); c24.zzzz.zw==(c24.z,c24.z); c24.xxxy.zw==(c24.x,c24.y)
+  d7.zw = fma2(vec2(r2.x, r2.y), vc[24].zz, vc[24].xy);
+  d7.xy = fma2(vec2(r2.x, r2.y), vc[25].zz, vc[25].xy);
+  d15.zw = fma2(vec2(r2.x, r2.y), vc[22].zz, vc[22].xy);
+  d11.x = r0.w;
+  r2.z = inversesqrt(max(r2.z, 1e-10));
+  d15.xy = fma2(vec2(r2.x, r2.y), vc[23].zz, vc[23].xy);
+  r2.xyz = (r2.z * r0.xyz);                // normalized view-ish vector
+  r4.xyz = (r2.yzx * r1.zxy);
+  d8.xyz = r2.xyz;                         // tc1 = view normal/tangent frame vec
+  r5.y = dot(vec4(r2.xyz,1.0), vc[10]);
+  r5.x = dot(vec4(r2.xyz,1.0), vc[9]);
+  r6.x = dot(r2.xyz, vc[17].xyz);
+  r0.w = dot(vec4(r2.xyz,1.0), vc[6]);
+  r0.z = dot(vec4(r2.xyz,1.0), vc[5]);
+  r4.w = dot(vec4(r2.xyz,1.0), vc[11]);
+  r0.y = dot(vec4(r2.xyz,1.0), vc[4]);
+  r0.x = dot(vec4(r2.xyz,1.0), vc[3]);     // r0 = MVP * spherePos = CLIP
+  r5.w = dot(vec4(r2.xyz,1.0), vc[8]);
+  r5.z = dot(vec4(r2.xyz,1.0), vc[7]);
+  r3.xyz = (vc[18].xyz + -r2.xyz);
+  d9.xy = (r0.xy + -r5.zw);
+  r4.xyz = fma3(r2.zxy, r1.yzx, -r4.xyz);
+  r5.w = (-vc[16].y + r4.w);
+  d0 = r0;                                  // CLIP position
+  r0.xyz = fma3(-r2.xyz, r6.xxx, vc[17].xyz);
+  r5.z = r4.w;
+  r0.w = (1.0 / r1.w);
+  r4.w = dot(r3.xyz, r3.xyz);
+  d12.x = (r5.w * r0.w);
+  r1.w = dot(r4.xyz, r4.xyz);
+  r0.w = dot(r5.xyz, vc[19].xyz);
+  r6.x = dot(r1.xyz, r0.xyz);
+  r4.w = inversesqrt(max(r4.w, 1e-10));
+  r5.xyz = fma3(-r0.www, vc[19].xyz, r5.xyz);
+  r0.w = min(r0.w, vc[15].w);
+  r1.w = inversesqrt(max(r1.w, 1e-10));
+  r3.xyz = (r4.www * r3.xyz);
+  r0.w = max(r0.w, vc[14].x);
+  r4.xyz = (r1.www * r4.xyz);
+  r1.w = dot(r5.xyz, r5.xyz);
+  r6.w = dot(r2.xyz, r3.xyz);
+  r4.w = (r0.w < vc[14].y) ? 1.0 : 0.0;
+  r6.z = (vc[15].w + -abs(r0.w));
+  r5.w = fma1(r2.w, abs(r0.w), vc[13].x);
+  d14.xyz = r3.xyz;                         // tc7
+  r6.y = dot(r4.xyz, r0.xyz);
+  r0.xyz = fma3(-r2.xyz, r6.www, r3.xyz);
+  r2.x = fma1(abs(r0.w), r5.w, -vc[13].y);
+  d6.xy = (r3.w * r6.xy);
+  r2.y = inversesqrt(max(r1.w, 1e-10));
+  r1.w = dot(r0.xyz, r4.xyz);
+  r2.z = inversesqrt(max(r6.z, 1e-10));
+  r1.z = dot(r0.xyz, r1.xyz);
+  r0.w = fma1(abs(r0.w), r2.x, vc[13].z);
+  r0.xyz = (r2.yyy * r5.xyz);
+  r1.x = (1.0 / r2.z);
+  r0.x = dot(r0.xyz, vc[20].xyz);
+  r0.y = (r0.w * r1.x);
+  r0.x = min(r0.x, vc[15].w);
+  r0.z = (r4.w * r0.y);
+  r0.y = fma1(-r0.z, vc[15].x, r0.y);
+  r0.x = max(r0.x, vc[14].x);
+  r1.x = (1.0 / r2.y);
+  r0.y = fma1(r4.w, vc[14].z, r0.y);
+  r0.z = fma1(abs(r0.x), r2.w, vc[13].x);
+  r0.w = (vc[15].w + -abs(r0.x));
+  r0.z = fma1(abs(r0.x), r0.z, -vc[13].y);
+  d13.xy = (r1.zw * r3.w);
+  r0.w = inversesqrt(max(r0.w, 1e-10));
+  r0.z = fma1(abs(r0.x), r0.z, vc[13].z);
+  cc0.x = (r1.x < vc[15].z) ? 1.0 : 0.0;
+  r0.w = (1.0 / r0.w);
+  r0.x = (r0.x < vc[14].y) ? 1.0 : 0.0;
+  r0.z = (r0.z * r0.w);
+  r1.x = (1.0 / vc[16].x);
+  r0.w = (r0.x * r0.z);
+  r0.z = fma1(-r0.w, vc[15].x, r0.z);
+  r0.x = fma1(r0.x, vc[14].z, r0.z);
+  d10.y = (r0.y * r1.x);
+  d10.x = (cc0.x == 0.0) ? (r0.x * vc[13].w) : d10.x;
+
+  
+  tc0=d7; vN=d14.xyz; vL=d8.xyz; tc3=d10; tc4=d11; tc5=d12; tc6=d13; tc8=d15; tc9=d6;
+  vec4 clip=d0;
+  vec2 ndc=clip.xy/clip.w; vec2 win=ndc*vec2(960.0,-540.0)+vec2(960.0,540.0);
+  clip.xy=((win/vec2(960.0,540.0))-1.0)*clip.w;
+  clip.z=clip.z*2.0-clip.w; clip.y*=uFlipY; gl_Position=clip;
+}`, FS=`#version 300 es
+precision highp float;
+in vec4 tc0,tc3,tc4,tc5,tc6,tc8,tc9; in vec3 vN; in vec3 vL;
+uniform sampler2D tex0,tex1,tex2,tex3,tex4,tex5,tex6,tex13,tex14,tex15;
+uniform vec4 fc[23];
+uniform float uMode;
+out vec4 ocol0;
+vec3 nrm(vec3 v){return length(v)>0.0?normalize(v):v;}
+vec3 fma3(vec3 a,vec3 b,vec3 c){return a*b+c;}
+vec2 fma2(vec2 a,vec2 b,vec2 c){return a*b+c;}
+float fma1(float a,float b,float c){return a*b+c;}
+vec3 pc3(vec3 x,float a,float b){return clamp(x,a,b);}
+#define T2(i,uv) texture(tex##i, uv).xyz
+void main(){
+  vec4 tc1=vec4(vL,1.0), tc7=vec4(vN,1.0);
+  vec4 r0=vec4(0.),r1=vec4(0.),r2=vec4(0.),r3=vec4(0.),r4=vec4(0.);
+  vec4 h0=vec4(0.),h1=vec4(0.),h2=vec4(0.),h3=vec4(0.),h4=vec4(0.),h5=vec4(0.),h6=vec4(0.),h7=vec4(0.);
+  r2.xyz = texture(tex0, tc0.xy).xyz;
+  h2.xyz = nrm(tc7.xyz);
+  r3.xyz = texture(tex1, tc0.zw).xyz;
+  r3.xyz = (r3.xyz + -r2.xyz);
+  r4.xyz = fma3(tc4.xxx, r3.xyz, r2.xyz);
+  h0.xyz = nrm(tc1.xyz);
+  h3.z = (dot(h2.xyz,h0.xyz)/2.0);
+  r0.z = (dot(-h2.xyz,h0.xyz)*2.0);
+  r1.w = (h3.z + fc[0].x);
+  r0.xyz = fma3(-h0.xyz, r0.zzz, -h2.xyz);
+  h1.zw = tc8.zw;
+  r3.xyz = (-r4.xyz + fc[1].xyz);
+  r2.x = texture(tex2, tc8.zw).x;
+  h7.w = fma1(r2.x, fc[2].x, fc[2].y);
+  r2.x = texture(tex3, tc8.xy).x;
+  r1.xyz = fma3(r2.xxx, r3.xyz, r4.xyz);
+  r4.zw = tc9.xy;
+  r4.y = fc[3].y;
+  h5.xyz = (r1.xyz * fc[4].x);
+  r3.xy = tc6.xy;
+  r4.x = fc[5].y;
+  r1.xy = fma2(r3.xy, h7.ww, h1.zw);
+  r1.xyz = texture(tex2, r1.xy).xyz;
+  h7.xyz = (r1.xyz * fc[6].z);
+  h7.w = r2.x;
+  h6.xyz = (-h5.xyz + fc[7].w);
+  h5.xyz = fma3(h7.xyz, h6.xyz, h5.xyz);
+  h7.z = dot(r0.xyz, fc[8].xyz);
+  r0.xy = fma2(r4.zw, fc[9].xx, h1.zw);
+  r0.xyz = texture(tex2, r0.xy).xyz;
+  h0.xyz = pc3(fma3(-r1.xyz, fc[10].xxx, r0.xyz), 0.,1.);
+  h0.w = fc[11].y;
+  r0.zw = fc[12].xy;
+  r2.x = texture(tex6, h7.zw).x;
+  h1.xyz = fma3(r1.www, fc[13].xyz, vec3(r0.z,r0.w,r0.w));
+  r3.x = fc[14].x;
+  r4.z = fc[15].y;
+  r3.y = fc[16].x;
+  r3.z = fc[17].x;
+  r1 = texture(tex4, tc3.xy);
+  h6.xyz = fma3(-r1.www, r3.xyz, r4.xyz);
+  r4.xyz = texture(tex5, tc5.xy).xyz;
+  h6.xyz = (r4.xyz * h6.xyz);
+  h2.xyz = (r1.xyz * fc[18].y);
+  h4.xyz = fma3(h1.xyz, r2.xxx, h5.xyz);
+  h3.xyz = fma3(-h0.xyz, h0.www, fc[19].xxx);
+  r3.xyz = max(h6.xyz, fc[20].xxx);
+  r2.xyz = (h4.xyz * r3.xyz);
+  r2.xyz = (fma3(r2.xyz, h3.xyz, h2.xyz) * 8.0);
+  // VERBATIM ramp encode = the firmware's actual surface fp output col0:
+  vec4 r0d = texture(tex13, gl_FragCoord.xy/32.0);   // dither (black tex -> 0)
+  float maxlum = max(r2.x, r2.y);
+  vec2 e15 = texture(tex15, r2.xy).xy;
+  vec2 e14 = texture(tex14, vec2(r2.z, maxlum)).zw;
+  vec4 col0 = vec4(0.);
+  col0.xy = fma2(r0d.xy, fc[21].xx, e15);
+  col0.zw = fma2(r0d.zw, fc[22].xx, e14);
+  // firmware globe HDR.mnu tonemap of the HDR scene r2: EXPOSURE 0.789, WHITE LEVEL 3.40918,
+  // extended Reinhard, GAMMA 1 (no extra gamma). Real .mnu params, not a guess.
+  vec3 tc = r2.xyz * 0.789;
+  float W = 3.40918;
+  tc = (tc*(1.0 + tc/(W*W)))/(1.0 + tc);
+  if (uMode > 1.5) { ocol0 = vec4(texture(tex0, tc0.xy).xyz, 1.0); }  // DEBUG: raw albedo (full disc shape)
+  else if (uMode > 0.5) { ocol0 = vec4(col0.xyz, 1.0); }   // verbatim ramp-encoded col0
+  else { ocol0 = vec4(clamp(tc,0.0,1.0), 1.0); }      // firmware HDR.mnu tonemap of r2
+}`;
+function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))window.__e=(window.__e||'')+gl.getShaderInfoLog(o);return o;}
+const prog=gl.createProgram();gl.attachShader(prog,sh(35633,VS));gl.attachShader(prog,sh(35632,FS));gl.linkProgram(prog);
+if(!gl.getProgramParameter(prog,gl.LINK_STATUS))window.__e=(window.__e||'')+gl.getProgramInfoLog(prog);
+// ---- VERBATIM ATMOSPHERE SHELL (vp 3f6eeb47 + fp 63d3246d), ported 1:1 from globe_atmo_real.html ----
+const A_VS=`#version 300 es
+precision highp float;
+in vec4 in_pos; in vec4 in_tc0;
+uniform vec4 mvp0,mvp1,mvp2,mvp3; uniform float uFlipY; uniform vec3 c5,c6,c7,c8;
+out vec2 vTC;
+void main(){
+ float A=1.0/sqrt(max(dot(c8,c8),1e-10));float w=in_pos.w;float B=sqrt(max((1.0/A)*(1.0/A)-w*w,1e-10));
+ float s=A*w*w,t=A*B*w; vec3 r0=s*c5+t*(in_tc0.z*c7+in_tc0.w*c6); vTC=in_tc0.xy;
+ vec4 p=vec4(r0,1.0); vec4 clip=vec4(dot(p,mvp0),dot(p,mvp1),dot(p,mvp2),dot(p,mvp3));
+ vec2 ndc=clip.xy/clip.w; vec2 win=ndc*vec2(960.0,-540.0)+vec2(960.0,540.0);
+ clip.xy=((win/vec2(960.0,540.0))-1.0)*clip.w; clip.z=0.0; clip.y*=uFlipY; gl_Position=clip;
+}`;
+const A_FS=`#version 300 es
+precision highp float;
+in vec2 vTC; out vec4 ocol0; uniform sampler2D tex0; uniform vec4 fc[17]; uniform float uMode;
+float pc(float x,float a,float b){return (x!=x)?0.:clamp(x,a,b);} float fma1(float a,float b,float c){return a*b+c;}
+void main(){
+ vec4 tc0=vec4(vTC,0.,1.);vec4 r0=vec4(0.),r1=vec4(0.),r2=vec4(0.),r3=vec4(0.),h2=vec4(0.);
+ r1.x=fc[0].x;r1.z=fc[0].z;r1.y=1.0/fc[1].z;r0.x=fc[2].w;r0.y=fc[2].z;r0.w=(-r0.y+fc[3].x);r1.xyz=tc0.xyz*r1.xyz;
+ r3.y=pc(r0.w/-fc[4].z,0.,1.);r0.w=fc[5].w;r3.x=(-r0.w+fc[6].x);r3.w=r3.y*r3.y;r2.w=r3.y*2.;
+ r2.y=pc(fc[7].x/r0.x,0.,1.);r2.x=r2.y*r2.y;r1.w=r2.y*2.;r0.xyz=texture(tex0,r1.xy).xyz;
+ r1.x=(-r1.x*fc[8].x);r1.z=(r1.y+-fc[9].w);r3.x=pc(r1.z/r3.x,0.,1.);r3.z=(-r1.w+fc[10].x);r3.y=r2.x*r3.z;r0.w=r1.x*fc[11].x;
+ r1.x=pc(r1.y/fc[12].y,0.,1.);r1.w=(-r2.x+fc[13].x);r2.x=fma1(r3.w,r1.w,-r3.y);r1.w=r1.x*2.;r1.w=(-r1.w+fc[14].x);r1.x=r1.x*r1.x;r1.x=r1.x*r1.w;
+ r1.w=r3.x*2.;r1.w=(-r1.w+fc[15].x);r1.y=r3.x*r3.x;r1.y=r1.y*r1.w;r0.w=exp2(r0.w);r0.w=r2.x*r0.w;
+ r0.xyz=r0.xyz*fc[16].x;r0.xyz=(-r1.y*r0.xyz+r0.xyz);r0.w=(-r1.x*r0.w+r0.w);r0.xyz=((r0.w*r0.xyz+r0.xyz)*8.0);
+ // r0.xyz = verbatim HDR atmosphere color. firmware HDR.mnu tonemap (0.789/3.40918, ext-Reinhard):
+ vec3 tcol=r0.xyz*0.789; float Wl=3.40918; tcol=(tcol*(1.0+tcol/(Wl*Wl)))/(1.0+tcol);
+ ocol0=vec4(clamp(tcol,0.0,1.0),1.0);
+}`;
+const aprog=gl.createProgram();gl.attachShader(aprog,sh(35633,A_VS));gl.attachShader(aprog,sh(35632,A_FS));gl.linkProgram(aprog);
+if(!gl.getProgramParameter(aprog,gl.LINK_STATUS))window.__e=(window.__e||'')+gl.getProgramInfoLog(aprog);
+let aMesh=null,scatterTex=null,fcAtmo=null;
+let D=null,eMesh=null,want=0,got=0,sharedTex={},patchTex=[],black=null;
+function texPNG(src){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));want++;
+ const im=new Image();im.onload=function(){gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,6408,5121,im);gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;draw();};im.src=src;return t;}
+function texF32(src,w,h){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,1,1,0,6408,5126,new Float32Array([0,0,0,1]));want++;
+ fetch(src).then(r=>r.arrayBuffer()).then(ab=>{gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,w,h,0,6408,5126,new Float32Array(ab));gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;draw();});return t;}
+function blackTex(){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));return t;}
+async function init(){
+ D=await fetch('globe_assets/full_surface.json').then(r=>r.json());
+ black=blackTex();
+ sharedTex.tex4=texF32('globe_assets/full_tex/t04_f32.bin',256,128);
+ sharedTex.tex5=texF32('globe_assets/full_tex/t05_f32.bin',256,1);
+ sharedTex.tex6=texF32('globe_assets/full_tex/t06_f32.bin',64,64);
+ sharedTex.tex14=texPNG('globe_assets/full_tex/t14.png');
+ sharedTex.tex15=texPNG('globe_assets/full_tex/t15.png');
+ for(let i=0;i<D.patches.length;i++){const d=D.patches[i].idx; patchTex.push({
+   t0:texPNG('globe_assets/full_tex/p%s_t00.png'.replace('%s',String(d).padStart(3,'0'))),
+   t1:texPNG('globe_assets/full_tex/p%s_t01.png'.replace('%s',String(d).padStart(3,'0'))),
+   t2:texPNG('globe_assets/full_tex/p%s_t02.png'.replace('%s',String(d).padStart(3,'0'))),
+   t3:texPNG('globe_assets/full_tex/p%s_t03.png'.replace('%s',String(d).padStart(3,'0')))});}
+ const pos=new Float32Array(await fetch('globe_assets/mesh/live_surf0_pos.bin').then(r=>r.arrayBuffer()));
+ const xyz=[];for(let i=0;i<289;i++)xyz.push(pos[i*4],pos[i*4+1],pos[i*4+2],pos[i*4+3]);
+ const idx=[];const N=17;for(let i=0;i<N-1;i++)for(let j=0;j<N-1;j++){const a=i*N+j,b=a+N;idx.push(a,b,a+1,b,b+1,a+1);}
+ const pb=gl.createBuffer();gl.bindBuffer(34962,pb);gl.bufferData(34962,new Float32Array(xyz),35044);
+ const ib=gl.createBuffer();gl.bindBuffer(34963,ib);gl.bufferData(34963,new Uint16Array(idx),35044);
+ eMesh={pb,ib,n:idx.length};
+ // verbatim atmosphere shell: mesh c0 (pos.w + tc0.zw drive the shell), scatter LUT, captured fc_atmo
+ if(f('atmo',0)){
+   const [apb,atb,aib]=await Promise.all([
+     fetch('globe_assets/mesh/c0_pos.bin').then(r=>r.arrayBuffer()),
+     fetch('globe_assets/mesh/c0_tc0.bin').then(r=>r.arrayBuffer()),
+     fetch('globe_assets/mesh/c0_idx.bin').then(r=>r.arrayBuffer())]);
+   const apbuf=gl.createBuffer();gl.bindBuffer(34962,apbuf);gl.bufferData(34962,new Float32Array(apb),35044);
+   const atbuf=gl.createBuffer();gl.bindBuffer(34962,atbuf);gl.bufferData(34962,new Float32Array(atb),35044);
+   const aibuf=gl.createBuffer();gl.bindBuffer(34963,aibuf);gl.bufferData(34963,new Uint32Array(aib),35044);
+   aMesh={pbuf:apbuf,tbuf:atbuf,ibuf:aibuf,n:new Uint32Array(aib).length};
+   scatterTex=texF32('globe_assets/win_tex/t04_f32.bin',256,128);
+   const AC=await fetch('globe_assets/c3000_consts.json').then(r=>r.json());
+   fcAtmo=new Float32Array(17*4);for(let i=0;i<17;i++){const v=(AC.fc_atmo&&AC.fc_atmo[i])||[0,0,0,0];fcAtmo[i*4]=v[0];fcAtmo[i*4+1]=v[1];fcAtmo[i*4+2]=v[2];fcAtmo[i*4+3]=v[3];}
+ }
+ PATHS=await fetch('globe_assets/camera_paths.json').then(r=>r.json());
+ preset=PATHS[P.get('preset')||'preset_7'];
+ animT=f('t0',0);
+ const sf=P.get('scenefile'); if(sf){ try{ SCENE=await fetch('globe_assets/'+sf).then(r=>r.json()); animT=0; }catch(e){window.__e=(window.__e||'')+'scene:'+e;} }
+ if(f('scenes',0)){ try{ const SUF=P.get('coh')?'_coh':'';   // ?coh=1 loads the COHERENT surface+atmo rebuild
+   let idx=await fetch('globe_assets/scenes_index'+SUF+'.json').then(r=>r.json());
+   if(!f('all',0)) idx=idx.filter(s=>!s.skip);   // default: drop scenes flagged skip; ?all=1 loads every scene
+   SCENES_IDX=idx;
+   SCENES_LIST=await Promise.all(idx.map(s=>fetch('globe_assets/'+s.file).then(r=>r.json())));
+   try{ SCENE_FC=await fetch('globe_assets/scene_fc'+SUF+'.json').then(r=>r.json()); }catch(e){ SCENE_FC=null; }
+   // per-scene atmosphere replay (type-B MVP c256-259 + eye/basis c460-462), captured live; null where absent
+   ATMO_SCENES_LIST=await Promise.all(idx.map(s=>fetch('globe_assets/atmo_scene_'+String(s.scene).padStart(2,'0')+SUF+'.json').then(r=>r.ok?r.json():null).catch(()=>null)));
+   curScene=Math.max(0,f('fixScene',0)); SCENE=SCENES_LIST[curScene]||SCENES_LIST[0]; ATMO_SCENE=ATMO_SCENES_LIST[curScene]; animT=f('t0',0); setFC(); }catch(e){window.__e=(window.__e||'')+'scenes:'+e;} }
+ requestAnimationFrame(frame);
+}
+function buildVC(corners){const s=D.shared;const vc=new Float32Array(104);const set=(i,a)=>{vc[i*4]=a[0];vc[i*4+1]=a[1];vc[i*4+2]=a[2];vc[i*4+3]=a[3];};
+ set(0,corners[0]);set(1,corners[1]);set(2,corners[2]);
+ const map={3:260,4:261,5:262,6:263,7:264,8:265,9:268,10:269,11:270,12:454,13:455,14:456,15:457,16:458,17:459,18:460,19:461,20:462,21:463,22:464,23:465,24:466,25:467};
+ for(const k in map){const v=s[map[k]];if(v)set(+k,v);}return vc;}
+function bindT(unit,name,tex){gl.activeTexture(33984+unit);gl.bindTexture(3553,tex);gl.uniform1i(gl.getUniformLocation(prog,name),unit);}
+// VERBATIM atmosphere pass (limb-shell = the "type B" 3f6eeb47 draw, derived from frame-locked
+// autodump consts). Basis: c5(c464)=c461, c7(c466)=c462, c6(c465)=cross(c5,c7), c8(c467)=eye=c460.
+// MVP (c256-259) is the type-B MVP: same fovy as surface but a firmware-internal view rotation that
+// does NOT decompose to a plain lookAt of c461/c462 -- so for a STATIC captured camera we use the
+// captured c256-259 (D.shared['256'..'259'] if present); the ANIMATED type-B MVP construction is
+// still being reverse-engineered (do not enable atmo on a moving camera until that lands).
+function drawAtmo(){
+ if(!aMesh||!scatterTex||got<want)return; const s=D.shared; if(!s['460']||!s['461']||!s['462'])return;
+ // per-scene ANIMATED atmosphere: replay the captured type-B MVP (c256-259) + eye/basis (c460-462); else static
+ const a=(ATMO_SCENE?atmoAt(animT):null)||{};
+ const e460=a['460']||s['460'], e461=a['461']||s['461'], e462=a['462']||s['462'];
+ const c5=e461.slice(0,3), c7=e462.slice(0,3), c6=_cross(c5,c7), c8=e460.slice(0,3);
+ const m0=a['256']||s['256']||s['260'],m1=a['257']||s['257']||s['261'],m2=a['258']||s['258']||s['262'],m3=a['259']||s['259']||s['263'];
+ gl.useProgram(aprog); const U=n=>gl.getUniformLocation(aprog,n);
+ gl.uniform4fv(U('mvp0'),m0);gl.uniform4fv(U('mvp1'),m1);gl.uniform4fv(U('mvp2'),m2);gl.uniform4fv(U('mvp3'),m3);
+ gl.uniform1f(U('uFlipY'),f('flipy',1));
+ gl.uniform3fv(U('c5'),c5);gl.uniform3fv(U('c6'),c6);gl.uniform3fv(U('c7'),c7);gl.uniform3fv(U('c8'),c8);
+ gl.uniform4fv(U('fc'),fcAtmo);
+ gl.activeTexture(33984);gl.bindTexture(3553,scatterTex);gl.uniform1i(U('tex0'),0);gl.uniform1f(U('uMode'),0);
+ gl.disable(2884); gl.depthMask(false); gl.enable(3042); gl.blendFunc(1,1);  // ONE,ONE additive
+ let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
+ let tl=gl.getAttribLocation(aprog,'in_tc0');gl.bindBuffer(34962,aMesh.tbuf);gl.enableVertexAttribArray(tl);gl.vertexAttribPointer(tl,4,5126,false,0,0);
+ gl.bindBuffer(34963,aMesh.ibuf);gl.drawElements(5,aMesh.n,5125,0);
+ gl.disable(3042); gl.depthMask(true);
+}
+// per-patch object-space winding: cross(B-A,D-A) . centroid. The single grid mesh is reused for all
+// 24 patches, so cube faces on opposite hemispheres get opposite screen winding. Sign tells us which
+// frontFace makes a patch's OUTWARD face the GL front face so a single cullFace(BACK) culls only the
+// true back faces (per-triangle, so the limb is handled correctly). Verified vs real surf3000.
+function windSign(c){const A=[c[0][0],c[1][0],c[2][0]],B=[c[0][1],c[1][1],c[2][1]],
+  C=[c[0][2],c[1][2],c[2][2]],D=[c[0][3],c[1][3],c[2][3]];
+  const u=[B[0]-A[0],B[1]-A[1],B[2]-A[2]],v=[D[0]-A[0],D[1]-A[1],D[2]-A[2]];
+  const n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]];
+  const cen=[(A[0]+B[0]+C[0]+D[0])/4,(A[1]+B[1]+C[1]+D[1])/4,(A[2]+B[2]+C[2]+D[2])/4];
+  return n[0]*cen[0]+n[1]*cen[1]+n[2]*cen[2];}
+function draw(){
+ if(!D||!eMesh||got<want)return;
+ gl.viewport(0,0,1920,1080);gl.clearColor(0,0,0,1);gl.clear(16640);gl.enable(2929);gl.depthFunc(515);
+ const CULL=f('cull',1); if(CULL){gl.enable(2884);gl.cullFace(1029);}else{gl.disable(2884);}
+ gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
+ gl.uniform1f(U('uFlipY'),f('flipy',1));
+ gl.uniform1f(U('uMode'),f('enc',1));
+ const fcsrc=curFC||D.fc;  // per-scene captured fragment constants when cycling, else baked
+ const fc=new Float32Array(23*4); for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
+ gl.uniform4fv(U('fc'),fc);
+ bindT(4,'tex4',sharedTex.tex4);bindT(5,'tex5',sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
+ bindT(7,'tex14',sharedTex.tex14);bindT(8,'tex15',sharedTex.tex15);bindT(9,'tex13',black);
+ const pl=gl.getAttribLocation(prog,'in_pos');gl.bindBuffer(34962,eMesh.pb);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
+ gl.bindBuffer(34963,eMesh.ib);
+ const fw=f('fw',0);
+ for(let i=0;i<D.patches.length;i++){const pt=patchTex[i];
+   bindT(0,'tex0',pt.t0);bindT(1,'tex1',pt.t1);bindT(2,'tex2',pt.t2);bindT(3,'tex3',pt.t3);
+   if(CULL){let cw=windSign(D.patches[i].corners)<0; if(fw)cw=!cw; gl.frontFace(cw?2304:2305);}
+   gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
+ if(f('atmo',0))drawAtmo();
+ window.__rendered=true;
+}
+// ---- VERBATIM camera animation from firmware camera.path ----
+let PATHS=null, animT=0, preset=null, SCENE=null, SCENES_LIST=null, curScene=0;
+let SCENES_IDX=null, SCENE_FC=null, curFC=null;   // per-scene FRAGMENT constants (real, captured via DRAWCALLS)
+function setFC(){ curFC = (SCENE_FC && SCENES_IDX && SCENES_IDX[curScene] && SCENE_FC[String(SCENES_IDX[curScene].scene)]) || null; }
+let ATMO_SCENES_LIST=null, ATMO_SCENE=null;   // per-scene ATMOSPHERE replay (captured type-B MVP+basis)
+const ATMO_KEYS=['256','257','258','259','460','461','462'];
+function atmoAt(t){ const F=ATMO_SCENE; if(!F||!F.length)return null; if(t<=F[0].t)return F[0]; if(t>=F[F.length-1].t)return F[F.length-1];
+  for(let i=0;i<F.length-1;i++){const a=F[i],b=F[i+1]; if(t>=a.t&&t<=b.t){const w=(t-a.t)/((b.t-a.t)||1);
+    const o={}; for(const k of ATMO_KEYS){const va=a[k],vb=b[k]; o[k]=va&&vb?va.map((x,j)=>x+(vb[j]-x)*w):va;} return o;}}
+  return F[F.length-1]; }
+// SCENE replay: play a captured per-frame consts time-series (camera + firmware lighting basis
+// c461-467) -> exact per-scene lighting (fixes highlight clipping; the firmware lighting basis is
+// per-frame and not derivable, so we replay the real captured values). Keys are const indices.
+const SCENE_KEYS=['260','261','262','263','264','265','268','269','270','454','455','456','457','458','459','460','461','462','463','464','465','466','467'];
+function sceneAt(t){ // linear interp of all consts at normalized t in [0,1]
+  const F=SCENE; if(t<=F[0].t)return F[0]; if(t>=F[F.length-1].t)return F[F.length-1];
+  for(let i=0;i<F.length-1;i++){const a=F[i],b=F[i+1]; if(t>=a.t&&t<=b.t){const w=(t-a.t)/((b.t-a.t)||1);
+    const o={}; for(const k of SCENE_KEYS){const va=a[k],vb=b[k]; o[k]=va&&vb?va.map((x,j)=>x+(vb[j]-x)*w):va;} return o;}}
+  return F[F.length-1];
+}
+const _sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+const _cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+const _norm=(a)=>{const l=Math.hypot(a[0],a[1],a[2])||1;return[a[0]/l,a[1]/l,a[2]/l];};
+const _dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+// firmware MVP: persp(fovy,16/9) x lookAt(eye,center,up); rows c260=(fy/asp)right, c261=fy*u, c262=c263=(fwd,-fwd.eye)
+function lookAtMVP(eye,center,up,fovy){
+  const fwd=_norm(_sub(center,eye)), right=_norm(_cross(fwd,up)), u=_cross(right,fwd);
+  const asp=16/9, fy=1/Math.tan(fovy*Math.PI/360);
+  return {c260:[(fy/asp)*right[0],(fy/asp)*right[1],(fy/asp)*right[2],-(fy/asp)*_dot(right,eye)],
+          c261:[fy*u[0],fy*u[1],fy*u[2],-fy*_dot(u,eye)],
+          cw:[fwd[0],fwd[1],fwd[2],-_dot(fwd,eye)], eye:[eye[0],eye[1],eye[2],1]};
+}
+function interp(kfs,t){
+  // Catmull-Rom spline (clamped endpoints) -- VALIDATED vs real captured camera: residual 0.0028
+  // (linear 0.0354, slerp 0.0102). This IS the firmware's camera-path interpolation.
+  if(t<=kfs[0].t)return kfs[0]; const last=kfs[kfs.length-1]; if(t>=last.t)return last;
+  for(let i=0;i<kfs.length-1;i++){const a=kfs[i],b=kfs[i+1]; if(t>=a.t&&t<=b.t){
+    const w=(t-a.t)/(b.t-a.t), w2=w*w, w3=w2*w;
+    const p0=kfs[Math.max(0,i-1)], p1=a, p2=b, p3=kfs[Math.min(kfs.length-1,i+2)];
+    const cr=(c0,c1,c2,c3)=>0.5*((2*c1)+(-c0+c2)*w+(2*c0-5*c1+4*c2-c3)*w2+(-c0+3*c1-3*c2+c3)*w3);
+    const V=k=>p1[k].map((_,j)=>cr(p0[k][j],p1[k][j],p2[k][j],p3[k][j]));
+    return {eye:V('eye'),center:V('center'),up:V('up'),fovy:cr(p0.fovy,p1.fovy,p2.fovy,p3.fovy)};}}
+  return last;
+}
+function frame(){
+  if(SCENE&&D&&eMesh&&got>=want){
+    const _skip=(new URLSearchParams(location.search).get('skip')||'').split(',');
+    const s=sceneAt(animT); for(const k of SCENE_KEYS){ if(s[k]&&!_skip.includes(k)) D.shared[k]=s[k]; }   // replay captured per-frame consts (camera + lighting)
+    draw();
+    if(f('fixScene',-1)<0){   // fixScene locks one scene at t0 (verification); otherwise cycle
+      const span=((SCENE[SCENE.length-1].fr||0)-(SCENE[0].fr||0))||300;
+      animT += f('speed', 1/span);   // match the captured scene's real wall-clock duration
+      if(animT>1){ animT=0; if(SCENES_LIST){ curScene=(curScene+1)%SCENES_LIST.length; SCENE=SCENES_LIST[curScene]; if(ATMO_SCENES_LIST)ATMO_SCENE=ATMO_SCENES_LIST[curScene]; setFC(); } }  // cycle scenes
+    }
+  } else if(PATHS&&D&&eMesh&&got>=want&&preset){
+    const kfs=preset.kf, tmax=kfs[kfs.length-1].t, cf=interp(kfs,animT), m=lookAtMVP(cf.eye,cf.center,cf.up,cf.fovy);
+    D.shared['260']=m.c260; D.shared['261']=m.c261; D.shared['262']=m.cw; D.shared['263']=m.cw; D.shared['460']=m.eye;
+    draw();
+    animT += f('speed',0.242);        // playback rate = measured t/frame from real capture (0.2417)
+    if(animT>tmax) animT = preset.loop? 0 : (f('loop',1)? 0 : tmax);
+  }
+  requestAnimationFrame(frame);
+}
+init();
+</script></body></html>

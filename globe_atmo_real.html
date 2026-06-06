@@ -1,0 +1,82 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#000}#c{display:block}</style></head>
+<body><canvas id="c" width="1920" height="1080"></canvas><script>
+// VERBATIM atmosphere shell: vp 3f6eeb47 + fp 63d3246d (both ported, scene-universal microcode),
+// real frame-21739 camera+basis (cohF_composite.json), VALID scatter LUT (win_tex/t04_f32.bin),
+// real atmosphere mesh (mesh/c0). Output HDR r0 with firmware HDR.mnu tonemap (0.789/3.40918).
+const P=new URLSearchParams(location.search),f=(k,d)=>{const v=P.get(k);return v===null?d:parseFloat(v)};
+const gl=document.getElementById('c').getContext('webgl2',{preserveDrawingBuffer:true,antialias:true});
+gl.getExtension('OES_element_index_uint');gl.getExtension('EXT_color_buffer_float');gl.getExtension('OES_texture_float_linear');
+const A_VS=`#version 300 es
+precision highp float;
+in vec4 in_pos; in vec4 in_tc0;
+uniform vec4 mvp0,mvp1,mvp2,mvp3; uniform float uClipScale,uFlipY; uniform vec3 c5,c6,c7,c8;
+out vec2 vTC;
+void main(){
+ float A=1.0/sqrt(max(dot(c8,c8),1e-10));float w=in_pos.w;float B=sqrt(max((1.0/A)*(1.0/A)-w*w,1e-10));
+ float s=A*w*w,t=A*B*w; vec3 r0=s*c5+t*(in_tc0.z*c7+in_tc0.w*c6); vTC=in_tc0.xy;
+ vec4 p=vec4(r0,1.0); vec4 clip=vec4(dot(p,mvp0),dot(p,mvp1),dot(p,mvp2),dot(p,mvp3));
+ vec2 ndc=clip.xy/clip.w; vec2 win=ndc*vec2(960.0,-540.0)+vec2(960.0,540.0);
+ clip.xy=((win/vec2(960.0,540.0))-1.0)*clip.w; clip.z=0.0; clip.y*=uFlipY; gl_Position=clip;
+}`;
+const A_FS=`#version 300 es
+precision highp float;
+in vec2 vTC; out vec4 ocol0; uniform sampler2D tex0; uniform vec4 fc[17]; uniform float uMode;
+float pc(float x,float a,float b){return (x!=x)?0.:clamp(x,a,b);} float fma1(float a,float b,float c){return a*b+c;}
+void main(){
+ if(uMode>0.5){ ocol0=vec4(0.0,1.0,0.0,1.0); return; }  // DEBUG: flat shell (show geometry)
+ vec4 tc0=vec4(vTC,0.,1.);vec4 r0=vec4(0.),r1=vec4(0.),r2=vec4(0.),r3=vec4(0.),h2=vec4(0.);
+ r1.x=fc[0].x;r1.z=fc[0].z;r1.y=1.0/fc[1].z;r0.x=fc[2].w;r0.y=fc[2].z;r0.w=(-r0.y+fc[3].x);r1.xyz=tc0.xyz*r1.xyz;
+ r3.y=pc(r0.w/-fc[4].z,0.,1.);r0.w=fc[5].w;r3.x=(-r0.w+fc[6].x);r3.w=r3.y*r3.y;r2.w=r3.y*2.;
+ r2.y=pc(fc[7].x/r0.x,0.,1.);r2.x=r2.y*r2.y;r1.w=r2.y*2.;r0.xyz=texture(tex0,r1.xy).xyz;
+ r1.x=(-r1.x*fc[8].x);r1.z=(r1.y+-fc[9].w);r3.x=pc(r1.z/r3.x,0.,1.);r3.z=(-r1.w+fc[10].x);r3.y=r2.x*r3.z;r0.w=r1.x*fc[11].x;
+ r1.x=pc(r1.y/fc[12].y,0.,1.);r1.w=(-r2.x+fc[13].x);r2.x=fma1(r3.w,r1.w,-r3.y);r1.w=r1.x*2.;r1.w=(-r1.w+fc[14].x);r1.x=r1.x*r1.x;r1.x=r1.x*r1.w;
+ r1.w=r3.x*2.;r1.w=(-r1.w+fc[15].x);r1.y=r3.x*r3.x;r1.y=r1.y*r1.w;r0.w=exp2(r0.w);r0.w=r2.x*r0.w;
+ r0.xyz=r0.xyz*fc[16].x;r0.xyz=(-r1.y*r0.xyz+r0.xyz);r0.w=(-r1.x*r0.w+r0.w);r0.xyz=((r0.w*r0.xyz+r0.xyz)*8.0);
+ // r0.xyz = verbatim HDR atmosphere color. firmware HDR.mnu tonemap (0.789/3.40918, ext-Reinhard):
+ vec3 tcol=r0.xyz*0.789; float Wl=3.40918; tcol=(tcol*(1.0+tcol/(Wl*Wl)))/(1.0+tcol);
+ ocol0=vec4(clamp(tcol,0.0,1.0),1.0);
+}`;
+function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))window.__e=(window.__e||'')+gl.getShaderInfoLog(o);return o;}
+const prog=gl.createProgram();gl.attachShader(prog,sh(35633,A_VS));gl.attachShader(prog,sh(35632,A_FS));gl.linkProgram(prog);
+if(!gl.getProgramParameter(prog,gl.LINK_STATUS))window.__e=(window.__e||'')+gl.getProgramInfoLog(prog);
+let D=null,aMesh=null,scatterTex=null,want=0,got=0;
+function texF32(src,w,h){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,1,1,0,6408,5126,new Float32Array([0,0,0,1]));want++;
+ fetch(src).then(r=>r.arrayBuffer()).then(ab=>{try{gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,w,h,0,6408,5126,new Float32Array(ab));gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;draw();}catch(e){window.__e=(window.__e||'')+'texF32:'+e;}});return t;}
+async function loadMesh(nm){const [pb,tb,ib]=await Promise.all([fetch('globe_assets/mesh/'+nm+'_pos.bin').then(r=>r.arrayBuffer()),fetch('globe_assets/mesh/'+nm+'_tc0.bin').then(r=>r.arrayBuffer()),fetch('globe_assets/mesh/'+nm+'_idx.bin').then(r=>r.arrayBuffer())]);
+ const pos=new Float32Array(pb),tc=new Float32Array(tb),idx=new Uint32Array(ib);
+ const pbuf=gl.createBuffer();gl.bindBuffer(34962,pbuf);gl.bufferData(34962,pos,35044);
+ const tbuf=gl.createBuffer();gl.bindBuffer(34962,tbuf);gl.bufferData(34962,tc,35044);
+ const ibuf=gl.createBuffer();gl.bindBuffer(34963,ibuf);gl.bufferData(34963,idx,35044);return {pbuf,tbuf,ibuf,n:idx.length};}
+async function init(){
+ D=await fetch('globe_assets/c3000_consts.json').then(r=>r.json());
+ scatterTex=texF32('globe_assets/win_tex/t04_f32.bin',256,128);
+ aMesh=await loadMesh('c0'); draw();
+}
+function draw(){
+ window.__dbg=JSON.stringify({D:!!D,aMesh:!!aMesh,got:got,want:want});
+ if(!D||!aMesh||got<want)return;
+ try{
+ gl.viewport(0,0,1920,1080);gl.clearColor(0,0,0,1);gl.clear(16384);
+ gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
+ const s=D.atmo;  // REAL draw-time atmosphere consts (frame 3000)
+ // verbatim const map (from 3f6eeb47.bin parse): MVP=c256-259, c5=c464,c6=c465,c7=c466,c8=c467
+ const mvp=[s['256'],s['257'],s['258'],s['259']];
+ gl.uniform4fv(U('mvp0'),mvp[0]);gl.uniform4fv(U('mvp1'),mvp[1]);gl.uniform4fv(U('mvp2'),mvp[2]);gl.uniform4fv(U('mvp3'),mvp[3]);
+ gl.uniform1f(U('uClipScale'),f('cs',1));gl.uniform1f(U('uFlipY'),f('flipy',1));
+ const reg=(k,d)=>{const r=String(P.get(k)||d);const neg=r[0]=='-';const rr=neg?r.slice(1):r;const v=s[rr]||[0,0,0,0];const sg=neg?-1:1;return [v[0]*sg,v[1]*sg,v[2]*sg];};
+ gl.uniform3fv(U('c5'),reg('c5','464'));
+ gl.uniform3fv(U('c6'),reg('c6','465'));
+ gl.uniform3fv(U('c7'),reg('c7','466'));
+ gl.uniform3fv(U('c8'),reg('c8','467'));
+ // real captured atmosphere fc[0..16]
+ const fc=new Float32Array(17*4);for(let i=0;i<17;i++){const v=(D.fc_atmo&&D.fc_atmo[i])||[0,0,0,0];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
+ gl.uniform4fv(U('fc'),fc);
+ gl.activeTexture(33984);gl.bindTexture(3553,scatterTex);gl.uniform1i(U('tex0'),0);gl.uniform1f(U('uMode'),f('dbg',0));
+ let pl=gl.getAttribLocation(prog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
+ let tl=gl.getAttribLocation(prog,'in_tc0');gl.bindBuffer(34962,aMesh.tbuf);gl.enableVertexAttribArray(tl);gl.vertexAttribPointer(tl,4,5126,false,0,0);
+ gl.bindBuffer(34963,aMesh.ibuf);gl.drawElements(5,aMesh.n,5125,0);  // 5 = TRIANGLE_STRIP (atmosphere prim=6)
+ window.__rendered=true;
+ }catch(e){window.__e=(window.__e||'')+'draw:'+e;}
+}
+init();
+</script></body></html>

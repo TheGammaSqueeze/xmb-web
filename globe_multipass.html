@@ -1,0 +1,95 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Globe multipass</title>
+<style>html,body{margin:0;background:#000;overflow:hidden}#c{display:block}</style></head>
+<body><canvas id="c" width="1920" height="1080"></canvas>
+<script>
+// Multi-pass globe: PASS1 earth (unit sphere, real cube tex, real MVP) -> sceneFBO;
+// PASS2 verbatim atmosphere fp (RSX c2cfd0cf microcode) reads sceneFBO(tex0)+ramps(tex14/15).
+// All real data: MVP/basis/sun captured, cube earth from earth.qrc, ramps real, fp constants real.
+const P=new URLSearchParams(location.search), f=(k,d)=>{const v=P.get(k);return v===null?d:parseFloat(v)};
+const cv=document.getElementById('c'),W=cv.width,Hh=cv.height;
+const gl=cv.getContext('webgl',{preserveDrawingBuffer:true,antialias:false});
+const FLIPY=f('flipy',-1);
+// ---- PASS1 earth ----
+const E_VS=`precision highp float;attribute vec3 pos;
+uniform vec4 mvp0,mvp1,mvp2,mvp3;uniform float uFlipY;varying vec3 vN;
+void main(){vN=pos;vec4 p=vec4(pos,1.0);
+ vec4 clip=vec4(dot(p,mvp0),dot(p,mvp1),dot(p,mvp2),dot(p,mvp3));
+ clip.z=clip.z*2.0-clip.w; clip.y*=uFlipY; gl_Position=clip;}`;
+const E_FS=`precision highp float;varying vec3 vN;uniform samplerCube uEarth,uClouds;uniform vec3 uSun;uniform mat3 uErot;
+void main(){vec3 N=normalize(vN);vec3 Nt=normalize(uErot*N);
+ vec3 surf=textureCube(uEarth,Nt).rgb;float cloud=textureCube(uClouds,Nt).r;
+ float ndl=dot(N,normalize(uSun));float day=smoothstep(-0.05,0.18,ndl);
+ vec3 base=surf*vec3(1.5,1.62,1.85);base=mix(base,vec3(1.2),cloud*0.9*day);
+ vec3 col=mix(surf*0.05,base*clamp(ndl,0.0,1.0)*2.0,day);
+ gl_FragColor=vec4(col,1.0);}`;
+// ---- PASS2 atmosphere fp (verbatim) ----
+const A_VS=`precision highp float;attribute vec2 p;varying vec2 vUV;void main(){vUV=p*0.5+0.5;gl_Position=vec4(p,0.,1.);}`;
+const A_FS=`precision highp float;varying vec2 vUV;uniform sampler2D tex0,tex14,tex15;
+vec4 fc[17];
+void initc(){fc[0]=vec4(0.2,0.2,0.2,1.);fc[1]=vec4(0.0599976,0.150024,0.225098,0.);fc[2]=vec4(0.149992,-0.074996,0.352999,0.305);
+ fc[3]=vec4(0.,0.961143,0.961143,0.);fc[4]=vec4(0.587,1.685,0.,0.);fc[5]=vec4(0.,0.987415,0.987415,0.);
+ fc[6]=vec4(0.149992,-0.074996,0.352999,0.305);fc[7]=vec4(0.149992,-0.074996,0.352999,0.305);fc[8]=vec4(-0.0615082,0.201078,0.977642,0.);
+ fc[9]=vec4(0.81,1.,0.,0.);fc[10]=vec4(0.799805,0.,0.,0.);fc[11]=vec4(0.81,1.,0.,0.);fc[12]=vec4(0.799805,0.,0.,0.);
+ fc[13]=vec4(0.0707836,0.788235,0.705882,0.);fc[14]=vec4(0.,0.987415,0.987415,0.);fc[15]=vec4(0.,0.945861,0.945861,0.);fc[16]=vec4(0.,0.961143,0.961143,0.);}
+void main(){initc();
+ vec4 tc0=vec4(vUV,fc[4].z,1.0);
+ vec4 r0=vec4(0.),r1=vec4(0.),r2=vec4(0.),r3=vec4(0.),h2=vec4(0.);
+ r1.x=fc[0].x;r1.z=fc[0].x; r1.y=1.0/fc[1].z;
+ r0.x=fc[2].w;r0.y=fc[2].z; r0.w=-r0.y+fc[3].x;
+ r1.xyz=tc0.xyz*r1.xyz;
+ r3.y=clamp(r0.w/-fc[4].z,0.,1.); r0.w=fc[5].w; r3.x=-r0.w+fc[6].x;
+ r3.w=r3.y*r3.y; r2.w=r3.y*2.; r2.y=clamp(fc[7].x/r0.x,0.,1.); r2.x=r2.y*r2.y; r1.w=r2.y*2.;
+ r0.xyz=texture2D(tex0,r1.xy).xyz;
+ r1.x=-r1.x*fc[8].x; r1.z=r1.y+-fc[9].w; r3.x=clamp(r1.z/r3.x,0.,1.);
+ r3.z=-r1.w+fc[10].x; r3.y=r2.x*r3.z; r0.w=r1.x*fc[11].x; r1.x=clamp(r1.y/fc[12].y,0.,1.);
+ r1.w=-r2.w+fc[13].x; r2.x=r3.w*r1.w-r3.y; r1.w=r1.x*2.; r1.w=-r1.w+fc[14].x;
+ r1.x=r1.x*r1.x; r1.x=r1.x*r1.w; r1.w=r3.x*2.; r1.w=-r1.w+fc[15].x; r1.y=r3.x*r3.x; r1.y=r1.y*r1.w;
+ r0.w=exp2(r0.w); r0.w=r2.x*r0.w;
+ r0.xyz=r0.xyz*fc[16].x; r0.xyz=-r1.y*r0.xyz+r0.xyz; r0.w=-r1.x*r0.w+r0.w; r0.xyz=(r0.w*r0.xyz+r0.xyz)*8.;
+ h2.w=max(r0.x,r0.y); h2.z=r0.z;
+ r0.xy=texture2D(tex15,r0.xy).xy; r0.z=texture2D(tex14,vec2(h2.z,h2.w)).z;
+ gl_FragColor=vec4(r0.xyz,1.0);}`;
+function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))console.error(gl.getShaderInfoLog(o));return o;}
+function prog(vs,fs){const p=gl.createProgram();gl.attachShader(p,sh(gl.VERTEX_SHADER,vs));gl.attachShader(p,sh(gl.FRAGMENT_SHADER,fs));gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))console.error(gl.getProgramInfoLog(p));return p;}
+const eP=prog(E_VS,E_FS), aP=prog(A_VS,A_FS);
+// FBO for scene
+function mkfbo(w,h){const t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,w,h,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+ gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+ const fb=gl.createFramebuffer();gl.bindFramebuffer(gl.FRAMEBUFFER,fb);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,t,0);return{t,fb};}
+const scene=mkfbo(W,Hh);
+// quad + sphere
+const quad=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,quad);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
+const LAT=96,LON=192,vp=[],vi=[];for(let i=0;i<=LAT;i++){const th=Math.PI*i/LAT;for(let j=0;j<=LON;j++){const ph=2*Math.PI*j/LON;vp.push(Math.sin(th)*Math.cos(ph),Math.cos(th),Math.sin(th)*Math.sin(ph));}}
+for(let i=0;i<LAT;i++)for(let j=0;j<LON;j++){const a=i*(LON+1)+j,b=a+LON+1;vi.push(a,b,a+1,b,b+1,a+1);}
+gl.getExtension('OES_element_index_uint');
+const sb=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,sb);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(vp),gl.STATIC_DRAW);
+const sib=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,sib);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint32Array(vi),gl.STATIC_DRAW);
+const NI=vi.length;
+// textures
+const FACE=(P.get('faces')||'1,3,5,4,0,2').split(',').map(Number);let want=0,got=0;
+function cube(pfx){const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_CUBE_MAP,tex);const T=[gl.TEXTURE_CUBE_MAP_POSITIVE_X,gl.TEXTURE_CUBE_MAP_NEGATIVE_X,gl.TEXTURE_CUBE_MAP_POSITIVE_Y,gl.TEXTURE_CUBE_MAP_NEGATIVE_Y,gl.TEXTURE_CUBE_MAP_POSITIVE_Z,gl.TEXTURE_CUBE_MAP_NEGATIVE_Z];
+ for(let i=0;i<6;i++)gl.texImage2D(T[i],0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([0,0,15,255]));want+=6;
+ for(let i=0;i<6;i++){const im=new Image();im.onload=(function(i,im){return function(){gl.bindTexture(gl.TEXTURE_CUBE_MAP,tex);gl.texImage2D(T[i],0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);got++;draw();};})(i,im);im.src='globe_assets/'+pfx+'_face'+FACE[i]+'.png';}return tex;}
+function tex2d(src){const t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([0,0,0,255]));want++;const im=new Image();im.onload=function(){gl.bindTexture(gl.TEXTURE_2D,t);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);got++;draw();};im.src=src;return t;}
+const earthT=cube('earth'),cloudT=cube('clouds'),ramp14=tex2d('globe_assets/ramp14.png'),ramp15=tex2d('globe_assets/ramp15.png');
+let data=null;function rotM(rx,ry,rz){const d=a=>a*Math.PI/180,cx=Math.cos(d(rx)),sx=Math.sin(d(rx)),cy=Math.cos(d(ry)),sy=Math.sin(d(ry)),cz=Math.cos(d(rz)),sz=Math.sin(d(rz));return[cy*cz,cy*sz,-sy,sx*sy*cz-cx*sz,sx*sy*sz+cx*cz,sx*cy,cx*sy*cz+sx*sz,cx*sy*sz-sx*cz,cx*cy];}
+fetch('globe_assets/mp_consts.json').then(r=>r.json()).then(j=>{data=j;draw();});
+function draw(){ if(!data||got<want) return; const U=(p,n)=>gl.getUniformLocation(p,n);
+ // PASS1 earth -> sceneFBO
+ gl.bindFramebuffer(gl.FRAMEBUFFER,scene.fb);gl.viewport(0,0,W,Hh);gl.clearColor(0,0,0,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);
+ gl.useProgram(eP);const m=data.mvp;gl.uniform4fv(U(eP,'mvp0'),m[0]);gl.uniform4fv(U(eP,'mvp1'),m[1]);gl.uniform4fv(U(eP,'mvp2'),m[2]);gl.uniform4fv(U(eP,'mvp3'),m[3]);gl.uniform1f(U(eP,'uFlipY'),FLIPY);
+ // sun view->world via basis
+ let sv=data.sun; if(data.basis&&data.viewsun){const s=data.viewsun,b=data.basis;const ws=[b[2][0]*s[0]+b[0][0]*s[1]+b[1][0]*s[2],b[2][1]*s[0]+b[0][1]*s[1]+b[1][1]*s[2],b[2][2]*s[0]+b[0][2]*s[1]+b[1][2]*s[2]];const L=Math.hypot(...ws)||1;sv=ws.map(x=>x/L);}
+ gl.uniform3fv(U(eP,'uSun'),sv);gl.uniformMatrix3fv(U(eP,'uErot'),false,rotM(f('erx',0),f('ery',0),f('erz',0)));
+ gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_CUBE_MAP,earthT);gl.uniform1i(U(eP,'uEarth'),0);gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_CUBE_MAP,cloudT);gl.uniform1i(U(eP,'uClouds'),1);
+ const pl=gl.getAttribLocation(eP,'pos');gl.bindBuffer(gl.ARRAY_BUFFER,sb);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,3,gl.FLOAT,false,0,0);gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,sib);gl.drawElements(gl.TRIANGLES,NI,gl.UNSIGNED_INT,0);
+ // PASS2 atmosphere fp -> screen
+ gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,W,Hh);gl.disable(gl.DEPTH_TEST);gl.clear(gl.COLOR_BUFFER_BIT);
+ gl.useProgram(aP);gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,scene.t);gl.uniform1i(U(aP,'tex0'),0);
+ gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_2D,ramp14);gl.uniform1i(U(aP,'tex14'),1);gl.activeTexture(gl.TEXTURE2);gl.bindTexture(gl.TEXTURE_2D,ramp15);gl.uniform1i(U(aP,'tex15'),2);
+ const ql=gl.getAttribLocation(aP,'p');gl.bindBuffer(gl.ARRAY_BUFFER,quad);gl.enableVertexAttribArray(ql);gl.vertexAttribPointer(ql,2,gl.FLOAT,false,0,0);gl.drawArrays(gl.TRIANGLES,0,3);
+ // optional: show earth pass directly with ?earth=1
+ if(P.get('earth')){gl.bindFramebuffer(gl.FRAMEBUFFER,null);}
+ window.__rendered=true;
+}
+</script></body></html>

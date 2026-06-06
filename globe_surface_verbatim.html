@@ -1,0 +1,108 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Globe surface verbatim</title>
+<style>html,body{margin:0;background:#000;overflow:hidden}#c{display:block}</style></head>
+<body><canvas id="c" width="1920" height="1080"></canvas>
+<script>
+// Verbatim earth surface GEOMETRY: real RSX surface vp 0f331863 (ported line-for-line),
+// real per-patch cube corners (c256-258) + shared camera consts (surface_verbatim.json),
+// real 17x17 patch grid mesh. Interim shading = real firmware cube earth sampled by the
+// vp-generated unit-sphere position (tc1). Geometry is 1:1 (sphericity verified 1.0000);
+// full surface fp (1af469f0) shading is the next port stage.
+const P=new URLSearchParams(location.search), f=(k,d)=>{const v=P.get(k);return v===null?d:parseFloat(v)};
+const cv=document.getElementById('c'),W=cv.width,Hh=cv.height;
+const gl=cv.getContext('webgl2',{preserveDrawingBuffer:true,antialias:true});
+const FLIPY=f('flipy',1);
+const VS=`#version 300 es
+precision highp float;
+layout(location=0) in vec3 in_pos;
+uniform vec4 vc[26];
+uniform vec2 uVpScale,uVpOffset,uTarget; uniform float uUseVp,uFlipY;
+out vec4 vtc1;
+float fma1(float a,float b,float c){return a*b+c;}
+vec3 fma3(vec3 a,vec3 b,vec3 c){return a*b+c;}
+vec2 fma2(vec2 a,vec2 b,vec2 c){return a*b+c;}
+void main(){
+  vec4 ip=vec4(in_pos,1.0);
+  vec4 r0=vec4(0.),r1=vec4(0.),r2=vec4(0.),r3=vec4(0.),r4=vec4(0.),r5=vec4(0.),r6=vec4(0.);
+  vec3 A=vec3(vc[0].x,vc[1].x,vc[2].x), B=vec3(vc[0].y,vc[1].y,vc[2].y),
+       C=vec3(vc[0].z,vc[1].z,vc[2].z), D=vec3(vc[0].w,vc[1].w,vc[2].w);
+  vec3 BA=B-A, CD=C-D;
+  float k=vc[12].z+ip.x;
+  vec3 r1v3=ip.x*CD+D, r0v3=ip.x*BA+A, r3v3=ip.z*CD+D, r4v3=ip.z*BA+A;
+  vec3 dv1=r1v3-r0v3;
+  r0.xyz=ip.y*dv1+r0v3;
+  float invlen=inversesqrt(max(dot(r0.xyz,r0.xyz),1e-10));
+  vec3 sp=invlen*r0.xyz;        // unit sphere position (verbatim)
+  // clip = MVP * sp
+  vec4 clip=vec4(dot(vec4(sp,1.),vc[3]),dot(vec4(sp,1.),vc[4]),dot(vec4(sp,1.),vc[5]),dot(vec4(sp,1.),vc[6]));
+  vtc1=vec4(sp,1.);
+  if(uUseVp>0.5){vec2 ndc=clip.xy/clip.w; vec2 win=ndc*uVpScale+uVpOffset; vec2 g=(win/(uTarget*0.5))-1.0; clip.xy=g*clip.w;}
+  clip.z=clip.z*2.0-clip.w; clip.y*=uFlipY;
+  gl_Position=clip;
+}`;
+const FS=`#version 300 es
+precision highp float;
+in vec4 vtc1; uniform samplerCube uEarth,uClouds; uniform vec3 uSun;
+out vec4 o;
+void main(){
+  vec3 N=normalize(vtc1.xyz);
+  vec3 surf=texture(uEarth,N).rgb; float cloud=texture(uClouds,N).r;
+  float ndl=dot(N,normalize(uSun));
+  float day=smoothstep(-0.05,0.18,ndl);
+  vec3 base=surf*vec3(1.5,1.62,1.85); base=mix(base,vec3(1.2),cloud*0.9*day);
+  vec3 col=mix(surf*0.05, base*clamp(ndl,0.0,1.0)*2.0, day);
+  o=vec4(col,1.0);
+}`;
+function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))console.error('SH',gl.getShaderInfoLog(o));return o;}
+const prog=gl.createProgram();gl.attachShader(prog,sh(gl.VERTEX_SHADER,VS));gl.attachShader(prog,sh(gl.FRAGMENT_SHADER,FS));gl.linkProgram(prog);
+if(!gl.getProgramParameter(prog,gl.LINK_STATUS))console.error('LINK',gl.getProgramInfoLog(prog));
+const FACE_ORDER=(P.get('faces')||'1,3,5,4,0,2').split(',').map(Number);
+let want=0,got=0;
+function cube(prefix){const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_CUBE_MAP,tex);
+  const T=[gl.TEXTURE_CUBE_MAP_POSITIVE_X,gl.TEXTURE_CUBE_MAP_NEGATIVE_X,gl.TEXTURE_CUBE_MAP_POSITIVE_Y,gl.TEXTURE_CUBE_MAP_NEGATIVE_Y,gl.TEXTURE_CUBE_MAP_POSITIVE_Z,gl.TEXTURE_CUBE_MAP_NEGATIVE_Z];
+  for(let i=0;i<6;i++)gl.texImage2D(T[i],0,gl.RGBA,1,1,0,gl.RGBA,gl.UNSIGNED_BYTE,new Uint8Array([0,0,20,255]));
+  want+=6;
+  for(let i=0;i<6;i++){const im=new Image();im.onload=(function(i){return function(){gl.bindTexture(gl.TEXTURE_CUBE_MAP,tex);
+    gl.texImage2D(T[i],0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,im);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_CUBE_MAP,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    got++;draw();};})(i);im.src='globe_assets/'+prefix+'_face'+FACE_ORDER[i]+'.png';}
+  return tex;}
+const earthTex=cube('earth'),cloudTex=cube('clouds');
+let D=null,pbuf=null,ibuf=null,NID=0;
+async function init(){
+  D=await fetch('globe_assets/'+(P.get('data')||'surface_verbatim.json')).then(r=>r.json());
+  const pos=new Float32Array(await fetch('globe_assets/mesh/live_surf0_pos.bin').then(r=>r.arrayBuffer()));
+  // grid is 17x17 (.x,.z), build triangle indices over 289 verts; vp uses in_pos.xyz
+  const xyz=[]; for(let i=0;i<289;i++){xyz.push(pos[i*4],pos[i*4+1],pos[i*4+2]);}
+  const idx=[]; const N=17; for(let i=0;i<N-1;i++)for(let j=0;j<N-1;j++){const a=i*N+j,b=a+N;idx.push(a,b,a+1,b,b+1,a+1);}
+  pbuf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,pbuf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(xyz),gl.STATIC_DRAW);
+  ibuf=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ibuf);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(idx),gl.STATIC_DRAW);
+  NID=idx.length; draw();
+}
+function buildVC(corners){
+  const s=D.shared; const vc=new Float32Array(26*4);
+  const set=(i,a)=>{vc[i*4]=a[0];vc[i*4+1]=a[1];vc[i*4+2]=a[2];vc[i*4+3]=a[3];};
+  set(0,corners[0]);set(1,corners[1]);set(2,corners[2]);
+  const map={3:260,4:261,5:262,6:263,7:264,8:265,9:268,10:269,11:270,12:454,13:455,14:456,15:457,16:458,17:459,18:460,19:461,20:462,21:463,22:464,23:465,24:466,25:467};
+  for(const k in map){const v=s[map[k]];if(v)set(+k,v);}
+  return vc;
+}
+function draw(){
+  if(!D||!pbuf||got<want)return;
+  gl.viewport(0,0,W,Hh);gl.clearColor(0,0,0,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+  gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);
+  gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
+  gl.uniform1f(U('uUseVp'),1);gl.uniform1f(U('uFlipY'),FLIPY);
+  gl.uniform2f(U('uVpScale'),960,-540);gl.uniform2f(U('uVpOffset'),960,540);gl.uniform2f(U('uTarget'),1920,1080);
+  const ws=(P.get('ws')||'0,-0.423,0.906').split(',').map(Number);const L=Math.hypot(...ws)||1;
+  gl.uniform3f(U('uSun'),ws[0]/L,ws[1]/L,ws[2]/L);
+  gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_CUBE_MAP,earthTex);gl.uniform1i(U('uEarth'),0);
+  gl.activeTexture(gl.TEXTURE1);gl.bindTexture(gl.TEXTURE_CUBE_MAP,cloudTex);gl.uniform1i(U('uClouds'),1);
+  const pl=gl.getAttribLocation(prog,'in_pos');
+  gl.bindBuffer(gl.ARRAY_BUFFER,pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,3,gl.FLOAT,false,0,0);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ibuf);
+  for(const c of D.corners){const vc=buildVC(c);gl.uniform4fv(U('vc'),vc);gl.drawElements(gl.TRIANGLES,NID,gl.UNSIGNED_SHORT,0);}
+  window.__rendered=true;
+}
+init();
+</script></body></html>
