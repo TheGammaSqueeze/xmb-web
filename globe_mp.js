@@ -186,7 +186,7 @@ in vec4 tc0,tc3,tc4,tc5,tc6,tc8,tc9; in vec3 vN; in vec3 vL; in vec3 vSph;
 uniform sampler2D tex4,tex5,tex6,tex13,tex14,tex15;
 uniform samplerCube earthCube, cloudsCube, maskCube;   // firmware CUBEEARTH/clouds/mask (earth.qrc), seamless
 uniform vec4 fc[23];
-uniform float uDbg;
+uniform float uDbg, uMode;
 out vec4 ocol0;
 vec3 nrm(vec3 v){return length(v)>0.0?normalize(v):v;}
 vec3 fma3(vec3 a,vec3 b,vec3 c){return a*b+c;}
@@ -252,9 +252,19 @@ void main(){
   vec3 tc = r2.xyz * 0.789;
   float W = 3.40918;
   tc = (tc*(1.0 + tc/(W*W)))/(1.0 + tc);
+  // VERBATIM ramp encode = the firmware surface fp's actual output (its HDR tonemap LUT, tex14/tex15;
+  // the UV clamp on r2 rolls off highlights -> bright close scenes stay dark, not blown white).
+  float maxlum = max(r2.x, r2.y);
+  vec4 r0d = texture(tex13, gl_FragCoord.xy/32.0);   // backbuffer/dither (black -> 0)
+  vec2 e15 = texture(tex15, r2.xy).xy;
+  vec2 e14 = texture(tex14, vec2(r2.z, maxlum)).zw;
+  vec4 col0 = vec4(0.);
+  col0.xy = fma2(r0d.xy, fc[21].xx, e15);
+  col0.zw = fma2(r0d.zw, fc[22].xx, e14);
   if(uDbg>2.5){ ocol0=vec4(sd*0.5+0.5,1.0); return; }          // sd direction as color (should be smooth)
   if(uDbg>1.5){ ocol0=vec4(texture(cloudsCube,sd).xyz,1.0); return; }
   if(uDbg>0.5){ float d=clamp(dot(normalize(vN),normalize(vL))*0.8+0.4,0.0,1.0); ocol0=vec4(texture(earthCube,sd).xyz*d,1.0); return; }
+  if(uMode>0.5){ ocol0 = vec4(col0.xyz, 1.0); return; }         // verbatim ramp-encoded output
   ocol0 = vec4(clamp(tc,0.0,1.0), 1.0);
 }`;
 // ---- VERBATIM ATMOSPHERE SHELL (vp 3f6eeb47 + fp 63d3246d), ported 1:1 from globe_atmo_real.html ----
@@ -331,6 +341,7 @@ function draw(){
  gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
  gl.uniform1f(U('uFlipY'),1.0);
  gl.uniform1f(U('uDbg'),DBG);
+ gl.uniform1f(U('uMode'),ENC);
  const fcsrc=curFC||D.fc;  // per-scene captured fragment constants when cycling, else baked
  const fc=new Float32Array(23*4); for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
  gl.uniform4fv(U('fc'),fc);
@@ -401,6 +412,7 @@ function pickPreset(i){ // resolve a PRESETS entry to a loaded camera path (fall
 let SCENES=null, sceneIdx=0, SCENES_IDX=null, SCENE_FC=null, curFC=null;
 let SCENE_SECS=18;   // wall-seconds per scene before advancing (tunable via MPGlobe.sceneSecs)
 let DBG=0;           // debug output selector (MPGlobe.dbg): 1=earth 2=clouds 3=sd-direction
+let ENC=0;           // 0=interim Reinhard tonemap, 1=verbatim ramp-encoded output (MPGlobe.enc)
 let USE_COH=false;   // false = clean fc_cap5 surface set (no overexposure, no atmo). true = coherent set +
                      // aligned atmosphere limb, BUT its brighter/closer scenes overexpose under the interim
                      // tonemap (needs the real firmware HDR ramp/compositor decode). Toggle: MPGlobe.coherent
@@ -508,6 +520,7 @@ const MPGlobe={
  _setScene(i){ if(SCENES){ sceneIdx=((i%SCENES.length)+SCENES.length)%SCENES.length; animT=0; setFC(); } },  // diagnostic: force a scene
  _setT(t){ animT=t; },
  set dbg(v){ DBG=v; },
+ set enc(v){ ENC=v; },
  set atmo(v){ ATMO=v?1:0; },
  get atmo(){ return ATMO; },
  set coherent(v){ USE_COH=!!v; },   // switch to coherent surface set + aligned atmosphere (dev; overexposes until decode lands)

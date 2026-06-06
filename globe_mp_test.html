@@ -3,6 +3,8 @@
 <script src="globe_mp.js"></script>
 <script>
 const cv=document.getElementById('mp');
+if(new URLSearchParams(location.search).get('coh'))MPGlobe.coherent=true;
+if(new URLSearchParams(location.search).get('atmo'))MPGlobe.atmo=true;
 MPGlobe.start(cv);
 function loop(){ MPGlobe.tick(); requestAnimationFrame(loop); } loop();
 setTimeout(()=>{window.__err=MPGlobe.error||'OK'; window.__ready=MPGlobe.ready();},2500);
