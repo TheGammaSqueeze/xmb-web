@@ -1,0 +1,53 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#000}#c{display:block}</style></head>
+<body><canvas id="c" width="960" height="960"></canvas><script>
+const P=new URLSearchParams(location.search),gv=(k,d)=>{const v=P.get(k);return v===null?d:v};
+const gl=document.getElementById('c').getContext('webgl2',{preserveDrawingBuffer:true,antialias:true});
+// face slot assignment + per-face orientation via URL (?slots=  ?rot= ?flip=) to calibrate
+// default guess: equatorial faces 0..3 -> +Z,+X,-Z,-X ; poles face5->+Y(arctic) face4->-Y(antarctica)
+const SLOTS=(gv('slots','0,1,2,3,4,5')).split(',').map(Number); // earth_faceN for [ +X,-X,+Y,-Y,+Z,-Z ]
+const VS=`#version 300 es
+precision highp float; in vec2 uv; uniform mat4 uMVP; uniform vec3 uEye; out vec3 vDir;
+// build a unit sphere from a lat-long grid in uv (0..1)
+void main(){ float lon=(uv.x*2.0-1.0)*3.14159265, lat=(uv.y-0.5)*3.14159265;
+ vec3 p=vec3(cos(lat)*sin(lon), sin(lat), cos(lat)*cos(lon));
+ vDir=p; gl_Position=uMVP*vec4(p,1.0); }`;
+const FS=`#version 300 es
+precision highp float; in vec3 vDir; uniform samplerCube earth; uniform vec3 uSun; uniform float uLit; out vec4 o;
+void main(){ vec3 n=normalize(vDir); vec3 c=texture(earth,n).rgb;
+ float d=clamp(dot(n,normalize(uSun))*0.9+0.25,0.0,1.0); if(uLit<0.5)d=1.0; o=vec4(c*d,1.0); }`;
+function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,35713))console.warn(gl.getShaderInfoLog(o));return o;}
+const pr=gl.createProgram();gl.attachShader(pr,sh(35633,VS));gl.attachShader(pr,sh(35632,FS));gl.linkProgram(pr);gl.useProgram(pr);
+// sphere grid mesh
+const N=128,pos=[],idx=[];for(let i=0;i<=N;i++)for(let j=0;j<=N;j++)pos.push(j/N,i/N);
+for(let i=0;i<N;i++)for(let j=0;j<N;j++){const a=i*(N+1)+j,b=a+N+1;idx.push(a,b,a+1,b,b+1,a+1);}
+const pb=gl.createBuffer();gl.bindBuffer(34962,pb);gl.bufferData(34962,new Float32Array(pos),35044);
+const ib=gl.createBuffer();gl.bindBuffer(34963,ib);gl.bufferData(34963,new Uint32Array(idx),35044);
+gl.getExtension('OES_element_index_uint');
+const al=gl.getAttribLocation(pr,'uv');gl.enableVertexAttribArray(al);gl.vertexAttribPointer(al,2,5126,false,0,0);
+// cubemap
+const cube=gl.createTexture();gl.bindTexture(34067,cube);
+const FACES=[34069,34070,34071,34072,34073,34074]; let loaded=0;
+function rotImg(img,rot,flip){const cv=document.createElement('canvas');cv.width=512;cv.height=512;const cx=cv.getContext('2d');
+ cx.translate(256,256); if(flip)cx.scale(-1,1); cx.rotate(rot*Math.PI/180); cx.drawImage(img,-256,-256,512,512); return cv;}
+const ROT=(gv('rot','0,0,0,0,0,0')).split(',').map(Number), FLIP=(gv('flip','0,0,0,0,0,0')).split(',').map(Number);
+for(let s=0;s<6;s++){const im=new Image();im.onload=(function(s,im){return function(){
+  gl.bindTexture(34067,cube); const c=rotImg(im,ROT[s],FLIP[s]);
+  gl.texImage2D(FACES[s],0,6408,6408,5121,c); loaded++;
+  if(loaded===6){gl.texParameteri(34067,10241,9729);gl.texParameteri(34067,10240,9729);gl.texParameteri(34067,10242,33071);gl.texParameteri(34067,10243,33071);draw();}
+};})(s,im); im.src='globe_assets/'+(gv('pfx','earth'))+'_face'+SLOTS[s]+'.png';}
+function mul(a,b){const o=new Float32Array(16);for(let i=0;i<4;i++)for(let j=0;j<4;j++){let s=0;for(let k=0;k<4;k++)s+=a[k*4+j]*b[i*4+k];o[i*4+j]=s;}return o;}
+function persp(f,a,n,fa){const t=1/Math.tan(f*Math.PI/360);return new Float32Array([t/a,0,0,0, 0,t,0,0, 0,0,(fa+n)/(n-fa),-1, 0,0,2*fa*n/(n-fa),0]);}
+function look(e,c,u){const f=[c[0]-e[0],c[1]-e[1],c[2]-e[2]];let l=Math.hypot(...f);f[0]/=l;f[1]/=l;f[2]/=l;
+ let r=[f[1]*u[2]-f[2]*u[1],f[2]*u[0]-f[0]*u[2],f[0]*u[1]-f[1]*u[0]];l=Math.hypot(...r);r[0]/=l;r[1]/=l;r[2]/=l;
+ const v=[r[1]*f[2]-r[2]*f[1],r[2]*f[0]-r[0]*f[2],r[0]*f[1]-r[1]*f[0]];
+ return new Float32Array([r[0],v[0],-f[0],0, r[1],v[1],-f[1],0, r[2],v[2],-f[2],0, -(r[0]*e[0]+r[1]*e[1]+r[2]*e[2]),-(v[0]*e[0]+v[1]*e[1]+v[2]*e[2]),(f[0]*e[0]+f[1]*e[1]+f[2]*e[2]),1]);}
+function draw(){gl.viewport(0,0,960,960);gl.clearColor(0,0,0,1);gl.clear(16640);gl.enable(2929);
+ const dist=parseFloat(gv('dist','3.2'));
+ const yaw=parseFloat(gv('yaw','0'))*Math.PI/180, pit=parseFloat(gv('pit','0'))*Math.PI/180;
+ const eye=[dist*Math.cos(pit)*Math.sin(yaw), dist*Math.sin(pit), dist*Math.cos(pit)*Math.cos(yaw)];
+ const mvp=mul(persp(45,1,0.1,50),look(eye,[0,0,0],[0,1,0]));
+ gl.uniformMatrix4fv(gl.getUniformLocation(pr,'uMVP'),false,mvp);
+ gl.uniform3f(gl.getUniformLocation(pr,'uSun'),0.3,0.3,1.0);gl.uniform1f(gl.getUniformLocation(pr,'uLit'),parseFloat(gv('lit','1')));
+ gl.bindTexture(34067,cube);gl.uniform1i(gl.getUniformLocation(pr,'earth'),0);
+ gl.bindBuffer(34963,ib);gl.drawElements(4,idx.length,5125,0);window.__rendered=true;}
+</script></body></html>

@@ -28,7 +28,7 @@ const _dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
 const VS=`#version 300 es
 precision highp float;
 in vec4 in_pos; uniform vec4 vc[26]; uniform float uFlipY;
-out vec4 tc0,tc3,tc4,tc5,tc6,tc8,tc9; out vec3 vN; out vec3 vL;
+out vec4 tc0,tc3,tc4,tc5,tc6,tc8,tc9; out vec3 vN; out vec3 vL; out vec3 vSph;
 float fma1(float a,float b,float c){return a*b+c;}
 vec3 fma3(vec3 a,vec3 b,vec3 c){return a*b+c;}
 vec2 fma2(vec2 a,vec2 b,vec2 c){return a*b+c;}
@@ -97,6 +97,7 @@ vec4 ip = in_pos;
   r2.z = inversesqrt(max(r2.z, 1e-10));
   d15.xy = fma2(vec2(r2.x, r2.y), vc[23].zz, vc[23].xy);
   r2.xyz = (r2.z * r0.xyz);
+  vSph = r2.xyz;                            // FINAL object-space unit sphere dir (matches rendered geometry) -> cube-map
   r4.xyz = (r2.yzx * r1.zxy);
   d8.xyz = r2.xyz;
   r5.y = dot(vec4(r2.xyz,1.0), vc[10]);
@@ -178,9 +179,11 @@ vec4 ip = in_pos;
 }`;
 const FS=`#version 300 es
 precision highp float;
-in vec4 tc0,tc3,tc4,tc5,tc6,tc8,tc9; in vec3 vN; in vec3 vL;
-uniform sampler2D tex0,tex1,tex2,tex3,tex4,tex5,tex6,tex13,tex14,tex15;
+in vec4 tc0,tc3,tc4,tc5,tc6,tc8,tc9; in vec3 vN; in vec3 vL; in vec3 vSph;
+uniform sampler2D tex4,tex5,tex6,tex13,tex14,tex15;
+uniform samplerCube earthCube, cloudsCube, maskCube;   // firmware CUBEEARTH/clouds/mask (earth.qrc), seamless
 uniform vec4 fc[23];
+uniform float uDbg;
 out vec4 ocol0;
 vec3 nrm(vec3 v){return length(v)>0.0?normalize(v):v;}
 vec3 fma3(vec3 a,vec3 b,vec3 c){return a*b+c;}
@@ -189,11 +192,12 @@ float fma1(float a,float b,float c){return a*b+c;}
 vec3 pc3(vec3 x,float a,float b){return clamp(x,a,b);}
 void main(){
   vec4 tc1=vec4(vL,1.0), tc7=vec4(vN,1.0);
+  vec3 sd = normalize(vSph);   // seamless cube-map sample direction (replaces per-patch tile UVs)
   vec4 r0=vec4(0.),r1=vec4(0.),r2=vec4(0.),r3=vec4(0.),r4=vec4(0.);
   vec4 h0=vec4(0.),h1=vec4(0.),h2=vec4(0.),h3=vec4(0.),h4=vec4(0.),h5=vec4(0.),h6=vec4(0.),h7=vec4(0.);
-  r2.xyz = texture(tex0, tc0.xy).xyz;
+  r2.xyz = texture(earthCube, sd).xyz;
   h2.xyz = nrm(tc7.xyz);
-  r3.xyz = texture(tex1, tc0.zw).xyz;
+  r3.xyz = texture(earthCube, sd).xyz;
   r3.xyz = (r3.xyz + -r2.xyz);
   r4.xyz = fma3(tc4.xxx, r3.xyz, r2.xyz);
   h0.xyz = nrm(tc1.xyz);
@@ -203,9 +207,9 @@ void main(){
   r0.xyz = fma3(-h0.xyz, r0.zzz, -h2.xyz);
   h1.zw = tc8.zw;
   r3.xyz = (-r4.xyz + fc[1].xyz);
-  r2.x = texture(tex2, tc8.zw).x;
+  r2.x = texture(cloudsCube, sd).x;
   h7.w = fma1(r2.x, fc[2].x, fc[2].y);
-  r2.x = texture(tex3, tc8.xy).x;
+  r2.x = texture(maskCube, sd).x;
   r1.xyz = fma3(r2.xxx, r3.xyz, r4.xyz);
   r4.zw = tc9.xy;
   r4.y = fc[3].y;
@@ -213,14 +217,14 @@ void main(){
   r3.xy = tc6.xy;
   r4.x = fc[5].y;
   r1.xy = fma2(r3.xy, h7.ww, h1.zw);
-  r1.xyz = texture(tex2, r1.xy).xyz;
+  r1.xyz = texture(cloudsCube, sd).xyz;
   h7.xyz = (r1.xyz * fc[6].z);
   h7.w = r2.x;
   h6.xyz = (-h5.xyz + fc[7].w);
   h5.xyz = fma3(h7.xyz, h6.xyz, h5.xyz);
   h7.z = dot(r0.xyz, fc[8].xyz);
   r0.xy = fma2(r4.zw, fc[9].xx, h1.zw);
-  r0.xyz = texture(tex2, r0.xy).xyz;
+  r0.xyz = texture(cloudsCube, sd).xyz;
   h0.xyz = pc3(fma3(-r1.xyz, fc[10].xxx, r0.xyz), 0.,1.);
   h0.w = fc[11].y;
   r0.zw = fc[12].xy;
@@ -245,6 +249,9 @@ void main(){
   vec3 tc = r2.xyz * 0.789;
   float W = 3.40918;
   tc = (tc*(1.0 + tc/(W*W)))/(1.0 + tc);
+  if(uDbg>2.5){ ocol0=vec4(sd*0.5+0.5,1.0); return; }          // sd direction as color (should be smooth)
+  if(uDbg>1.5){ ocol0=vec4(texture(cloudsCube,sd).xyz,1.0); return; }
+  if(uDbg>0.5){ float d=clamp(dot(normalize(vN),normalize(vL))*0.8+0.4,0.0,1.0); ocol0=vec4(texture(earthCube,sd).xyz*d,1.0); return; }
   ocol0 = vec4(clamp(tc,0.0,1.0), 1.0);
 }`;
 
@@ -254,6 +261,23 @@ function texPNG(src){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texIma
 function texF32(src,w,h){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,1,1,0,6408,5126,new Float32Array([0,0,0,1]));want++;
  fetch(src).then(r=>r.arrayBuffer()).then(ab=>{if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,w,h,0,6408,5126,new Float32Array(ab));gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;});return t;}
 function blackTex(){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));return t;}
+// Build a WebGL cube-map from the firmware's 6 assembled cube faces (earth.qrc CUBEEARTH/clouds/mask).
+// Calibrated arrangement (slots/flip) verified vs geography: continents seamless, poles centered.
+const CUBE_SLOTS=[1,3,5,4,0,2];               // earth_faceN for WebGL [+X,-X,+Y,-Y,+Z,-Z]
+const CUBE_FACE_ENUM=[34069,34070,34071,34072,34073,34074];
+function cubeTex(prefix){const t=gl.createTexture();gl.bindTexture(34067,t);
+ for(let s=0;s<6;s++){gl.texImage2D(CUBE_FACE_ENUM[s],0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));}
+ want+=6; let nface=0;
+ for(let s=0;s<6;s++){const im=new Image();im.onload=(function(s,im){return function(){if(!gl)return;
+   const cv=document.createElement('canvas');cv.width=im.width;cv.height=im.height;const cx=cv.getContext('2d');
+   cx.translate(im.width,0);cx.scale(-1,1);cx.drawImage(im,0,0);            // horizontal flip (WebGL cube handedness)
+   gl.bindTexture(34067,t);gl.texImage2D(CUBE_FACE_ENUM[s],0,6408,6408,5121,cv);
+   got++; nface++;
+   if(nface===6){ gl.bindTexture(34067,t); gl.generateMipmap(34067);       // mipmaps kill the high-freq cloud moire
+     gl.texParameteri(34067,10241,9987);   // MIN_FILTER = LINEAR_MIPMAP_LINEAR (trilinear)
+     gl.texParameteri(34067,10240,9729);gl.texParameteri(34067,10242,33071);gl.texParameteri(34067,10243,33071);gl.texParameteri(34067,32882,33071);
+   }};})(s,im); im.src=BASE+prefix+'_face'+CUBE_SLOTS[s]+'.png';}
+ return t;}
 
 function buildVC(corners){const s=D.shared;const vc=new Float32Array(104);const set=(i,a)=>{vc[i*4]=a[0];vc[i*4+1]=a[1];vc[i*4+2]=a[2];vc[i*4+3]=a[3];};
  set(0,corners[0]);set(1,corners[1]);set(2,corners[2]);
@@ -274,15 +298,17 @@ function draw(){
  gl.enable(2884);gl.cullFace(1029);   // back-face cull (per-patch frontFace, degenerate depth)
  gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
  gl.uniform1f(U('uFlipY'),1.0);
+ gl.uniform1f(U('uDbg'),DBG);
  const fcsrc=curFC||D.fc;  // per-scene captured fragment constants when cycling, else baked
  const fc=new Float32Array(23*4); for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
  gl.uniform4fv(U('fc'),fc);
  bindT(4,'tex4',sharedTex.tex4);bindT(5,'tex5',sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
  bindT(7,'tex14',sharedTex.tex14);bindT(8,'tex15',sharedTex.tex15);bindT(9,'tex13',black);
+ const bindCube=(unit,name,tex)=>{gl.activeTexture(33984+unit);gl.bindTexture(34067,tex);gl.uniform1i(U(name),unit);};
+ bindCube(0,'earthCube',sharedTex.earthCube);bindCube(1,'cloudsCube',sharedTex.cloudsCube);bindCube(2,'maskCube',sharedTex.maskCube);
  const pl=gl.getAttribLocation(prog,'in_pos');gl.bindBuffer(34962,eMesh.pb);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
  gl.bindBuffer(34963,eMesh.ib);
- for(let i=0;i<D.patches.length;i++){const pt=patchTex[i];
-   bindT(0,'tex0',pt.t0);bindT(1,'tex1',pt.t1);bindT(2,'tex2',pt.t2);bindT(3,'tex3',pt.t3);
+ for(let i=0;i<D.patches.length;i++){
    gl.frontFace(windSign(D.patches[i].corners)<0?2304:2305);
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
@@ -316,6 +342,7 @@ function pickPreset(i){ // resolve a PRESETS entry to a loaded camera path (fall
 // exact per-scene camera AND lighting (no clipping). Cycles all captured scenes like the real XMB.
 let SCENES=null, sceneIdx=0, SCENES_IDX=null, SCENE_FC=null, curFC=null;
 let SCENE_SECS=18;   // wall-seconds per scene before advancing (tunable via MPGlobe.sceneSecs)
+let DBG=0;           // debug output selector (MPGlobe.dbg): 1=earth 2=clouds 3=sd-direction
 function setFC(){ curFC = (SCENE_FC && SCENES_IDX && SCENES_IDX[sceneIdx] && SCENE_FC[String(SCENES_IDX[sceneIdx].scene)]) || null; }
 const SCENE_KEYS=['260','261','262','263','264','265','268','269','270','454','455','456','457','458','459','460','461','462','463','464','465','466','467'];
 function sceneAt(F,t){
@@ -357,9 +384,10 @@ async function load(){
  sharedTex.tex6=texF32(BASE+'full_tex/t06_f32.bin',64,64);
  sharedTex.tex14=texPNG(BASE+'full_tex/t14.png');
  sharedTex.tex15=texPNG(BASE+'full_tex/t15.png');
- for(let i=0;i<D.patches.length;i++){const d=String(D.patches[i].idx).padStart(3,'0'); patchTex.push({
-   t0:texPNG(BASE+'full_tex/p'+d+'_t00.png'),t1:texPNG(BASE+'full_tex/p'+d+'_t01.png'),
-   t2:texPNG(BASE+'full_tex/p'+d+'_t02.png'),t3:texPNG(BASE+'full_tex/p'+d+'_t03.png')});}
+ // seamless firmware cube-maps (replace the per-patch tile assembly)
+ sharedTex.earthCube=cubeTex('earth');
+ sharedTex.cloudsCube=cubeTex('clouds');
+ sharedTex.maskCube=cubeTex('mask');
  const pos=new Float32Array(await fetch(BASE+'mesh/live_surf0_pos.bin').then(r=>r.arrayBuffer()));
  const xyz=[];for(let i=0;i<289;i++)xyz.push(pos[i*4],pos[i*4+1],pos[i*4+2],pos[i*4+3]);
  const idx=[];const N=17;for(let i=0;i<N-1;i++)for(let j=0;j<N-1;j++){const a=i*N+j,b=a+N;idx.push(a,b,a+1,b,b+1,a+1);}
@@ -395,6 +423,7 @@ const MPGlobe={
  set sceneSecs(v){ SCENE_SECS=v; },
  get sceneSecs(){ return SCENE_SECS; },
  _setScene(i){ if(SCENES){ sceneIdx=((i%SCENES.length)+SCENES.length)%SCENES.length; animT=0; setFC(); } },  // diagnostic: force a scene
+ set dbg(v){ DBG=v; },
  get _info(){ return {scene:sceneIdx, nScenes:SCENES?SCENES.length:0, animT:animT.toFixed(3)}; },
  get error(){ return errlog; }
 };
