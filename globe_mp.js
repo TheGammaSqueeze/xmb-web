@@ -16,8 +16,11 @@ const BASE = 'globe_assets/';
 const PRESETS = ['preset_0','preset_1','preset_2','preset_3','preset_4',
                  'preset_5','preset_6','preset_7','preset_8','preset_9'];
 
-let gl=null, canvas=null, prog=null, raf=0, running=false;
+let gl=null, canvas=null, prog=null, aprog=null, raf=0, running=false;
 let D=null, eMesh=null, want=0, got=0, sharedTex={}, patchTex=[], black=null;
+let aMesh=null, scatterTex=null, fcAtmo=null;        // verbatim atmosphere shell pass
+let ATMO_SCENES=null, ATMO_SCENE=null, ATMO=0;       // per-scene aligned atmosphere (coherent capture); MPGlobe.atmo toggles
+const ATMO_KEYS=['256','257','258','259','460','461','462'];
 let PATHS=null, animT=0, preset=null, presetIdx=7, errlog='';
 
 const _sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
@@ -254,6 +257,35 @@ void main(){
   if(uDbg>0.5){ float d=clamp(dot(normalize(vN),normalize(vL))*0.8+0.4,0.0,1.0); ocol0=vec4(texture(earthCube,sd).xyz*d,1.0); return; }
   ocol0 = vec4(clamp(tc,0.0,1.0), 1.0);
 }`;
+// ---- VERBATIM ATMOSPHERE SHELL (vp 3f6eeb47 + fp 63d3246d), ported 1:1 from globe_atmo_real.html ----
+const A_VS=`#version 300 es
+precision highp float;
+in vec4 in_pos; in vec4 in_tc0;
+uniform vec4 mvp0,mvp1,mvp2,mvp3; uniform float uFlipY; uniform vec3 c5,c6,c7,c8;
+out vec2 vTC;
+void main(){
+ float A=1.0/sqrt(max(dot(c8,c8),1e-10));float w=in_pos.w;float B=sqrt(max((1.0/A)*(1.0/A)-w*w,1e-10));
+ float s=A*w*w,t=A*B*w; vec3 r0=s*c5+t*(in_tc0.z*c7+in_tc0.w*c6); vTC=in_tc0.xy;
+ vec4 p=vec4(r0,1.0); vec4 clip=vec4(dot(p,mvp0),dot(p,mvp1),dot(p,mvp2),dot(p,mvp3));
+ vec2 ndc=clip.xy/clip.w; vec2 win=ndc*vec2(960.0,-540.0)+vec2(960.0,540.0);
+ clip.xy=((win/vec2(960.0,540.0))-1.0)*clip.w; clip.z=0.0; clip.y*=uFlipY; gl_Position=clip;
+}`;
+const A_FS=`#version 300 es
+precision highp float;
+in vec2 vTC; out vec4 ocol0; uniform sampler2D tex0; uniform vec4 fc[17];
+float pc(float x,float a,float b){return (x!=x)?0.:clamp(x,a,b);} float fma1(float a,float b,float c){return a*b+c;}
+void main(){
+ vec4 tc0=vec4(vTC,0.,1.);vec4 r0=vec4(0.),r1=vec4(0.),r2=vec4(0.),r3=vec4(0.);
+ r1.x=fc[0].x;r1.z=fc[0].z;r1.y=1.0/fc[1].z;r0.x=fc[2].w;r0.y=fc[2].z;r0.w=(-r0.y+fc[3].x);r1.xyz=tc0.xyz*r1.xyz;
+ r3.y=pc(r0.w/-fc[4].z,0.,1.);r0.w=fc[5].w;r3.x=(-r0.w+fc[6].x);r3.w=r3.y*r3.y;r2.w=r3.y*2.;
+ r2.y=pc(fc[7].x/r0.x,0.,1.);r2.x=r2.y*r2.y;r1.w=r2.y*2.;r0.xyz=texture(tex0,r1.xy).xyz;
+ r1.x=(-r1.x*fc[8].x);r1.z=(r1.y+-fc[9].w);r3.x=pc(r1.z/r3.x,0.,1.);r3.z=(-r1.w+fc[10].x);r3.y=r2.x*r3.z;r0.w=r1.x*fc[11].x;
+ r1.x=pc(r1.y/fc[12].y,0.,1.);r1.w=(-r2.x+fc[13].x);r2.x=fma1(r3.w,r1.w,-r3.y);r1.w=r1.x*2.;r1.w=(-r1.w+fc[14].x);r1.x=r1.x*r1.x;r1.x=r1.x*r1.w;
+ r1.w=r3.x*2.;r1.w=(-r1.w+fc[15].x);r1.y=r3.x*r3.x;r1.y=r1.y*r1.w;r0.w=exp2(r0.w);r0.w=r2.x*r0.w;
+ r0.xyz=r0.xyz*fc[16].x;r0.xyz=(-r1.y*r0.xyz+r0.xyz);r0.w=(-r1.x*r0.w+r0.w);r0.xyz=((r0.w*r0.xyz+r0.xyz)*8.0);
+ vec3 tcol=r0.xyz*0.789; float Wl=3.40918; tcol=(tcol*(1.0+tcol/(Wl*Wl)))/(1.0+tcol);
+ ocol0=vec4(clamp(tcol,0.0,1.0),1.0);
+}`;
 
 function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))errlog+=gl.getShaderInfoLog(o);return o;}
 function texPNG(src){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));want++;
@@ -312,7 +344,33 @@ function draw(){
    gl.frontFace(windSign(D.patches[i].corners)<0?2304:2305);
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
+ if(ATMO&&aMesh&&scatterTex)drawAtmo();
 }
+// VERBATIM atmosphere limb shell (type-B 3f6eeb47 draw): basis c5=c461,c7=c462,c6=cross(c5,c7),c8=eye=c460;
+// type-B MVP c256-259 + eye/basis replayed per-frame from the coherent capture (atmoAt). Additive over surface.
+function drawAtmo(){
+ if(!aMesh||!scatterTex||got<want)return; const s=D.shared; if(!s['460']||!s['461']||!s['462'])return;
+ const a=(ATMO_SCENE?atmoAt(animT):null)||{};
+ const e460=a['460']||s['460'], e461=a['461']||s['461'], e462=a['462']||s['462'];
+ const c5=e461.slice(0,3), c7=e462.slice(0,3), c6=_cross(c5,c7), c8=e460.slice(0,3);
+ const m0=a['256']||s['256']||s['260'],m1=a['257']||s['257']||s['261'],m2=a['258']||s['258']||s['262'],m3=a['259']||s['259']||s['263'];
+ if(!m0||!m1||!m2||!m3)return;
+ gl.useProgram(aprog); const U=n=>gl.getUniformLocation(aprog,n);
+ gl.uniform4fv(U('mvp0'),m0);gl.uniform4fv(U('mvp1'),m1);gl.uniform4fv(U('mvp2'),m2);gl.uniform4fv(U('mvp3'),m3);
+ gl.uniform1f(U('uFlipY'),1.0);
+ gl.uniform3fv(U('c5'),c5);gl.uniform3fv(U('c6'),c6);gl.uniform3fv(U('c7'),c7);gl.uniform3fv(U('c8'),c8);
+ gl.uniform4fv(U('fc'),fcAtmo);
+ gl.activeTexture(33984);gl.bindTexture(3553,scatterTex);gl.uniform1i(U('tex0'),0);
+ gl.disable(2884); gl.depthMask(false); gl.enable(3042); gl.blendFunc(1,1);   // ONE,ONE additive
+ let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
+ let tl=gl.getAttribLocation(aprog,'in_tc0');gl.bindBuffer(34962,aMesh.tbuf);gl.enableVertexAttribArray(tl);gl.vertexAttribPointer(tl,4,5126,false,0,0);
+ gl.bindBuffer(34963,aMesh.ibuf);gl.drawElements(5,aMesh.n,5125,0);
+ gl.disable(3042); gl.depthMask(true);
+}
+function atmoAt(t){ const F=ATMO_SCENE; if(!F||!F.length)return null; if(t<=F[0].t)return F[0]; if(t>=F[F.length-1].t)return F[F.length-1];
+  for(let i=0;i<F.length-1;i++){const a=F[i],b=F[i+1]; if(t>=a.t&&t<=b.t){const w=(t-a.t)/((b.t-a.t)||1);
+    const o={}; for(const k of ATMO_KEYS){const va=a[k],vb=b[k]; o[k]=va&&vb?va.map((x,j)=>x+(vb[j]-x)*w):va;} return o;}}
+  return F[F.length-1]; }
 
 function lookAtMVP(eye,center,up,fovy,asp){
   const fwd=_norm(_sub(center,eye)), right=_norm(_cross(fwd,up)), u=_cross(right,fwd);
@@ -343,7 +401,11 @@ function pickPreset(i){ // resolve a PRESETS entry to a loaded camera path (fall
 let SCENES=null, sceneIdx=0, SCENES_IDX=null, SCENE_FC=null, curFC=null;
 let SCENE_SECS=18;   // wall-seconds per scene before advancing (tunable via MPGlobe.sceneSecs)
 let DBG=0;           // debug output selector (MPGlobe.dbg): 1=earth 2=clouds 3=sd-direction
-function setFC(){ curFC = (SCENE_FC && SCENES_IDX && SCENES_IDX[sceneIdx] && SCENE_FC[String(SCENES_IDX[sceneIdx].scene)]) || null; }
+let USE_COH=false;   // false = clean fc_cap5 surface set (no overexposure, no atmo). true = coherent set +
+                     // aligned atmosphere limb, BUT its brighter/closer scenes overexpose under the interim
+                     // tonemap (needs the real firmware HDR ramp/compositor decode). Toggle: MPGlobe.coherent
+function setFC(){ curFC = (SCENE_FC && SCENES_IDX && SCENES_IDX[sceneIdx] && SCENE_FC[String(SCENES_IDX[sceneIdx].scene)]) || null;
+ ATMO_SCENE = (ATMO_SCENES && ATMO_SCENES[sceneIdx]) || null; }
 const SCENE_KEYS=['260','261','262','263','264','265','268','269','270','454','455','456','457','458','459','460','461','462','463','464','465','466','467'];
 function sceneAt(F,t){
   if(t<=F[0].t)return F[0]; if(t>=F[F.length-1].t)return F[F.length-1];
@@ -394,14 +456,33 @@ async function load(){
  const pb=gl.createBuffer();gl.bindBuffer(34962,pb);gl.bufferData(34962,new Float32Array(xyz),35044);
  const ib=gl.createBuffer();gl.bindBuffer(34963,ib);gl.bufferData(34963,new Uint16Array(idx),35044);
  eMesh={pb,ib,n:idx.length};
+ // verbatim atmosphere shell: mesh c0 (pos.w + tc0.zw drive the shell), scatter LUT, captured fc_atmo
+ try{
+   const [apb,atb,aib]=await Promise.all([
+     fetch(BASE+'mesh/c0_pos.bin').then(r=>r.arrayBuffer()),
+     fetch(BASE+'mesh/c0_tc0.bin').then(r=>r.arrayBuffer()),
+     fetch(BASE+'mesh/c0_idx.bin').then(r=>r.arrayBuffer())]);
+   const apbuf=gl.createBuffer();gl.bindBuffer(34962,apbuf);gl.bufferData(34962,new Float32Array(apb),35044);
+   const atbuf=gl.createBuffer();gl.bindBuffer(34962,atbuf);gl.bufferData(34962,new Float32Array(atb),35044);
+   const aibuf=gl.createBuffer();gl.bindBuffer(34963,aibuf);gl.bufferData(34963,new Uint32Array(aib),35044);
+   aMesh={pbuf:apbuf,tbuf:atbuf,ibuf:aibuf,n:new Uint32Array(aib).length};
+   scatterTex=texF32(BASE+'win_tex/t04_f32.bin',256,128);
+   const AC=await fetch(BASE+'c3000_consts.json').then(r=>r.json());
+   fcAtmo=new Float32Array(17*4);for(let i=0;i<17;i++){const v=(AC.fc_atmo&&AC.fc_atmo[i])||[0,0,0,0];fcAtmo[i*4]=v[0];fcAtmo[i*4+1]=v[1];fcAtmo[i*4+2]=v[2];fcAtmo[i*4+3]=v[3];}
+ }catch(e){ aMesh=null; }
  PATHS=await fetch(BASE+'camera_paths.json').then(r=>r.json());
  presetIdx=7; preset=pickPreset(presetIdx); animT=0;
- // load captured per-scene replays (camera + lighting) -> cycle them; fall back to camera.path if absent
- try{ const idx=(await fetch(BASE+'scenes_index.json').then(r=>r.json())).filter(s=>!s.skip);  // skip scenes without correct per-scene fc; clears once scene_fc.json covers them
+ // Per-scene replays (camera + lighting). DEFAULT = fc_cap5 clean set (scene_NN), no overexposure.
+ // USE_COH = coherent set (scene_NN_coh) + ALIGNED atmosphere (atmo_scene_NN_coh) -- the limb shell registers
+ // to the earth, but the coherent set's brighter scenes overexpose under the interim tonemap (decode pending).
+ const SUF = USE_COH ? '_coh' : '';
+ try{ const idx=(await fetch(BASE+'scenes_index'+SUF+'.json').then(r=>r.json())).filter(s=>!s.skip);
    SCENES_IDX=idx;
    SCENES=await Promise.all(idx.map(s=>fetch(BASE+s.file).then(r=>r.json()))); sceneIdx=0; animT=0;
-   try{ SCENE_FC=await fetch(BASE+'scene_fc.json').then(r=>r.json()); }catch(e){ SCENE_FC=null; }
-   setFC();
+   try{ SCENE_FC=await fetch(BASE+'scene_fc'+SUF+'.json').then(r=>r.json()); }catch(e){ SCENE_FC=null; }
+   if(USE_COH){ ATMO_SCENES=await Promise.all(idx.map(s=>fetch(BASE+'atmo_scene_'+String(s.scene).padStart(2,'0')+'_coh.json').then(r=>r.ok?r.json():null).catch(()=>null))); ATMO=1; }
+   else { ATMO_SCENES=null; ATMO=0; }   // fc_cap5 has no aligned atmosphere -> keep the limb off (no misaligned shell)
+   setFC(); ATMO_SCENE=ATMO_SCENES?ATMO_SCENES[0]:null;
  }catch(e){ SCENES=null; }
 }
 
@@ -415,6 +496,8 @@ const MPGlobe={
    gl.getExtension('OES_element_index_uint'); gl.getExtension('EXT_color_buffer_float'); gl.getExtension('OES_texture_float_linear');
    prog=gl.createProgram();gl.attachShader(prog,sh(35633,VS));gl.attachShader(prog,sh(35632,FS));gl.linkProgram(prog);
    if(!gl.getProgramParameter(prog,gl.LINK_STATUS)){errlog+=gl.getProgramInfoLog(prog);console.warn('MPGlobe link:',errlog);}
+   aprog=gl.createProgram();gl.attachShader(aprog,sh(35633,A_VS));gl.attachShader(aprog,sh(35632,A_FS));gl.linkProgram(aprog);
+   if(!gl.getProgramParameter(aprog,gl.LINK_STATUS)){errlog+=gl.getProgramInfoLog(aprog);}
    if(!D) load().catch(e=>console.warn('MPGlobe load:',e));   // fetch assets once
  },
  tick,                                   // music loop calls this each frame, then drawImage(canvas)
@@ -423,7 +506,12 @@ const MPGlobe={
  set sceneSecs(v){ SCENE_SECS=v; },
  get sceneSecs(){ return SCENE_SECS; },
  _setScene(i){ if(SCENES){ sceneIdx=((i%SCENES.length)+SCENES.length)%SCENES.length; animT=0; setFC(); } },  // diagnostic: force a scene
+ _setT(t){ animT=t; },
  set dbg(v){ DBG=v; },
+ set atmo(v){ ATMO=v?1:0; },
+ get atmo(){ return ATMO; },
+ set coherent(v){ USE_COH=!!v; },   // switch to coherent surface set + aligned atmosphere (dev; overexposes until decode lands)
+ get coherent(){ return USE_COH; },
  get _info(){ return {scene:sceneIdx, nScenes:SCENES?SCENES.length:0, animT:animT.toFixed(3)}; },
  get error(){ return errlog; }
 };
