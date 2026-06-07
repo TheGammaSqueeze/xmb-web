@@ -18,6 +18,7 @@ const PRESETS = ['preset_0','preset_1','preset_2','preset_3','preset_4',
 
 let gl=null, canvas=null, prog=null, aprog=null, raf=0, running=false;
 let cprog=null;                 // GLOW composite fullscreen program
+let hdrExt=null;                // EXT_color_buffer_float (RGBA16F FBO) - required for the GLOW path; null = fall back to forward
 let hdrFBO=null, glowVAO=null;  // lazy HDR scene FBO + composite VAO
 let GLOW=0;                     // GLOW path flag (MPGlobe.glow)
 let _lastGlow=null;             // diagnostic handle to last buildGlow result
@@ -508,7 +509,7 @@ function drawAtmoLinear(){
 
 function draw(){
  if(!gl||!D||!eMesh||got<want)return;
- if(GLOW && cprog && glowVAO && typeof GlobeGlow!=='undefined'){ drawGlow(); return; }   // gated new path
+ if(GLOW && hdrExt && cprog && glowVAO && typeof GlobeGlow!=='undefined'){ drawGlow(); return; }   // gated new path (needs RGBA16F FBO)
  const W=canvas.width,H=canvas.height;
  gl.viewport(0,0,W,H);gl.clearColor(0,0,0,1);gl.clear(16640);gl.enable(2929);gl.depthFunc(515);
  gl.enable(2884);gl.cullFace(1029);   // back-face cull (per-patch frontFace, degenerate depth)
@@ -689,7 +690,7 @@ const MPGlobe={
    canvas=cv;
    gl=canvas.getContext('webgl2',{alpha:false,antialias:true,preserveDrawingBuffer:true});
    if(!gl){ console.warn('MPGlobe: WebGL2 unavailable'); return; }
-   gl.getExtension('OES_element_index_uint'); gl.getExtension('EXT_color_buffer_float'); gl.getExtension('OES_texture_float_linear');
+   gl.getExtension('OES_element_index_uint'); hdrExt=gl.getExtension('EXT_color_buffer_float'); gl.getExtension('OES_texture_float_linear');
    prog=gl.createProgram();gl.attachShader(prog,sh(35633,VS));gl.attachShader(prog,sh(35632,FS));gl.linkProgram(prog);
    if(!gl.getProgramParameter(prog,gl.LINK_STATUS)){errlog+=gl.getProgramInfoLog(prog);console.warn('MPGlobe link:',errlog);}
    aprog=gl.createProgram();gl.attachShader(aprog,sh(35633,A_VS));gl.attachShader(aprog,sh(35632,A_FS));gl.linkProgram(aprog);
