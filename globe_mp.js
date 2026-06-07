@@ -285,7 +285,7 @@ void main(){
   float maxlum = max(r2.x, r2.y);
   vec4 r0d = texture(tex13, gl_FragCoord.xy/32.0);   // backbuffer/dither (black -> 0)
   vec2 e15 = texture(tex15, r2.xy).xy;
-  vec2 e14 = texture(tex14, vec2(r2.z, maxlum)).zw;
+  vec2 e14 = texture(tex14, vec2(r2.z, maxlum)).xy;   // LUT bins store the 2 real channels in .xy (B,A=0); firmware's .zw maps to these via the RSX texture swizzle
   vec4 col0 = vec4(0.);
   col0.xy = fma2(r0d.xy, fc[21].xx, e15);
   col0.zw = fma2(r0d.zw, fc[22].xx, e14);
