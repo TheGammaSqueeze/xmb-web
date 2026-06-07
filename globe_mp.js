@@ -17,6 +17,29 @@ const PRESETS = ['preset_0','preset_1','preset_2','preset_3','preset_4',
                  'preset_5','preset_6','preset_7','preset_8','preset_9'];
 
 let gl=null, canvas=null, prog=null, aprog=null, raf=0, running=false;
+let cprog=null;                 // GLOW composite fullscreen program
+let hdrFBO=null, glowVAO=null;  // lazy HDR scene FBO + composite VAO
+let GLOW=0;                     // GLOW path flag (MPGlobe.glow)
+let _lastGlow=null;             // diagnostic handle to last buildGlow result
+// ---- GLOW composite calibration (luminance earth term) ----------------------------------------
+// These four were CDP-tuned for the LUMINANCE-based composite (C_FS) vs the real present 822869
+// (frame-locked inject 822891). The earth term is now CURVE(LUM*slum*warm + glow*gain) where
+// LUM = dot(earthHDR, [0.27,0.67,0.06]); the golden lit side comes from warm-k on luminance, NOT
+// the blue ocean albedo. Best of 144+216+168 combos: full-frame MSE 1064 vs the present (down from
+// ~3200 with the old colored-e term), capmean [9.4,11.3,8.1] vs present [7.9,12.4,14.2], blown 0.0
+// (present ~0.002), lit-limb R/B 1.89 (golden). See /tmp/glowsweep/best3_sbs.png.
+// glow gain: low + warm (R>=G>=B) so the bloom adds a subtle warm halo, not a blue cast (the
+// buildGlow output is blue-dominant mean ~5-10; at this gain it contributes ~0.004, a faint halo).
+let GLOW_GAIN=[0.0004,0.0003,0.0002];
+// warm per-channel bias on the earth LUMINANCE term -> the golden terminator. Stronger than ENC=3's
+// [1,0.90,0.85] because the earth term is now a single luminance channel (no albedo colour to lean on).
+let GLOW_WARM=[1.0,0.55,0.36];
+// GLOW-path earth-term exposure into the CURVE domain. Low because the lit limb's HDR luminance is
+// large (max ~10) and the present's earth body is dark (~10/255). (ENC=3's colored path uses SLUM=0.30.)
+let GLOW_SLUM=0.004;
+// Chroma blend for the composite earth term: 0 = pure luminance (golden lit side, matches the
+// present); a SMALL value (~0.12) blends the original ocean tint back. Lead with luminance.
+let GLOW_CHROMA=0.12;
 let D=null, eMesh=null, want=0, got=0, sharedTex={}, patchTex=[], black=null;
 let aMesh=null, scatterTex=null, fcAtmo=null;        // verbatim atmosphere shell pass
 let ATMO_SCENES=null, ATMO_SCENE=null, ATMO=0;       // per-scene aligned atmosphere (coherent capture); MPGlobe.atmo toggles
@@ -264,6 +287,12 @@ void main(){
   if(uDbg>2.5){ ocol0=vec4(sd*0.5+0.5,1.0); return; }          // sd direction as color (should be smooth)
   if(uDbg>1.5){ ocol0=vec4(texture(cloudsCube,sd).xyz,1.0); return; }
   if(uDbg>0.5){ float d=clamp(dot(normalize(vN),normalize(vL))*0.8+0.4,0.0,1.0); ocol0=vec4(texture(earthCube,sd).xyz*d,1.0); return; }
+  if(uMode>4.5){
+    // GLOW path: emit the LINEAR HDR earth scene (the var r2.xyz, after *8.0) so the
+    // bloom pyramid + composite curve run on real HDR. No tonemap here -- the composite
+    // applies the same firmware CURVE (tex15) that ENC=3 uses. r2 is the colored HDR scene.
+    ocol0 = vec4(r2.xyz, 1.0); return;
+  }
   if(uMode>2.5){
     // VALIDATED firmware composite (agent MSE 0.0023 vs real present): per-channel real LUT tonemap CURVE
     // applied to the colored HDR earth r2. curve(uv) = real LUT15 row0 .y (separable exposure curve, ~7.86*uv).
@@ -295,7 +324,7 @@ void main(){
 }`;
 const A_FS=`#version 300 es
 precision highp float;
-in vec2 vTC; out vec4 ocol0; uniform sampler2D tex0; uniform vec4 fc[17];
+in vec2 vTC; out vec4 ocol0; uniform sampler2D tex0; uniform vec4 fc[17]; uniform float uLinear;
 float pc(float x,float a,float b){return (x!=x)?0.:clamp(x,a,b);} float fma1(float a,float b,float c){return a*b+c;}
 void main(){
  vec4 tc0=vec4(vTC,0.,1.);vec4 r0=vec4(0.),r1=vec4(0.),r2=vec4(0.),r3=vec4(0.);
@@ -306,8 +335,49 @@ void main(){
  r1.x=pc(r1.y/fc[12].y,0.,1.);r1.w=(-r2.x+fc[13].x);r2.x=fma1(r3.w,r1.w,-r3.y);r1.w=r1.x*2.;r1.w=(-r1.w+fc[14].x);r1.x=r1.x*r1.x;r1.x=r1.x*r1.w;
  r1.w=r3.x*2.;r1.w=(-r1.w+fc[15].x);r1.y=r3.x*r3.x;r1.y=r1.y*r1.w;r0.w=exp2(r0.w);r0.w=r2.x*r0.w;
  r0.xyz=r0.xyz*fc[16].x;r0.xyz=(-r1.y*r0.xyz+r0.xyz);r0.w=(-r1.x*r0.w+r0.w);r0.xyz=((r0.w*r0.xyz+r0.xyz)*8.0);
+ if(uLinear>0.5){ ocol0=vec4(r0.xyz,1.0); return; }   // GLOW path: emit linear HDR atmo so it feeds the bloom
  vec3 tcol=r0.xyz*0.789; float Wl=3.40918; tcol=(tcol*(1.0+tcol/(Wl*Wl)))/(1.0+tcol);
  ocol0=vec4(clamp(tcol,0.0,1.0),1.0);
+}`;
+
+// ---- GLOW COMPOSITE (fullscreen) : combines linear-HDR earth + bloom glow, then the
+//      VERBATIM firmware CURVE (tex15 fp16 LUT, same as ENC=3). VALIDATED composite model
+//      (MSE 0.0023 vs the real present 822869): the firmware encodes the earth surface to a
+//      single LUMINANCE intensity; the golden lit-side colour is produced ENTIRELY by the warm
+//      per-channel k applied to that luminance, NOT by the (blue ocean) albedo. So:
+//        LUM       = dot(earthHDR.xyz, vec3(0.27,0.67,0.06))     // firmware luminance weights
+//        base      = mix(LUM, earthHDR.c, uChroma)               // lead with luminance; small chroma optional
+//        display_c = CURVE( base*uSlum*warmbias_c + glow_c*uGlowGain_c )
+//      warmbias = the golden R>G>B lit-side cast [1,0.90,0.85]. CURVE(uv)=texture(tex15,vec2(uv,0.004)).y.
+//      uChroma=0 -> dominantly golden lit side (matches the present); a SMALL value (~0.15) adds back
+//      the present's subtle ocean tint without going blue.
+const C_VS=`#version 300 es
+out vec2 vUV;
+void main(){ vec2 p=vec2((gl_VertexID<<1)&2, gl_VertexID&2); vUV=p; gl_Position=vec4(p*2.0-1.0,0.0,1.0); }`;
+const C_FS=`#version 300 es
+precision highp float; precision highp sampler2D;
+uniform sampler2D uEarth;   // linear-HDR earth+atmo (the FBO color attachment)
+uniform sampler2D uGlow;    // bloom pyramid result from GlobeGlow.buildGlow
+uniform sampler2D tex15;    // real firmware fp16 tonemap LUT (the CURVE)
+uniform float uSlum;        // SLUM: scales earth LUMINANCE into the curve domain
+uniform vec3  uGlowGain;    // per-channel glow gain (validated g ~ [0.129,0.110,0.087])
+uniform vec3  uWarm;        // warm per-channel bias on the earth term (default = ENC=3's [1,0.90,0.85])
+uniform float uChroma;      // 0 = pure luminance (golden), small (~0.15) = subtle ocean tint back
+in vec2 vUV; out vec4 ocol0;
+void main(){
+  vec3 e = texture(uEarth, vUV).xyz;
+  vec3 g = texture(uGlow,  vUV).xyz;
+  // firmware luminance weights -> single intensity channel (golden cast comes from warm-k, not the blue albedo)
+  float LUM = dot(e, vec3(0.27, 0.67, 0.06));
+  // lead with luminance; optionally blend a small amount of original chroma back per channel
+  vec3 base = mix(vec3(LUM), e, uChroma);
+  // warm per-channel bias (golden lit-side cast) on the luminance base + bloom glow
+  vec3 hc = base * uSlum * uWarm + g * uGlowGain;
+  ocol0 = vec4(
+    clamp(texture(tex15, vec2(clamp(hc.x,0.0,0.99),0.004)).y, 0.0, 1.0),
+    clamp(texture(tex15, vec2(clamp(hc.y,0.0,0.99),0.004)).y, 0.0, 1.0),
+    clamp(texture(tex15, vec2(clamp(hc.z,0.0,0.99),0.004)).y, 0.0, 1.0),
+    1.0);
 }`;
 
 function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))errlog+=gl.getShaderInfoLog(o);return o;}
@@ -349,8 +419,96 @@ function windSign(c){const A=[c[0][0],c[1][0],c[2][0]],B=[c[0][1],c[1][1],c[2][1
   const cen=[(A[0]+B[0]+C[0]+D2[0])/4,(A[1]+B[1]+C[1]+D2[1])/4,(A[2]+B[2]+C[2]+D2[2])/4];
   return n[0]*cen[0]+n[1]*cen[1]+n[2]*cen[2];}
 
+// Lazy RGBA16F HDR scene FBO (color tex + depth renderbuffer), recreated on resize.
+function ensureHDR(W,H){
+ if(hdrFBO && hdrFBO.w===W && hdrFBO.h===H) return hdrFBO;
+ if(hdrFBO){ gl.deleteFramebuffer(hdrFBO.fbo); gl.deleteTexture(hdrFBO.tex); gl.deleteRenderbuffer(hdrFBO.depth); }
+ const tex=gl.createTexture(); gl.bindTexture(3553,tex);
+ gl.texImage2D(3553,0,gl.RGBA16F,W,H,0,6408,gl.HALF_FLOAT,null);
+ gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);
+ gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);
+ const depth=gl.createRenderbuffer(); gl.bindRenderbuffer(36161,depth);
+ gl.renderbufferStorage(36161,gl.DEPTH_COMPONENT16,W,H);
+ const fbo=gl.createFramebuffer(); gl.bindFramebuffer(36160,fbo);
+ gl.framebufferTexture2D(36160,36064,3553,tex,0);
+ gl.framebufferRenderbuffer(36160,36096,36161,depth);
+ const st=gl.checkFramebufferStatus(36160);
+ if(st!==36053) errlog+=' HDR FBO incomplete 0x'+st.toString(16);
+ gl.bindFramebuffer(36160,null);
+ hdrFBO={fbo,tex,depth,w:W,h:H}; return hdrFBO;
+}
+
+// GLOW render path: earth+atmo -> linear-HDR FBO -> buildGlow -> composite CURVE((earthHDR+glow*g)*slum*warmbias) -> canvas.
+function drawGlow(){
+ const W=canvas.width,H=canvas.height;
+ const F=ensureHDR(W,H);
+ // 1) render earth patches + atmo into the HDR FBO with the LINEAR-HDR output mode (uMode=5 / uLinear=1).
+ gl.bindFramebuffer(36160,F.fbo);
+ gl.viewport(0,0,W,H);gl.clearColor(0,0,0,0);gl.clear(16640);gl.enable(2929);gl.depthFunc(515);
+ gl.enable(2884);gl.cullFace(1029);
+ gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
+ gl.uniform1f(U('uFlipY'),1.0);
+ gl.uniform1f(U('uDbg'),0.0);
+ gl.uniform1f(U('uMode'),5.0);          // linear HDR earth scene (r2.xyz)
+ gl.uniform1f(U('uSlum'),SLUM);
+ const fcsrc=curFC||D.fc;
+ const fc=new Float32Array(23*4); for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
+ gl.uniform4fv(U('fc'),fc);
+ bindT(4,'tex4',sharedTex.tex4);bindT(5,'tex5',sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
+ bindT(7,'tex14',sharedTex.tex14);bindT(8,'tex15',sharedTex.tex15);bindT(9,'tex13',black);
+ const bindCube=(unit,name,tex)=>{gl.activeTexture(33984+unit);gl.bindTexture(34067,tex);gl.uniform1i(U(name),unit);};
+ bindCube(0,'earthCube',sharedTex.earthCube);bindCube(1,'cloudsCube',sharedTex.cloudsCube);bindCube(2,'maskCube',sharedTex.maskCube);
+ const pl=gl.getAttribLocation(prog,'in_pos');gl.bindBuffer(34962,eMesh.pb);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
+ gl.bindBuffer(34963,eMesh.ib);
+ if(!ATMO_ONLY) for(let i=0;i<D.patches.length;i++){
+   gl.frontFace(windSign(D.patches[i].corners)<0?2304:2305);
+   gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
+ gl.disable(2884);
+ if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex) drawAtmoLinear();   // additive linear HDR atmo into FBO
+ // 2) build the bloom glow from the linear-HDR scene (GlobeGlow uses this same gl context).
+ gl.bindFramebuffer(36160,null);
+ const glow=GlobeGlow.buildGlow(gl, F.tex, W, H);
+ _lastGlow=glow;
+ // 3) composite earthHDR + glow through the firmware CURVE onto the canvas.
+ gl.bindFramebuffer(36160,null);
+ gl.viewport(0,0,W,H);gl.disable(2929);gl.disable(3042);gl.disable(2884);
+ gl.useProgram(cprog);const C=n=>gl.getUniformLocation(cprog,n);
+ gl.activeTexture(33984+0);gl.bindTexture(3553,F.tex);gl.uniform1i(C('uEarth'),0);
+ gl.activeTexture(33984+1);gl.bindTexture(3553,glow.tex);gl.uniform1i(C('uGlow'),1);
+ gl.activeTexture(33984+2);gl.bindTexture(3553,sharedTex.tex15);gl.uniform1i(C('tex15'),2);
+ gl.uniform1f(C('uSlum'),GLOW_SLUM);     // GLOW path's own calibrated earth-term exposure (not ENC=3's SLUM)
+ gl.uniform3fv(C('uGlowGain'),new Float32Array(GLOW_GAIN));
+ gl.uniform3fv(C('uWarm'),new Float32Array(GLOW_WARM));
+ gl.uniform1f(C('uChroma'),GLOW_CHROMA);   // 0 = pure luminance earth term (golden); small = ocean tint back
+ gl.bindVertexArray(glowVAO);
+ gl.drawArrays(4,0,3);
+ gl.bindVertexArray(null);
+}
+// atmosphere shell with LINEAR-HDR output (uLinear=1), additive into the HDR FBO so it feeds the bloom.
+function drawAtmoLinear(){
+ if(!aMesh||!scatterTex||got<want)return; const s=D.shared; if(!s['460']||!s['461']||!s['462'])return;
+ const a=(ATMO_SCENE?atmoAt(animT):null)||{};
+ const e460=a['460']||s['460'], e461=a['461']||s['461'], e462=a['462']||s['462'];
+ const c5=e461.slice(0,3), c7=e462.slice(0,3), c6=_cross(c5,c7), c8=e460.slice(0,3);
+ const m0=a['256']||s['256']||s['260'],m1=a['257']||s['257']||s['261'],m2=a['258']||s['258']||s['262'],m3=a['259']||s['259']||s['263'];
+ if(!m0||!m1||!m2||!m3)return;
+ gl.useProgram(aprog); const U=n=>gl.getUniformLocation(aprog,n);
+ gl.uniform4fv(U('mvp0'),m0);gl.uniform4fv(U('mvp1'),m1);gl.uniform4fv(U('mvp2'),m2);gl.uniform4fv(U('mvp3'),m3);
+ gl.uniform1f(U('uFlipY'),1.0);
+ gl.uniform1f(U('uLinear'),1.0);
+ gl.uniform3fv(U('c5'),c5);gl.uniform3fv(U('c6'),c6);gl.uniform3fv(U('c7'),c7);gl.uniform3fv(U('c8'),c8);
+ gl.uniform4fv(U('fc'),fcAtmo);
+ gl.activeTexture(33984);gl.bindTexture(3553,scatterTex);gl.uniform1i(U('tex0'),0);
+ gl.disable(2884); gl.depthMask(false); gl.enable(3042); gl.blendFunc(1,1);
+ let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
+ let tl=gl.getAttribLocation(aprog,'in_tc0');gl.bindBuffer(34962,aMesh.tbuf);gl.enableVertexAttribArray(tl);gl.vertexAttribPointer(tl,4,5126,false,0,0);
+ gl.bindBuffer(34963,aMesh.ibuf);gl.drawElements(5,aMesh.n,5125,0);
+ gl.disable(3042); gl.depthMask(true);
+}
+
 function draw(){
  if(!gl||!D||!eMesh||got<want)return;
+ if(GLOW && cprog && glowVAO && typeof GlobeGlow!=='undefined'){ drawGlow(); return; }   // gated new path
  const W=canvas.width,H=canvas.height;
  gl.viewport(0,0,W,H);gl.clearColor(0,0,0,1);gl.clear(16640);gl.enable(2929);gl.depthFunc(515);
  gl.enable(2884);gl.cullFace(1029);   // back-face cull (per-patch frontFace, degenerate depth)
@@ -386,6 +544,7 @@ function drawAtmo(){
  gl.useProgram(aprog); const U=n=>gl.getUniformLocation(aprog,n);
  gl.uniform4fv(U('mvp0'),m0);gl.uniform4fv(U('mvp1'),m1);gl.uniform4fv(U('mvp2'),m2);gl.uniform4fv(U('mvp3'),m3);
  gl.uniform1f(U('uFlipY'),1.0);
+ gl.uniform1f(U('uLinear'),0.0);
  gl.uniform3fv(U('c5'),c5);gl.uniform3fv(U('c6'),c6);gl.uniform3fv(U('c7'),c7);gl.uniform3fv(U('c8'),c8);
  gl.uniform4fv(U('fc'),fcAtmo);
  gl.activeTexture(33984);gl.bindTexture(3553,scatterTex);gl.uniform1i(U('tex0'),0);
@@ -431,6 +590,7 @@ let SCENE_SECS=18;   // wall-seconds per scene before advancing (tunable via MPG
 let DBG=0;           // debug output selector (MPGlobe.dbg): 1=earth 2=clouds 3=sd-direction
 let ENC=0;           // 0=interim Reinhard tonemap, 1=verbatim ramp-encoded output, 3=VALIDATED firmware curve composite (MPGlobe.enc)
 let SLUM=0.30;       // calibration: colored HDR r2 -> tonemap-curve domain (MPGlobe.slum); tuned via CDP vs the real present
+                     // NOTE: the GLOW composite path uses its own calibrated SLUM (~0.15) -- set by MPGlobe.glow defaults below.
 let ATMO_ONLY=0;     // render only the atmosphere shell over black (MPGlobe.atmoOnly) -- for color validation
 let USE_COH=true;    // DEFAULT = coherent set (9 scenes) + aligned atmosphere limb (verified cyan Rayleigh).
                      // QA confirmed BOTH sets overexpose equally at bright moments under the interim Reinhard
@@ -534,6 +694,10 @@ const MPGlobe={
    if(!gl.getProgramParameter(prog,gl.LINK_STATUS)){errlog+=gl.getProgramInfoLog(prog);console.warn('MPGlobe link:',errlog);}
    aprog=gl.createProgram();gl.attachShader(aprog,sh(35633,A_VS));gl.attachShader(aprog,sh(35632,A_FS));gl.linkProgram(aprog);
    if(!gl.getProgramParameter(aprog,gl.LINK_STATUS)){errlog+=gl.getProgramInfoLog(aprog);}
+   // GLOW composite program + fullscreen VAO (gated path; harmless if GLOW stays off)
+   cprog=gl.createProgram();gl.attachShader(cprog,sh(35633,C_VS));gl.attachShader(cprog,sh(35632,C_FS));gl.linkProgram(cprog);
+   if(!gl.getProgramParameter(cprog,gl.LINK_STATUS)){errlog+=' composite link: '+gl.getProgramInfoLog(cprog);}
+   glowVAO=gl.createVertexArray();
    if(!D) load().catch(e=>console.warn('MPGlobe load:',e));   // fetch assets once
  },
  tick,                                   // music loop calls this each frame, then drawImage(canvas)
@@ -554,9 +718,33 @@ const MPGlobe={
  set atmoOnly(v){ ATMO_ONLY=v?1:0; },
  set atmo(v){ ATMO=v?1:0; },
  get atmo(){ return ATMO; },
+ set glow(v){ GLOW=v?1:0; },                                   // GLOW render path (HDR FBO -> bloom -> CURVE composite)
+ get glow(){ return GLOW; },
+ set glowGain(v){ if(Array.isArray(v)&&v.length===3) GLOW_GAIN=v.slice(); else if(typeof v==='number') GLOW_GAIN=[v,v,v]; },
+ get glowGain(){ return GLOW_GAIN.slice(); },
+ set glowWarm(v){ if(Array.isArray(v)&&v.length===3) GLOW_WARM=v.slice(); },
+ get glowWarm(){ return GLOW_WARM.slice(); },
+ set glowSlum(v){ GLOW_SLUM=v; },                              // GLOW-path earth exposure (separate from ENC=3 SLUM)
+ get glowSlum(){ return GLOW_SLUM; },
+ set glowChroma(v){ GLOW_CHROMA=v; },                          // 0=pure luminance earth (golden); small=ocean tint back
+ get glowChroma(){ return GLOW_CHROMA; },
  set coherent(v){ USE_COH=!!v; },   // switch to coherent surface set + aligned atmosphere (dev; overexposes until decode lands)
  get coherent(){ return USE_COH; },
  get _info(){ return {scene:sceneIdx, nScenes:SCENES?SCENES.length:0, animT:animT.toFixed(3)}; },
+ _glowStats(){    // diagnostic: float magnitude of HDR FBO + glow tex (calibration only)
+   if(!gl||!hdrFBO||!_lastGlow) return 'no glow yet';
+   const readF=(fbo,tex,w,h)=>{ const f=gl.createFramebuffer(); gl.bindFramebuffer(36160,f);
+     gl.framebufferTexture2D(36160,36064,3553,tex,0);
+     const N=Math.min(w,512), M=Math.min(h,512); const buf=new Float32Array(N*M*4);
+     gl.readPixels(0,0,N,M,6408,5126,buf); gl.deleteFramebuffer(f);
+     let mx=[0,0,0], sm=[0,0,0], cnt=0;
+     for(let p=0;p<N*M;p++){ for(let c=0;c<3;c++){ const v=buf[p*4+c]; if(v>mx[c])mx[c]=v; sm[c]+=v; } cnt++; }
+     return {max:mx.map(x=>+x.toFixed(3)), mean:sm.map(x=>+(x/cnt).toFixed(3))}; };
+   const e=readF(null,hdrFBO.tex,hdrFBO.w,hdrFBO.h);
+   const g=readF(null,_lastGlow.tex,_lastGlow.w,_lastGlow.h);
+   gl.bindFramebuffer(36160,null);
+   return {earthHDR:e, glow:g, slum:SLUM, gain:GLOW_GAIN};
+ },
  get error(){ return errlog; }
 };
 global.MPGlobe=MPGlobe;
