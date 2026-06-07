@@ -45,10 +45,12 @@ let PATHS=null, animT=0, preset=null, presetIdx=7, errlog='';
 let starProg=null, starBuf=null, starN=0;   // celestial star field (triangulated from real presents)
 let STARS_ON=1;                              // MPGlobe.stars
 let TILES=1;                                 // 1 = faithful per-patch tile sampling (firmware 24-patch x 4-tile); 0 = legacy cube map (MPGlobe.tiles)
-// Patches whose extracted t02 DETAIL tile is corrupt (garbage grid, source dump xmb_dump3 was cleaned).
-// For these, the cloud detail is sampled from the real clouds cube instead (clean cloud data, same source);
-// albedo (t00/t01) is the clean per-patch tile. TODO: re-capture these 4 t02 tiles from live RPCS3.
-const BADT2 = new Set([4,5,18,22]);
+let CULL=1;                                   // per-patch back-face cull (MPGlobe.cull); 0 = no cull (rely on depth) - test for grazing-patch triangular gaps
+// All 24 patches' tiles (albedo t00/t01, cloud t02, mask t03) re-captured clean from live RPCS3
+// via the TEXDUMP command (un-swizzled, DXT-decoded BGRA8, cropped to the real 512x128 strip).
+// The old corrupt-t02 workaround is no longer needed - every patch uses its clean per-patch tile.
+const BADT2 = new Set([]);
+let T2ALL=0;   // test: 1 = sample ALL patches' cloud detail from the clouds cube (uniform/seamless cloud), albedo still per-patch tiles
 let STAR_BRI=4.0;                            // star HDR brightness into the scene (calibrated through the GLOW tonemap so stars read faint, like the present; MPGlobe.starBri)
 
 const _sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
@@ -491,7 +493,7 @@ function drawGlow(){
  gl.bindFramebuffer(36160,F.fbo);
  gl.viewport(0,0,W,H);gl.clearColor(0,0,0,0);gl.clear(16640);gl.enable(2929);gl.depthFunc(515);
  drawStars();                            // stars into the HDR scene (tonemapped + may bloom faintly)
- gl.enable(2884);gl.cullFace(1029);
+ if(CULL){gl.enable(2884);gl.cullFace(1029);}else{gl.disable(2884);}
  gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
  gl.uniform1f(U('uFlipY'),1.0);
  gl.uniform1f(U('uDbg'),0.0);
@@ -511,7 +513,7 @@ function drawGlow(){
    gl.frontFace(windSign(D.patches[i].corners)<0?2304:2305);
    const pt=patchTex[D.patches[i].idx];
    if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
-   gl.uniform1f(U('uT2bad'), BADT2.has(D.patches[i].idx)?1.0:0.0);
+   gl.uniform1f(U('uT2bad'), (T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  // 1b) atmosphere limb additively INTO the HDR FBO (linear HDR), so it both feeds the bloom and gets
@@ -564,7 +566,7 @@ function draw(){
  const W=canvas.width,H=canvas.height;
  gl.viewport(0,0,W,H);gl.clearColor(0,0,0,1);gl.clear(16640);gl.enable(2929);gl.depthFunc(515);
  drawStars();                          // real-derived celestial star field, behind the earth
- gl.enable(2884);gl.cullFace(1029);   // back-face cull (per-patch frontFace, degenerate depth)
+ if(CULL){gl.enable(2884);gl.cullFace(1029);}else{gl.disable(2884);}   // back-face cull (per-patch frontFace)
  gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
  gl.uniform1f(U('uFlipY'),1.0);
  gl.uniform1f(U('uDbg'),DBG);
@@ -584,7 +586,7 @@ function draw(){
    gl.frontFace(windSign(D.patches[i].corners)<0?2304:2305);
    const pt=patchTex[D.patches[i].idx];
    if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
-   gl.uniform1f(U('uT2bad'), BADT2.has(D.patches[i].idx)?1.0:0.0);
+   gl.uniform1f(U('uT2bad'), (T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex)drawAtmo();
@@ -785,8 +787,11 @@ const MPGlobe={
    animT=0.0; draw(); },
  set stars(v){ STARS_ON=v?1:0; },
  get stars(){ return STARS_ON; },
+set cull(v){ CULL=v?1:0; },
  set tiles(v){ TILES=v?1:0; },                 // faithful per-patch tile earth (1) vs legacy cube map (0)
  get tiles(){ return TILES; },
+ set t2all(v){ T2ALL=v?1:0; },                 // test: all-patch cloud from the cube (uniform cloud)
+ get t2all(){ return T2ALL; },
  set starBri(v){ STAR_BRI=v; },
  get starBri(){ return STAR_BRI; },
  get starCount(){ return starN; },
