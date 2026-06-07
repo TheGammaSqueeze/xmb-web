@@ -44,6 +44,11 @@ const ATMO_KEYS=['256','257','258','259','460','461','462'];
 let PATHS=null, animT=0, preset=null, presetIdx=7, errlog='';
 let starProg=null, starBuf=null, starN=0;   // celestial star field (triangulated from real presents)
 let STARS_ON=1;                              // MPGlobe.stars
+let TILES=1;                                 // 1 = faithful per-patch tile sampling (firmware 24-patch x 4-tile); 0 = legacy cube map (MPGlobe.tiles)
+// Patches whose extracted t02 DETAIL tile is corrupt (garbage grid, source dump xmb_dump3 was cleaned).
+// For these, the cloud detail is sampled from the real clouds cube instead (clean cloud data, same source);
+// albedo (t00/t01) is the clean per-patch tile. TODO: re-capture these 4 t02 tiles from live RPCS3.
+const BADT2 = new Set([4,5,18,22]);
 let STAR_BRI=4.0;                            // star HDR brightness into the scene (calibrated through the GLOW tonemap so stars read faint, like the present; MPGlobe.starBri)
 
 const _sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
@@ -206,10 +211,10 @@ vec4 ip = in_pos;
 const FS=`#version 300 es
 precision highp float;
 in vec4 tc0,tc3,tc4,tc5,tc6,tc8,tc9; in vec3 vN; in vec3 vL; in vec3 vSph;
-uniform sampler2D tex4,tex5,tex6,tex13,tex14,tex15;
-uniform samplerCube earthCube, cloudsCube, maskCube;   // firmware CUBEEARTH/clouds/mask (earth.qrc), seamless
+uniform sampler2D tex0,tex1,tex2,tex3,tex4,tex5,tex6,tex13,tex14,tex15;   // tex0-3 = THIS patch's 4 firmware tiles (t00-t03)
+uniform samplerCube earthCube, cloudsCube, maskCube;   // legacy cube-map path (kept for DBG/fallback)
 uniform vec4 fc[23];
-uniform float uDbg, uMode, uSlum;
+uniform float uDbg, uMode, uSlum, uTiles, uT2bad;   // uTiles=1 -> per-patch tiles; uT2bad=1 -> this patch's t02 detail tile is corrupt, sample cloud from the cube instead
 out vec4 ocol0;
 vec3 nrm(vec3 v){return length(v)>0.0?normalize(v):v;}
 vec3 fma3(vec3 a,vec3 b,vec3 c){return a*b+c;}
@@ -221,9 +226,9 @@ void main(){
   vec3 sd = normalize(vSph);   // seamless cube-map sample direction (replaces per-patch tile UVs)
   vec4 r0=vec4(0.),r1=vec4(0.),r2=vec4(0.),r3=vec4(0.),r4=vec4(0.);
   vec4 h0=vec4(0.),h1=vec4(0.),h2=vec4(0.),h3=vec4(0.),h4=vec4(0.),h5=vec4(0.),h6=vec4(0.),h7=vec4(0.);
-  r2.xyz = texture(earthCube, sd).xyz;
+  r2.xyz = uTiles>0.5 ? texture(tex0, tc0.xy).xyz : texture(earthCube, sd).xyz;   // fp: TEX2D(0, tc0.xy)
   h2.xyz = nrm(tc7.xyz);
-  r3.xyz = texture(earthCube, sd).xyz;
+  r3.xyz = uTiles>0.5 ? texture(tex1, tc0.zw).xyz : texture(earthCube, sd).xyz;   // fp: TEX2D(1, tc0.zw)
   r3.xyz = (r3.xyz + -r2.xyz);
   r4.xyz = fma3(tc4.xxx, r3.xyz, r2.xyz);
   h0.xyz = nrm(tc1.xyz);
@@ -233,9 +238,9 @@ void main(){
   r0.xyz = fma3(-h0.xyz, r0.zzz, -h2.xyz);
   h1.zw = tc8.zw;
   r3.xyz = (-r4.xyz + fc[1].xyz);
-  r2.x = texture(cloudsCube, sd).x;
+  r2.x = ((uTiles>0.5 && uT2bad<0.5) ? texture(tex2, tc8.zw).x : texture(cloudsCube, sd).x);   // fp: TEX2D(2, tc8.zw)
   h7.w = fma1(r2.x, fc[2].x, fc[2].y);
-  r2.x = texture(maskCube, sd).x;
+  r2.x = (uTiles>0.5 ? texture(tex3, tc8.xy).x : texture(maskCube, sd).x);     // fp: TEX2D(3, tc8.xy)
   r1.xyz = fma3(r2.xxx, r3.xyz, r4.xyz);
   r4.zw = tc9.xy;
   r4.y = fc[3].y;
@@ -243,14 +248,14 @@ void main(){
   r3.xy = tc6.xy;
   r4.x = fc[5].y;
   r1.xy = fma2(r3.xy, h7.ww, h1.zw);
-  r1.xyz = texture(cloudsCube, sd).xyz;
+  r1.xyz = ((uTiles>0.5 && uT2bad<0.5) ? texture(tex2, r1.xy).xyz : texture(cloudsCube, sd).xyz);   // fp: TEX2D(2, r1.xy)
   h7.xyz = (r1.xyz * fc[6].z);
   h7.w = r2.x;
   h6.xyz = (-h5.xyz + fc[7].w);
   h5.xyz = fma3(h7.xyz, h6.xyz, h5.xyz);
   h7.z = dot(r0.xyz, fc[8].xyz);
   r0.xy = fma2(r4.zw, fc[9].xx, h1.zw);
-  r0.xyz = texture(cloudsCube, sd).xyz;
+  r0.xyz = ((uTiles>0.5 && uT2bad<0.5) ? texture(tex2, r0.xy).xyz : texture(cloudsCube, sd).xyz);   // fp: TEX2D(2, r0.xy)
   h0.xyz = pc3(fma3(-r1.xyz, fc[10].xxx, r0.xyz), 0.,1.);
   h0.w = fc[11].y;
   r0.zw = fc[12].xy;
@@ -493,12 +498,16 @@ function drawGlow(){
  gl.uniform4fv(U('fc'),fc);
  bindT(4,'tex4',sharedTex.tex4);bindT(5,'tex5',sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
  bindT(7,'tex14',sharedTex.tex14);bindT(8,'tex15',sharedTex.tex15);bindT(9,'tex13',black);
+ gl.uniform1f(U('uTiles'),TILES);
  const bindCube=(unit,name,tex)=>{gl.activeTexture(33984+unit);gl.bindTexture(34067,tex);gl.uniform1i(U(name),unit);};
- bindCube(0,'earthCube',sharedTex.earthCube);bindCube(1,'cloudsCube',sharedTex.cloudsCube);bindCube(2,'maskCube',sharedTex.maskCube);
+ bindCube(10,'earthCube',sharedTex.earthCube);bindCube(11,'cloudsCube',sharedTex.cloudsCube);bindCube(12,'maskCube',sharedTex.maskCube);
  const pl=gl.getAttribLocation(prog,'in_pos');gl.bindBuffer(34962,eMesh.pb);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
  gl.bindBuffer(34963,eMesh.ib);
  if(!ATMO_ONLY) for(let i=0;i<D.patches.length;i++){
    gl.frontFace(windSign(D.patches[i].corners)<0?2304:2305);
+   const pt=patchTex[D.patches[i].idx];
+   if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
+   gl.uniform1f(U('uT2bad'), BADT2.has(D.patches[i].idx)?1.0:0.0);
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  // 1b) atmosphere limb additively INTO the HDR FBO (linear HDR), so it both feeds the bloom and gets
@@ -562,12 +571,16 @@ function draw(){
  gl.uniform4fv(U('fc'),fc);
  bindT(4,'tex4',sharedTex.tex4);bindT(5,'tex5',sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
  bindT(7,'tex14',sharedTex.tex14);bindT(8,'tex15',sharedTex.tex15);bindT(9,'tex13',black);
+ gl.uniform1f(U('uTiles'),TILES);
  const bindCube=(unit,name,tex)=>{gl.activeTexture(33984+unit);gl.bindTexture(34067,tex);gl.uniform1i(U(name),unit);};
- bindCube(0,'earthCube',sharedTex.earthCube);bindCube(1,'cloudsCube',sharedTex.cloudsCube);bindCube(2,'maskCube',sharedTex.maskCube);
+ bindCube(10,'earthCube',sharedTex.earthCube);bindCube(11,'cloudsCube',sharedTex.cloudsCube);bindCube(12,'maskCube',sharedTex.maskCube);
  const pl=gl.getAttribLocation(prog,'in_pos');gl.bindBuffer(34962,eMesh.pb);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
  gl.bindBuffer(34963,eMesh.ib);
  if(!ATMO_ONLY) for(let i=0;i<D.patches.length;i++){
    gl.frontFace(windSign(D.patches[i].corners)<0?2304:2305);
+   const pt=patchTex[D.patches[i].idx];
+   if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
+   gl.uniform1f(U('uT2bad'), BADT2.has(D.patches[i].idx)?1.0:0.0);
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex)drawAtmo();
@@ -686,6 +699,12 @@ async function load(){
  sharedTex.earthCube=cubeTex('earth');
  sharedTex.cloudsCube=cubeTex('clouds');
  sharedTex.maskCube=cubeTex('mask');
+ // FAITHFUL per-patch tiles: each of the 24 patches has its own 4 firmware tiles (t00-t03 = fp tex0-3).
+ // This is what the real surface fp samples (TEX2D(0,tc0.xy) etc); replaces the lossy single cube map.
+ patchTex={};
+ for(const p of D.patches){ const s3=String(p.idx).padStart(3,'0');
+   patchTex[p.idx]=[texPNG(BASE+'full_tex/p'+s3+'_t00.png'),texPNG(BASE+'full_tex/p'+s3+'_t01.png'),
+                    texPNG(BASE+'full_tex/p'+s3+'_t02.png'),texPNG(BASE+'full_tex/p'+s3+'_t03.png')]; }
  const pos=new Float32Array(await fetch(BASE+'mesh/live_surf0_pos.bin').then(r=>r.arrayBuffer()));
  const xyz=[];for(let i=0;i<289;i++)xyz.push(pos[i*4],pos[i*4+1],pos[i*4+2],pos[i*4+3]);
  // star catalog (real-derived celestial directions); build a POINTS vertex buffer
@@ -762,6 +781,8 @@ const MPGlobe={
    animT=0.0; draw(); },
  set stars(v){ STARS_ON=v?1:0; },
  get stars(){ return STARS_ON; },
+ set tiles(v){ TILES=v?1:0; },                 // faithful per-patch tile earth (1) vs legacy cube map (0)
+ get tiles(){ return TILES; },
  set starBri(v){ STAR_BRI=v; },
  get starBri(){ return STAR_BRI; },
  get starCount(){ return starN; },
