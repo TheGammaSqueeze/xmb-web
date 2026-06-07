@@ -352,11 +352,11 @@ function draw(){
  bindCube(0,'earthCube',sharedTex.earthCube);bindCube(1,'cloudsCube',sharedTex.cloudsCube);bindCube(2,'maskCube',sharedTex.maskCube);
  const pl=gl.getAttribLocation(prog,'in_pos');gl.bindBuffer(34962,eMesh.pb);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
  gl.bindBuffer(34963,eMesh.ib);
- for(let i=0;i<D.patches.length;i++){
+ if(!ATMO_ONLY) for(let i=0;i<D.patches.length;i++){
    gl.frontFace(windSign(D.patches[i].corners)<0?2304:2305);
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
- if(ATMO&&aMesh&&scatterTex)drawAtmo();
+ if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex)drawAtmo();
 }
 // VERBATIM atmosphere limb shell (type-B 3f6eeb47 draw): basis c5=c461,c7=c462,c6=cross(c5,c7),c8=eye=c460;
 // type-B MVP c256-259 + eye/basis replayed per-frame from the coherent capture (atmoAt). Additive over surface.
@@ -414,6 +414,7 @@ let SCENES=null, sceneIdx=0, SCENES_IDX=null, SCENE_FC=null, curFC=null;
 let SCENE_SECS=18;   // wall-seconds per scene before advancing (tunable via MPGlobe.sceneSecs)
 let DBG=0;           // debug output selector (MPGlobe.dbg): 1=earth 2=clouds 3=sd-direction
 let ENC=0;           // 0=interim Reinhard tonemap, 1=verbatim ramp-encoded output (MPGlobe.enc)
+let ATMO_ONLY=0;     // render only the atmosphere shell over black (MPGlobe.atmoOnly) -- for color validation
 let USE_COH=false;   // false = clean fc_cap5 surface set (no overexposure, no atmo). true = coherent set +
                      // aligned atmosphere limb, BUT its brighter/closer scenes overexpose under the interim
                      // tonemap (needs the real firmware HDR ramp/compositor decode). Toggle: MPGlobe.coherent
@@ -527,6 +528,7 @@ const MPGlobe={
    animT=0.0; draw(); },
  set dbg(v){ DBG=v; },
  set enc(v){ ENC=v; },
+ set atmoOnly(v){ ATMO_ONLY=v?1:0; },
  set atmo(v){ ATMO=v?1:0; },
  get atmo(){ return ATMO; },
  set coherent(v){ USE_COH=!!v; },   // switch to coherent surface set + aligned atmosphere (dev; overexposes until decode lands)
