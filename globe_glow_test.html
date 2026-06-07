@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Globe Glow (bloom pyramid) -- WebGL2 verbatim port test</title>
+<style>
+  body { margin:0; background:#000; color:#9cf; font:13px monospace; }
+  #wrap { display:flex; flex-wrap:wrap; gap:8px; padding:8px; }
+  .cell { display:flex; flex-direction:column; align-items:center; }
+  canvas { image-rendering: pixelated; background:#111; border:1px solid #234; }
+  .lbl { padding:2px 0; }
+  #log { padding:8px; white-space:pre; color:#6c9; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div class="cell"><div class="lbl">HDR source (0x02360000, 512x512) tonemapped</div>
+    <canvas id="cSrc" width="512" height="512"></canvas></div>
+  <div class="cell"><div class="lbl">GLOW (bloom pyramid) 512x256 tonemapped x8</div>
+    <canvas id="cGlow" width="512" height="256"></canvas></div>
+</div>
+<div id="log">loading...</div>
+
+<script src="globe_glow.js"></script>
+<script>
+const log = (m)=>{ document.getElementById('log').textContent += '\n'+m; console.log(m); };
+document.getElementById('log').textContent = 'init';
+
+// Blit/tonemap program: sample an HDR RGBA16F texture, apply exposure + Reinhard,
+// gamma to sRGB, draw to a regular canvas so it is screenshottable.
+const VS = `#version 300 es
+out vec2 vUV;
+void main(){ vec2 p=vec2((gl_VertexID<<1)&2, gl_VertexID&2); vUV=p; gl_Position=vec4(p*2.0-1.0,0.0,1.0);} `;
+const FS_TONEMAP = `#version 300 es
+precision highp float; precision highp sampler2D;
+uniform sampler2D tex; uniform float exposure; uniform bool flipY;
+in vec2 vUV; out vec4 o;
+void main(){
+  vec2 uv = vUV; if(flipY) uv.y = 1.0-uv.y;
+  vec3 c = texture(tex, uv).rgb * exposure;
+  c = c / (1.0 + c);                 // Reinhard tonemap for viewing
+  c = pow(max(c,0.0), vec3(1.0/2.2));// sRGB-ish
+  o = vec4(c, 1.0);
+}`;
+
+function compile(gl,t,s){const sh=gl.createShader(t);gl.shaderSource(sh,s);gl.compileShader(sh);
+  if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS)) throw gl.getShaderInfoLog(sh)+'\n'+s; return sh;}
+function prog(gl,vs,fs){const p=gl.createProgram();gl.attachShader(p,compile(gl,gl.VERTEX_SHADER,vs));
+  gl.attachShader(p,compile(gl,gl.FRAGMENT_SHADER,fs));gl.linkProgram(p);
+  if(!gl.getProgramParameter(p,gl.LINK_STATUS)) throw gl.getProgramInfoLog(p); return p;}
+
+async function loadSrc(){
+  const buf = await (await fetch('globe_glow_src.bin')).arrayBuffer();
+  const dv = new DataView(buf);
+  const w = dv.getUint32(0, true), h = dv.getUint32(4, true);
+  const data = new Float32Array(buf, 8, w*h*4);
+  return { w, h, data };
+}
+
+async function main(){
+  const src = await loadSrc();
+  log('source ' + src.w + 'x' + src.h + ' floats=' + src.data.length);
+  let mx=0; for(let i=0;i<src.data.length;i++) if(src.data[i]>mx) mx=src.data[i];
+  log('source max value = ' + mx.toFixed(4));
+
+  // Offscreen GL2 context for the pipeline (shared by both canvases via readback).
+  const glCanvas = document.createElement('canvas');
+  glCanvas.width = 512; glCanvas.height = 512;
+  const gl = glCanvas.getContext('webgl2', { antialias:false, premultipliedAlpha:false });
+  if(!gl){ log('NO WEBGL2'); return; }
+  if(!gl.getExtension('EXT_color_buffer_float')){ log('NO EXT_color_buffer_float'); return; }
+  gl.getExtension('OES_texture_float_linear');
+
+  // Upload HDR source as RGBA16F (convert fp32 -> fp16 client-side via Uint16 halfs).
+  function f32toF16(f){ // IEEE-754 half conversion
+    const fb=new Float32Array(1), ib=new Int32Array(fb.buffer); fb[0]=f; const x=ib[0];
+    let bits=(x>>16)&0x8000, m=(x>>12)&0x07ff, e=(x>>23)&0xff;
+    if(e<103) return bits;
+    if(e>142){ bits|=0x7c00; bits|=((e==255)?0:1)&&(x&0x007fffff); return bits; }
+    if(e<113){ m|=0x0800; bits|=(m>>(114-e))+((m>>(113-e))&1); return bits; }
+    bits|=((e-112)<<10)|(m>>1); bits+=m&1; return bits;
+  }
+  const half = new Uint16Array(src.w*src.h*4);
+  for(let i=0;i<half.length;i++) half[i]=f32toF16(src.data[i]);
+  const srcTex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, srcTex);
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA16F,src.w,src.h,0,gl.RGBA,gl.HALF_FLOAT,half);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+
+  // Build the glow.
+  const t0 = performance.now();
+  const glow = GlobeGlow.buildGlow(gl, srcTex, src.w, src.h);
+  const t1 = performance.now();
+  log('buildGlow done in ' + (t1-t0).toFixed(2) + ' ms; glow ' + glow.w + 'x' + glow.h);
+
+  // Tonemap helper: render an HDR tex to a visible canvas via 2D blit of read pixels.
+  const tmProg = prog(gl, VS, FS_TONEMAP);
+  const uTex=gl.getUniformLocation(tmProg,'tex'), uExp=gl.getUniformLocation(tmProg,'exposure'),
+        uFlip=gl.getUniformLocation(tmProg,'flipY');
+  const vao=gl.createVertexArray();
+
+  function showHDR(hdrTex, w, h, exposure, outCanvasId){
+    // render tonemap to a temp RGBA8 FBO then read back into the 2D canvas.
+    const tex=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,tex);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,w,h,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+    const fbo=gl.createFramebuffer(); gl.bindFramebuffer(gl.FRAMEBUFFER,fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,tex,0);
+    gl.viewport(0,0,w,h); gl.disable(gl.BLEND);
+    gl.useProgram(tmProg); gl.bindVertexArray(vao);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D,hdrTex);
+    gl.uniform1i(uTex,0); gl.uniform1f(uExp,exposure); gl.uniform1i(uFlip,0);
+    gl.drawArrays(gl.TRIANGLES,0,3);
+    const px=new Uint8Array(w*h*4); gl.readPixels(0,0,w,h,gl.RGBA,gl.UNSIGNED_BYTE,px);
+    gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+    const cv=document.getElementById(outCanvasId); cv.width=w; cv.height=h;
+    const ctx=cv.getContext('2d'); const img=ctx.createImageData(w,h);
+    // flip vertically into the 2D canvas (GL origin bottom-left)
+    for(let y=0;y<h;y++){ const sy=h-1-y;
+      img.data.set(px.subarray(sy*w*4,(sy+1)*w*4), y*w*4); }
+    ctx.putImageData(img,0,0);
+  }
+
+  showHDR(srcTex, src.w, src.h, 1.5, 'cSrc');
+  showHDR(glow.tex, glow.w, glow.h, 8.0, 'cGlow');  // exposure x8: glow is dim by design
+  // expose for CDP numeric readback / cross-validation
+  window.__GL = gl; window.__GLOW = glow; window.__SRC = src;
+  log('rendered. DONE');
+  document.title = 'GLOW_DONE';
+  window.__GLOW_DONE = true;
+}
+main().catch(e=>{ log('ERROR: '+e); document.title='GLOW_ERR'; });
+</script>
+</body>
+</html>
