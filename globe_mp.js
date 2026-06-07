@@ -465,7 +465,8 @@ function drawGlow(){
    gl.frontFace(windSign(D.patches[i].corners)<0?2304:2305);
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
- if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex) drawAtmoLinear();   // additive linear HDR atmo into FBO
+ // (atmo is NOT rendered into the FBO - it would be warm-biased by the composite. It is a separate cyan
+ //  additive canvas pass after the composite, below, so its Rayleigh blue survives.)
  // 2) build the bloom glow from the linear-HDR scene (GlobeGlow uses this same gl context).
  gl.bindFramebuffer(36160,null);
  const glow=GlobeGlow.buildGlow(gl, F.tex, W, H);
@@ -484,6 +485,23 @@ function drawGlow(){
  gl.bindVertexArray(glowVAO);
  gl.drawArrays(4,0,3);
  gl.bindVertexArray(null);
+ // 4) CYAN atmosphere band: the FBO atmo above got warm-biased; add the verbatim atmo as a separate additive
+ // canvas pass so its Rayleigh blue survives. Repopulate the canvas depth with a depth-only earth pass first
+ // (re-bind the cube samplers - the composite left units 0-2 = F.tex/glow/tex15) so the shell is occluded.
+ if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex){
+   gl.enable(2929);gl.depthFunc(515);gl.depthMask(true);gl.clear(256);   // clear canvas DEPTH only (color = golden kept)
+   gl.colorMask(false,false,false,false);
+   gl.useProgram(prog);gl.uniform1f(U('uFlipY'),1.0);gl.uniform1f(U('uMode'),5.0);
+   bindCube(0,'earthCube',sharedTex.earthCube);bindCube(1,'cloudsCube',sharedTex.cloudsCube);bindCube(2,'maskCube',sharedTex.maskCube);
+   gl.bindBuffer(34962,eMesh.pb);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
+   gl.bindBuffer(34963,eMesh.ib);gl.enable(2884);gl.cullFace(1029);
+   if(!ATMO_ONLY) for(let i=0;i<D.patches.length;i++){
+     gl.frontFace(windSign(D.patches[i].corners)<0?2304:2305);
+     gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
+   gl.disable(2884);gl.colorMask(true,true,true,true);
+   drawAtmo();
+   gl.disable(2929);
+ }
 }
 // atmosphere shell with LINEAR-HDR output (uLinear=1), additive into the HDR FBO so it feeds the bloom.
 function drawAtmoLinear(){
