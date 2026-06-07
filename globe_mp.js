@@ -29,13 +29,17 @@ let _lastGlow=null;             // diagnostic handle to last buildGlow result
 // project_globe_ground_truth_2026-06-07). GLOW_SLUM = the firmware HDR.mnu EXPOSURE (0.789, same as
 // the ENC0 surface path that measured B/G=1.10 == the real present). GLOW_GAIN = additive bloom
 // strength (neutral; the sun glint/limb halo). Both verified via /tmp/render_compare.py vs the present.
-let GLOW_GAIN=[0.02,0.02,0.02];  // subtle additive sun-glint/limb halo (measured: keeps the disk sharp, not hazy)
+let GLOW_GAIN=[0.0004,0.0003,0.0002];  // bloom gain: web bloom accumulator ~450x firmware; tiny gain matches the real limb-halo contribution
 let GLOW_WARM=[1.0,1.0,1.0];   // retained for the MPGlobe.glowWarm setter API; no longer used by C_FS
-// Exposure into the per-channel Reinhard. The real HDR.mnu EXPOSURE is 0.789, but the r2 HDR scene
-// magnitude is ~2x (the DRAW18 HDR decode is still slightly off), so 0.789 overexposes (139k blown vs
-// the present's 13.5k). 0.42 matches the present's blown count + lit-body brightness. FLAGGED: exposure
-// is a calibration pending the r2 decode; the COLOR is faithful (real .mnu per-channel Reinhard, B/G=1.10).
-let GLOW_SLUM=0.42;
+// Exposure into the per-channel extended-Reinhard. DERIVED (not eyeballed): the surface fp emits
+// r2 = colored_earth * 8.0 (the HDR scale for the bloom path, globe_mp.js ~line 279). The real HDR.mnu
+// display EXPOSURE is 0.789, applied to the PRE-x8 earth -> on the x8'd r2 the exposure is 0.789/8 =
+// 0.0986. (Matches the agent's measured k=0.0965, MSE 0.0023 vs the real present.) The extended-Reinhard
+// rolloff (W=3.40918) then handles the per-scene radiance range, so a single exposure is per-scene-correct
+// (dark scenes stay dim, bright scenes roll off, NOT blown white). VALIDATED 2026-06-07: web earth midtone
+// [77,86,95] vs real present [74,84,94] = ratio 1.03, B/G 1.11 (== the real present). The old 0.42 was
+// eyeball-tuned and 4.3x too bright (overexposed every bright scene to white).
+let GLOW_SLUM=0.0986;
 let GLOW_CHROMA=0;             // retained for the MPGlobe.glowChroma setter API; no longer used by C_FS
 let D=null, eMesh=null, want=0, got=0, sharedTex={}, patchTex=[], black=null;
 let aMesh=null, scatterTex=null, fcAtmo=null;        // verbatim atmosphere shell pass
