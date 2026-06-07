@@ -20,7 +20,7 @@ let gl=null, canvas=null, prog=null, aprog=null, raf=0, running=false;
 let cprog=null;                 // GLOW composite fullscreen program
 let hdrExt=null;                // EXT_color_buffer_float (RGBA16F FBO) - required for the GLOW path; null = fall back to forward
 let hdrFBO=null, glowVAO=null;  // lazy HDR scene FBO + composite VAO
-let GLOW=0;                     // GLOW path flag (MPGlobe.glow)
+let GLOW=1;                     // GLOW path flag (MPGlobe.glow) -- DEFAULT ON: the verbatim golden composite (EXT-guarded; falls back to forward if no RGBA16F FBO). ~20ms/frame w/ sync = real-time.
 let _lastGlow=null;             // diagnostic handle to last buildGlow result
 // ---- GLOW composite calibration (luminance earth term) ----------------------------------------
 // These four were CDP-tuned for the LUMINANCE-based composite (C_FS) vs the real present 822869
@@ -589,7 +589,7 @@ function pickPreset(i){ // resolve a PRESETS entry to a loaded camera path (fall
 let SCENES=null, sceneIdx=0, SCENES_IDX=null, SCENE_FC=null, curFC=null;
 let SCENE_SECS=18;   // wall-seconds per scene before advancing (tunable via MPGlobe.sceneSecs)
 let DBG=0;           // debug output selector (MPGlobe.dbg): 1=earth 2=clouds 3=sd-direction
-let ENC=0;           // 0=interim Reinhard tonemap, 1=verbatim ramp-encoded output, 3=VALIDATED firmware curve composite (MPGlobe.enc)
+let ENC=3;           // DEFAULT 3=VALIDATED firmware curve composite (also the GLOW-off fallback). 0=interim Reinhard, 1=verbatim ramp-encoded (MPGlobe.enc)
 let SLUM=0.30;       // calibration: colored HDR r2 -> tonemap-curve domain (MPGlobe.slum); tuned via CDP vs the real present
                      // NOTE: the GLOW composite path uses its own calibrated SLUM (~0.15) -- set by MPGlobe.glow defaults below.
 let ATMO_ONLY=0;     // render only the atmosphere shell over black (MPGlobe.atmoOnly) -- for color validation
