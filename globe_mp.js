@@ -410,6 +410,10 @@ void main(){
 function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))errlog+=gl.getShaderInfoLog(o);return o;}
 function texPNG(src){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));want++;
  const im=new Image();im.onload=function(){if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,6408,5121,im);gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;};im.src=src;return t;}
+// mipmapped variant for the per-patch earth tiles: trilinear min filter kills the minification
+// shimmer/aliasing at patch boundaries (the firmware tiles are mipmapped). 512x512 = power of two.
+function texPNGmip(src){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));want++;
+ const im=new Image();im.onload=function(){if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,6408,5121,im);gl.generateMipmap(3553);gl.texParameteri(3553,10241,9987);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;};im.src=src;return t;}
 function texF32(src,w,h){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,1,1,0,6408,5126,new Float32Array([0,0,0,1]));want++;
  fetch(src).then(r=>r.arrayBuffer()).then(ab=>{if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,w,h,0,6408,5126,new Float32Array(ab));gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;});return t;}
 // fp16 float texture (RGBA16F internalformat=34842, filterable in WebGL2) for the real HDR tonemap LUTs
@@ -703,8 +707,8 @@ async function load(){
  // This is what the real surface fp samples (TEX2D(0,tc0.xy) etc); replaces the lossy single cube map.
  patchTex={};
  for(const p of D.patches){ const s3=String(p.idx).padStart(3,'0');
-   patchTex[p.idx]=[texPNG(BASE+'full_tex/p'+s3+'_t00.png'),texPNG(BASE+'full_tex/p'+s3+'_t01.png'),
-                    texPNG(BASE+'full_tex/p'+s3+'_t02.png'),texPNG(BASE+'full_tex/p'+s3+'_t03.png')]; }
+   patchTex[p.idx]=[texPNGmip(BASE+'full_tex/p'+s3+'_t00.png'),texPNGmip(BASE+'full_tex/p'+s3+'_t01.png'),
+                    texPNGmip(BASE+'full_tex/p'+s3+'_t02.png'),texPNGmip(BASE+'full_tex/p'+s3+'_t03.png')]; }
  const pos=new Float32Array(await fetch(BASE+'mesh/live_surf0_pos.bin').then(r=>r.arrayBuffer()));
  const xyz=[];for(let i=0;i<289;i++)xyz.push(pos[i*4],pos[i*4+1],pos[i*4+2],pos[i*4+3]);
  // star catalog (real-derived celestial directions); build a POINTS vertex buffer
