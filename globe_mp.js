@@ -186,7 +186,7 @@ in vec4 tc0,tc3,tc4,tc5,tc6,tc8,tc9; in vec3 vN; in vec3 vL; in vec3 vSph;
 uniform sampler2D tex4,tex5,tex6,tex13,tex14,tex15;
 uniform samplerCube earthCube, cloudsCube, maskCube;   // firmware CUBEEARTH/clouds/mask (earth.qrc), seamless
 uniform vec4 fc[23];
-uniform float uDbg, uMode;
+uniform float uDbg, uMode, uSlum;
 out vec4 ocol0;
 vec3 nrm(vec3 v){return length(v)>0.0?normalize(v):v;}
 vec3 fma3(vec3 a,vec3 b,vec3 c){return a*b+c;}
@@ -264,6 +264,18 @@ void main(){
   if(uDbg>2.5){ ocol0=vec4(sd*0.5+0.5,1.0); return; }          // sd direction as color (should be smooth)
   if(uDbg>1.5){ ocol0=vec4(texture(cloudsCube,sd).xyz,1.0); return; }
   if(uDbg>0.5){ float d=clamp(dot(normalize(vN),normalize(vL))*0.8+0.4,0.0,1.0); ocol0=vec4(texture(earthCube,sd).xyz*d,1.0); return; }
+  if(uMode>2.5){
+    // VALIDATED firmware composite (agent MSE 0.0023 vs real present): per-channel real LUT tonemap CURVE
+    // applied to the colored HDR earth r2. curve(uv) = real LUT15 row0 .y (separable exposure curve, ~7.86*uv).
+    // uSlum calibrates r2 (colored HDR, x8) into the curve domain (= the firmware k*alpha encode scale).
+    // firmware warm per-channel bias (agent's measured k ratio R>G>B = the golden lit-side cast)
+    vec3 hc = r2.xyz * uSlum * vec3(1.0, 0.90, 0.85);
+    vec3 disp = vec3(
+      texture(tex15, vec2(clamp(hc.x,0.0,0.99),0.004)).y,
+      texture(tex15, vec2(clamp(hc.y,0.0,0.99),0.004)).y,
+      texture(tex15, vec2(clamp(hc.z,0.0,0.99),0.004)).y);
+    ocol0 = vec4(clamp(disp,0.0,1.0),1.0); return;
+  }
   if(uMode>1.5){ ocol0 = vec4(clamp(log2(max(r2.xyz,0.0)+1.0)/6.0,0.0,1.0), 1.0); return; }  // raw HDR r2 (log-encoded for readback): r2=2^(v*6)-1
   if(uMode>0.5){ ocol0 = vec4(col0.xyz, 1.0); return; }         // verbatim ramp-encoded output
   ocol0 = vec4(clamp(tc,0.0,1.0), 1.0);
@@ -303,6 +315,9 @@ function texPNG(src){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texIma
  const im=new Image();im.onload=function(){if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,6408,5121,im);gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;};im.src=src;return t;}
 function texF32(src,w,h){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,1,1,0,6408,5126,new Float32Array([0,0,0,1]));want++;
  fetch(src).then(r=>r.arrayBuffer()).then(ab=>{if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,w,h,0,6408,5126,new Float32Array(ab));gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;});return t;}
+// fp16 float texture (RGBA16F internalformat=34842, filterable in WebGL2) for the real HDR tonemap LUTs
+function texF16(src,w,h){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,34842,1,1,0,6408,5126,new Float32Array([0,0,0,1]));want++;
+ fetch(src).then(r=>r.arrayBuffer()).then(ab=>{if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,34842,w,h,0,6408,5126,new Float32Array(ab));gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;});return t;}
 function blackTex(){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));return t;}
 // Build a WebGL cube-map from the firmware's 6 assembled cube faces (earth.qrc CUBEEARTH/clouds/mask).
 // Calibrated arrangement (slots/flip) verified vs geography: continents seamless, poles centered.
@@ -343,6 +358,7 @@ function draw(){
  gl.uniform1f(U('uFlipY'),1.0);
  gl.uniform1f(U('uDbg'),DBG);
  gl.uniform1f(U('uMode'),ENC);
+ gl.uniform1f(U('uSlum'),SLUM);
  const fcsrc=curFC||D.fc;  // per-scene captured fragment constants when cycling, else baked
  const fc=new Float32Array(23*4); for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
  gl.uniform4fv(U('fc'),fc);
@@ -413,7 +429,8 @@ function pickPreset(i){ // resolve a PRESETS entry to a loaded camera path (fall
 let SCENES=null, sceneIdx=0, SCENES_IDX=null, SCENE_FC=null, curFC=null;
 let SCENE_SECS=18;   // wall-seconds per scene before advancing (tunable via MPGlobe.sceneSecs)
 let DBG=0;           // debug output selector (MPGlobe.dbg): 1=earth 2=clouds 3=sd-direction
-let ENC=0;           // 0=interim Reinhard tonemap, 1=verbatim ramp-encoded output (MPGlobe.enc)
+let ENC=0;           // 0=interim Reinhard tonemap, 1=verbatim ramp-encoded output, 3=VALIDATED firmware curve composite (MPGlobe.enc)
+let SLUM=0.30;       // calibration: colored HDR r2 -> tonemap-curve domain (MPGlobe.slum); tuned via CDP vs the real present
 let ATMO_ONLY=0;     // render only the atmosphere shell over black (MPGlobe.atmoOnly) -- for color validation
 let USE_COH=true;    // DEFAULT = coherent set (9 scenes) + aligned atmosphere limb (verified cyan Rayleigh).
                      // QA confirmed BOTH sets overexpose equally at bright moments under the interim Reinhard
@@ -461,8 +478,10 @@ async function load(){
  sharedTex.tex4=texF32(BASE+'full_tex/t04_f32.bin',256,128);
  sharedTex.tex5=texF32(BASE+'full_tex/t05_f32.bin',256,1);
  sharedTex.tex6=texF32(BASE+'full_tex/t06_f32.bin',64,64);
- sharedTex.tex14=texPNG(BASE+'full_tex/t14.png');
- sharedTex.tex15=texPNG(BASE+'full_tex/t15.png');
+ // REAL fp16 HDR tonemap LUTs (RTDUMP'd ac2b90000/ac2b70000, Y16_X16_FLOAT, max ~7.86) -- replaces
+ // the old 8-bit t14/t15.png which clipped the HDR. tex15 row0 .y = the validated tonemap CURVE.
+ sharedTex.tex14=texF16(BASE+'lut14_rgba32f_128.bin',128,128);
+ sharedTex.tex15=texF16(BASE+'lut15_rgba32f_128.bin',128,128);
  // seamless firmware cube-maps (replace the per-patch tile assembly)
  sharedTex.earthCube=cubeTex('earth');
  sharedTex.cloudsCube=cubeTex('clouds');
@@ -531,6 +550,7 @@ const MPGlobe={
    animT=0.0; draw(); },
  set dbg(v){ DBG=v; },
  set enc(v){ ENC=v; },
+ set slum(v){ SLUM=v; },
  set atmoOnly(v){ ATMO_ONLY=v?1:0; },
  set atmo(v){ ATMO=v?1:0; },
  get atmo(){ return ATMO; },
