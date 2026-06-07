@@ -415,9 +415,11 @@ let SCENE_SECS=18;   // wall-seconds per scene before advancing (tunable via MPG
 let DBG=0;           // debug output selector (MPGlobe.dbg): 1=earth 2=clouds 3=sd-direction
 let ENC=0;           // 0=interim Reinhard tonemap, 1=verbatim ramp-encoded output (MPGlobe.enc)
 let ATMO_ONLY=0;     // render only the atmosphere shell over black (MPGlobe.atmoOnly) -- for color validation
-let USE_COH=false;   // false = clean fc_cap5 surface set (no overexposure, no atmo). true = coherent set +
-                     // aligned atmosphere limb, BUT its brighter/closer scenes overexpose under the interim
-                     // tonemap (needs the real firmware HDR ramp/compositor decode). Toggle: MPGlobe.coherent
+let USE_COH=false;   // DEFAULT = clean fc_cap5 set. The coherent set (9 scenes + aligned atmosphere limb) is
+                     // ready behind MPGlobe.coherent, BUT both sets overexpose at bright scene moments under the
+                     // interim Reinhard tonemap (measured: 8/9 coherent scenes blow 0.16-0.27, fc_cap5 similar).
+                     // Neither is clean during animation until the HDR DECODE (DRAW 18, project_globe_pass_graph)
+                     // lands -- that single supervised fp capture fixes exposure for BOTH sets + ships the atmosphere.
 function setFC(){ curFC = (SCENE_FC && SCENES_IDX && SCENES_IDX[sceneIdx] && SCENE_FC[String(SCENES_IDX[sceneIdx].scene)]) || null;
  ATMO_SCENE = (ATMO_SCENES && ATMO_SCENES[sceneIdx]) || null; }
 const SCENE_KEYS=['260','261','262','263','264','265','268','269','270','454','455','456','457','458','459','460','461','462','463','464','465','466','467'];
