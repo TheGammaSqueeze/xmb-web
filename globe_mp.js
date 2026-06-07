@@ -264,6 +264,7 @@ void main(){
   if(uDbg>2.5){ ocol0=vec4(sd*0.5+0.5,1.0); return; }          // sd direction as color (should be smooth)
   if(uDbg>1.5){ ocol0=vec4(texture(cloudsCube,sd).xyz,1.0); return; }
   if(uDbg>0.5){ float d=clamp(dot(normalize(vN),normalize(vL))*0.8+0.4,0.0,1.0); ocol0=vec4(texture(earthCube,sd).xyz*d,1.0); return; }
+  if(uMode>1.5){ ocol0 = vec4(clamp(log2(max(r2.xyz,0.0)+1.0)/6.0,0.0,1.0), 1.0); return; }  // raw HDR r2 (log-encoded for readback): r2=2^(v*6)-1
   if(uMode>0.5){ ocol0 = vec4(col0.xyz, 1.0); return; }         // verbatim ramp-encoded output
   ocol0 = vec4(clamp(tc,0.0,1.0), 1.0);
 }`;
@@ -519,6 +520,11 @@ const MPGlobe={
  get sceneSecs(){ return SCENE_SECS; },
  _setScene(i){ if(SCENES){ sceneIdx=((i%SCENES.length)+SCENES.length)%SCENES.length; animT=0; setFC(); } },  // diagnostic: force a scene
  _setT(t){ animT=t; },
+ _render(obj){ if(!D)return; running=false;        // inject exact-frame consts + draw (decode/validation)
+   for(const k in (obj.shared||{})) D.shared[k]=obj.shared[k];
+   if(obj.fc) curFC=obj.fc;
+   if(obj.atmo){ const a={t:0}; for(const k in obj.atmo) a[k]=obj.atmo[k]; ATMO_SCENE=[a,Object.assign({},a,{t:1})]; ATMO=1; } else { ATMO=0; }
+   animT=0.0; draw(); },
  set dbg(v){ DBG=v; },
  set enc(v){ ENC=v; },
  set atmo(v){ ATMO=v?1:0; },
