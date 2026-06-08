@@ -1,1 +1,90 @@
-[{"scene": 0, "frames": 51, "R": 2.13, "file": "scene_00_coh.json", "skip": false, "atmo": true}, {"scene": 1, "frames": 76, "R": 2.82, "file": "scene_01_coh.json", "skip": false, "atmo": true}, {"scene": 2, "frames": 149, "R": 3.72, "file": "scene_02_coh.json", "skip": false, "atmo": true}, {"scene": 3, "frames": 161, "R": 3.98, "file": "scene_03_coh.json", "skip": false, "atmo": true}, {"scene": 4, "frames": 120, "R": 4.92, "file": "scene_04_coh.json", "skip": false, "atmo": true}, {"scene": 5, "frames": 18, "R": 6.87, "file": "scene_05_coh.json", "skip": false, "atmo": true}, {"scene": 6, "frames": 64, "R": 7.12, "file": "scene_06_coh.json", "skip": false, "atmo": true}, {"scene": 7, "frames": 168, "R": 7.91, "file": "scene_07_coh.json", "skip": false, "atmo": true}, {"scene": 8, "frames": 53, "R": 9.8, "file": "scene_08_coh.json", "skip": false, "atmo": true}]
+[
+{
+"scene": 0,
+"frames": 53,
+"R": 4.861,
+"file": "scene_00_coh.json",
+"skip": false,
+"atmo": true
+},
+{
+"scene": 1,
+"frames": 146,
+"R": 3.916,
+"file": "scene_01_coh.json",
+"skip": false,
+"atmo": true
+},
+{
+"scene": 2,
+"frames": 38,
+"R": 4.139,
+"file": "scene_02_coh.json",
+"skip": false,
+"atmo": true
+},
+{
+"scene": 3,
+"frames": 69,
+"R": 2.085,
+"file": "scene_03_coh.json",
+"skip": false,
+"atmo": true
+},
+{
+"scene": 4,
+"frames": 34,
+"R": 2.055,
+"file": "scene_04_coh.json",
+"skip": false,
+"atmo": true
+},
+{
+"scene": 5,
+"frames": 29,
+"R": 6.519,
+"file": "scene_05_coh.json",
+"skip": false,
+"atmo": true
+},
+{
+"scene": 6,
+"frames": 90,
+"R": 9.047,
+"file": "scene_06_coh.json",
+"skip": false,
+"atmo": true
+},
+{
+"scene": 7,
+"frames": 56,
+"R": 6.52,
+"file": "scene_07_coh.json",
+"skip": false,
+"atmo": true
+},
+{
+"scene": 8,
+"frames": 23,
+"R": 3.407,
+"file": "scene_08_coh.json",
+"skip": false,
+"atmo": true
+},
+{
+"scene": 9,
+"frames": 13,
+"R": 3.465,
+"file": "scene_09_coh.json",
+"skip": false,
+"atmo": true
+},
+{
+"scene": 10,
+"frames": 13,
+"R": 3.393,
+"file": "scene_10_coh.json",
+"skip": false,
+"atmo": true
+}
+]

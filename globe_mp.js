@@ -29,7 +29,7 @@ let _lastGlow=null;             // diagnostic handle to last buildGlow result
 // project_globe_ground_truth_2026-06-07). GLOW_SLUM = the firmware HDR.mnu EXPOSURE (0.789, same as
 // the ENC0 surface path that measured B/G=1.10 == the real present). GLOW_GAIN = additive bloom
 // strength (neutral; the sun glint/limb halo). Both verified via /tmp/render_compare.py vs the present.
-let GLOW_GAIN=[0.0004,0.0003,0.0002];  // bloom gain: web bloom accumulator ~450x firmware; tiny gain matches the real limb-halo contribution
+let GLOW_GAIN=[0.00222,0.00222,0.00222];  // bloom gain = 1/450 (web bloom accumulator ~450x firmware) -> adds the firmware bloom at FULL weight per the verbatim composite fp 316de80a (scene*0.125 + bloom*1). NOT a tiny limb-halo: the bloom is the dominant haze.
 let GLOW_WARM=[1.0,1.0,1.0];   // retained for the MPGlobe.glowWarm setter API; no longer used by C_FS
 // Exposure into the per-channel extended-Reinhard. DERIVED (not eyeballed): the surface fp emits
 // r2 = colored_earth * 8.0 (the HDR scale for the bloom path, globe_mp.js ~line 279). The real HDR.mnu
@@ -39,7 +39,7 @@ let GLOW_WARM=[1.0,1.0,1.0];   // retained for the MPGlobe.glowWarm setter API; 
 // (dark scenes stay dim, bright scenes roll off, NOT blown white). VALIDATED 2026-06-07: web earth midtone
 // [77,86,95] vs real present [74,84,94] = ratio 1.03, B/G 1.11 (== the real present). The old 0.42 was
 // eyeball-tuned and 4.3x too bright (overexposed every bright scene to white).
-let GLOW_SLUM=0.0986;
+let GLOW_SLUM=0.789;  // decode exposure (HDR.mnu EXPOSURE) applied to the verbatim composite (scene*0.125 + bloom); scene*0.125*0.789=0.0986 keeps the surface match
 let GLOW_CHROMA=0;             // retained for the MPGlobe.glowChroma setter API; no longer used by C_FS
 let D=null, eMesh=null, want=0, got=0, sharedTex={}, patchTex=[], black=null;
 let aMesh=null, scatterTex=null, fcAtmo=null;        // verbatim atmosphere shell pass
@@ -380,7 +380,10 @@ void main(){
   // ENC0 path). Per-channel => the BLUE earth albedo is PRESERVED (measured real present lit-side
   // B/G=1.11). This replaces the wrong golden-luminance composite (which collapsed e to a single
   // intensity and re-cast it warm R>G>B -- not what the firmware does; see project_globe_ground_truth).
-  vec3 hc = (e + g * uGlowGain) * uSlum;
+  // VERBATIM firmware composite (RSX fp 316de80a): out = scene*0.125 + bloom(full weight),
+  // then *0.789 decode exposure (HDR.mnu). scene*0.125*0.789 = scene*0.0986 -> surface stays at
+  // the validated 0.65/255; bloom restored to FULL weight (the dominant haze the firmware adds).
+  vec3 hc = (e * 0.125 + g * uGlowGain) * uSlum;
   float W = 3.40918;
   vec3 toned = (hc*(1.0 + hc/(W*W)))/(1.0 + hc);
   ocol0 = vec4(clamp(toned,0.0,1.0), 1.0);
