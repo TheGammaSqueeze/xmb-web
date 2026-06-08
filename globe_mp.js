@@ -29,7 +29,10 @@ let _lastGlow=null;             // diagnostic handle to last buildGlow result
 // project_globe_ground_truth_2026-06-07). GLOW_SLUM = the firmware HDR.mnu EXPOSURE (0.789, same as
 // the ENC0 surface path that measured B/G=1.10 == the real present). GLOW_GAIN = additive bloom
 // strength (neutral; the sun glint/limb halo). Both verified via /tmp/render_compare.py vs the present.
-let GLOW_GAIN=[0.00222,0.00222,0.00222];  // bloom gain = 1/450 (web bloom accumulator ~450x firmware) -> adds the firmware bloom at FULL weight per the verbatim composite fp 316de80a (scene*0.125 + bloom*1). NOT a tiny limb-halo: the bloom is the dominant haze.
+let GLOW_GAIN=[0.00222,0.00222,0.00222];
+let GLOW2=0;  // sun-glare pass (verbatim fp 727d0242); gated default off until validated
+let glowSprite=null;
+let GLOW_FC=[[1920,1080,0,0],[1.00918,0,0,0],[-1,0,0,0],[0.249846,-0.956276,-5.25935,0],[1920,1080,0,0],[0.249846,-0.956276,-5.25935,0],[-1,1,0,0],[1,0,0,0],[1,1,1,1],[1,1,1,1],[1,1,1,1],[1,1,1,1],[0,0,0,2],[0.433875,0.0737772,0.0257549,0],[1,0,0,0],[1,1,1,1],[0.433875,0.0737772,0.0257549,0]];  // bloom gain = 1/450 (web bloom accumulator ~450x firmware) -> adds the firmware bloom at FULL weight per the verbatim composite fp 316de80a (scene*0.125 + bloom*1). NOT a tiny limb-halo: the bloom is the dominant haze.
 let GLOW_WARM=[1.0,1.0,1.0];   // retained for the MPGlobe.glowWarm setter API; no longer used by C_FS
 // Exposure into the per-channel extended-Reinhard. DERIVED (not eyeballed): the surface fp emits
 // r2 = colored_earth * 8.0 (the HDR scale for the bloom path, globe_mp.js ~line 279). The real HDR.mnu
@@ -265,7 +268,7 @@ void main(){
   h0.xyz = pc3(fma3(-r1.xyz, fc[10].xxx, r0.xyz), 0.,1.);
   h0.w = fc[11].y;
   r0.zw = fc[12].xy;
-  r2.x = texture(tex6, h7.zw).x;
+  r2.x = texture(tex6, h7.zw).y;   // fp: TEX2D(6).x = env/specular BRDF LUT (ocean sun-glint). TEXDUMP of the 0xbf format stores its single channel in G (R/B all-zero, verified); the firmware's RSX remap reads it via .x -> sample .y here. Reading .x was all-zero => the glint never rendered.
   h1.xyz = fma3(r1.www, fc[13].xyz, vec3(r0.z,r0.w,r0.w));
   r3.x = fc[14].x;
   r4.z = fc[15].y;
@@ -372,6 +375,46 @@ uniform sampler2D uGlow;    // bloom pyramid result from GlobeGlow.buildGlow
 uniform float uSlum;        // exposure into the tonemap (firmware HDR.mnu EXPOSURE 0.789)
 uniform vec3  uGlowGain;    // per-channel additive bloom gain (sun glint / limb halo)
 in vec2 vUV; out vec4 ocol0;
+uniform sampler2D uSprite; uniform float uGlow2; uniform vec2 uDims;
+uniform vec4 c260,c261,c262,c263; uniform vec4 gfc[17];
+float gdivsq(float a,float b){return a/sqrt(abs(b)+1e-12);}
+vec3 computeGlare(){
+  vec2 ndc=vUV*2.0-1.0;
+  vec3 ray=cross(c260.xyz-ndc.x*c263.xyz, c261.xyz-ndc.y*c263.xyz);
+  if(dot(c263.xyz,ray)<0.0) ray=-ray;
+  vec4 r0=vec4(0.),r1=vec4(0.),r2=vec4(0.);
+  r0.z=dot(ray,ray);
+  r0.x=1.0/uDims.x; r1.w=gfc[1].x;
+  r1.xyz=ray/sqrt(abs(r0.z)+1e-12);
+  r1.w=r1.w+gfc[2].x;
+  r0.z=dot(r1.xyz,-gfc[3].xyz);
+  r0.y=1.0/uDims.y;
+  r1.xyz=r1.xyz*r0.z+gfc[5].xyz;
+  r0.xy=gl_FragCoord.xy*vec2(r0.x,r0.y);
+  r1.w=1.0/r1.w;
+  r0.w=dot(r1.xyz,r1.xyz);
+  r0.xy=-r0.xy*gfc[6].xy+abs(vec2(gfc[6].z,gfc[6].x));
+  r0.xyz=texture(uEarth,r0.xy).xyz;
+  r1.xyz=(-r0.xyz+gfc[7].x);
+  r1.xyz=(-r0.xyz*r1.xyz+r1.xyz)/4.0;
+  r2.w=(r0.y*gfc[8].y+r1.y)*4.0;
+  r1.z=(r0.z*gfc[9].y+r1.z)*4.0;
+  r2.x=gdivsq(abs(r0.w),r0.w);
+  r0.w=(r0.x*gfc[10].y+r1.x)*4.0;
+  r1.x=gdivsq(abs(r0.w),r0.w);
+  r0.w=clamp((r2.x*r1.x-r1.x)*2.0,0.0,1.0);
+  r1.y=gdivsq(abs(r2.w),r2.w);
+  r1.w=gfc[11].y*gfc[12].w;
+  r2.xyz=r0.www*(-gfc[13].xyz)+r0.www;
+  r1.z=gdivsq(abs(r1.z),r1.z);
+  r0.xyz=r0.xyz+r1.xyz;
+  r0.w=1.0/r1.w;
+  r0.xyz=r0.xyz*r0.www-r0.www;
+  r0.xyz=r0.xyz/gfc[15].x;
+  r2.xyz=r2.xyz+gfc[16].xyz;
+  vec3 spr=texture(uSprite,vUV).xyz;
+  return max((spr*r2.xyz+r0.xyz)*8.0, 0.0);
+}
 void main(){
   vec3 e = texture(uEarth, vUV).xyz;
   vec3 g = texture(uGlow,  vUV).xyz;
@@ -383,6 +426,7 @@ void main(){
   // VERBATIM firmware composite (RSX fp 316de80a): out = scene*0.125 + bloom(full weight),
   // then *0.789 decode exposure (HDR.mnu). scene*0.125*0.789 = scene*0.0986 -> surface stays at
   // the validated 0.65/255; bloom restored to FULL weight (the dominant haze the firmware adds).
+  if(uGlow2>0.5) e = e + computeGlare();   // verbatim firmware sun-glare (fp 727d0242), gated
   vec3 hc = (e * 0.125 + g * uGlowGain) * uSlum;
   float W = 3.40918;
   vec3 toned = (hc*(1.0 + hc/(W*W)))/(1.0 + hc);
@@ -539,6 +583,12 @@ function drawGlow(){
  gl.activeTexture(33984+1);gl.bindTexture(3553,glow.tex);gl.uniform1i(C('uGlow'),1);
  gl.uniform1f(C('uSlum'),GLOW_SLUM);     // exposure into the per-channel HDR.mnu tonemap (firmware EXPOSURE 0.789)
  gl.uniform3fv(C('uGlowGain'),new Float32Array(GLOW_GAIN));
+ gl.activeTexture(33984+2);gl.bindTexture(3553,glowSprite||black);gl.uniform1i(C('uSprite'),2);
+ gl.uniform1f(C('uGlow2'),GLOW2); gl.uniform2f(C('uDims'),W,H);
+ {const sh=D.shared||{};const gv=k=>{const v=sh[k]||[0,0,0,0];return [v[0],v[1],v[2],v[3]];};
+  gl.uniform4f(C('c260'),...gv('260'));gl.uniform4f(C('c261'),...gv('261'));gl.uniform4f(C('c262'),...gv('262'));gl.uniform4f(C('c263'),...gv('263'));
+  const gf=new Float32Array(17*4);for(let i=0;i<17;i++){const v=GLOW_FC[i]||[0,0,0,0];gf[i*4]=v[0];gf[i*4+1]=v[1];gf[i*4+2]=v[2];gf[i*4+3]=v[3];}
+  gl.uniform4fv(C('gfc'),gf);}
  gl.bindVertexArray(glowVAO);
  gl.drawArrays(4,0,3);
  gl.bindVertexArray(null);
@@ -558,6 +608,7 @@ function drawAtmoLinear(){
  gl.uniform1f(U('uFlipY'),1.0);
  gl.uniform1f(U('uLinear'),1.0);
  gl.uniform3fv(U('c5'),c5);gl.uniform3fv(U('c6'),c6);gl.uniform3fv(U('c7'),c7);gl.uniform3fv(U('c8'),c8);
+ if(curFC&&curFC[4])fcAtmo[16*4]=curFC[4][1];   // per-scene atmosphere intensity: real const[16].x == surface fc[4].y (the per-scene lighting scale, ~1.3 dim..3.7 eclipse); fcAtmo was one-config (~1.485) so the eclipse atmosphere was ~0.4x too dim
  gl.uniform4fv(U('fc'),fcAtmo);
  gl.activeTexture(33984);gl.bindTexture(3553,scatterTex);gl.uniform1i(U('tex0'),0);
  gl.disable(2884); gl.depthMask(false); gl.enable(3042); gl.blendFunc(1,1);
@@ -612,6 +663,7 @@ function drawAtmo(){
  gl.uniform1f(U('uFlipY'),1.0);
  gl.uniform1f(U('uLinear'),0.0);
  gl.uniform3fv(U('c5'),c5);gl.uniform3fv(U('c6'),c6);gl.uniform3fv(U('c7'),c7);gl.uniform3fv(U('c8'),c8);
+ if(curFC&&curFC[4])fcAtmo[16*4]=curFC[4][1];   // per-scene atmosphere intensity: real const[16].x == surface fc[4].y (the per-scene lighting scale, ~1.3 dim..3.7 eclipse); fcAtmo was one-config (~1.485) so the eclipse atmosphere was ~0.4x too dim
  gl.uniform4fv(U('fc'),fcAtmo);
  gl.activeTexture(33984);gl.bindTexture(3553,scatterTex);gl.uniform1i(U('tex0'),0);
  gl.disable(2884); gl.depthMask(false); gl.enable(3042); gl.blendFunc(1,1);   // ONE,ONE additive
@@ -707,6 +759,7 @@ async function load(){
  // REAL fp16 HDR tonemap LUTs (RTDUMP'd ac2b90000/ac2b70000, Y16_X16_FLOAT, max ~7.86) -- replaces
  // the old 8-bit t14/t15.png which clipped the HDR. tex15 row0 .y = the validated tonemap CURVE.
  sharedTex.tex14=texF16(BASE+'lut14_rgba32f_128.bin',128,128);
+ glowSprite=texPNG(BASE+'glow_sprite.png');
  sharedTex.tex15=texF16(BASE+'lut15_rgba32f_128.bin',128,128);
  // seamless firmware cube-maps (replace the per-patch tile assembly)
  sharedTex.earthCube=cubeTex('earth');
@@ -800,6 +853,8 @@ set cull(v){ CULL=v?1:0; },
  set t2all(v){ T2ALL=v?1:0; },                 // test: all-patch cloud from the cube (uniform cloud)
  get t2all(){ return T2ALL; },
  set starBri(v){ STAR_BRI=v; },
+ set glow2(v){ GLOW2=v?1:0; }, get glow2(){ return GLOW2; },
+ setGlowFC(v){ if(Array.isArray(v)&&v.length>=17) GLOW_FC=v; },
  get starBri(){ return STAR_BRI; },
  get starCount(){ return starN; },
  set dbg(v){ DBG=v; },
