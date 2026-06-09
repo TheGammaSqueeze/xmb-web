@@ -194,6 +194,9 @@
 
   function allocPyramid(st, srcW, srcH){
     const gl = st.gl;
+    // free the previous pyramid (resize used to leak ~17 RGBA16F RTs = ~30MB per canvas resize)
+    if (st.pyramid){ for (const rt of st.pyramid.A.concat(st.pyramid.B)){ gl.deleteFramebuffer(rt.fbo); gl.deleteTexture(rt.tex); } }
+    if (st.glowRT){ gl.deleteFramebuffer(st.glowRT.fbo); gl.deleteTexture(st.glowRT.tex); }
     // Pyramid level sizes: level0 = (srcW, srcH/2) then halve each dim.
     // (firmware: 512x512 src -> 512x256, 256x128, 128x64, 64x32, 32x16, 16x8, 8x4, 4x2)
     const dims = [];

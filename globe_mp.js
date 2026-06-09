@@ -600,11 +600,11 @@ void main(){
 }`;
 function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))errlog+=gl.getShaderInfoLog(o);return o;}
 function texPNG(src){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));want++;
- const im=new Image();im.onload=function(){if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,6408,5121,im);gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;};im.src=src;return t;}
+ const im=new Image();im.onload=function(){if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,6408,5121,im);gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;};im.onerror=function(){got++;};im.src=src;return t;}
 // mipmapped variant for the per-patch earth tiles: trilinear min filter kills the minification
 // shimmer/aliasing at patch boundaries (the firmware tiles are mipmapped). 512x512 = power of two.
 function texPNGmip(src){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));want++;
- const im=new Image();im.onload=function(){if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,6408,5121,im);gl.generateMipmap(3553);gl.texParameteri(3553,10241,9987);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;};im.src=src;return t;}
+ const im=new Image();im.onload=function(){if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,6408,5121,im);gl.generateMipmap(3553);gl.texParameteri(3553,10241,9987);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;};im.onerror=function(){got++;};im.src=src;return t;}
 function texF32(src,w,h,opt){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,1,1,0,6408,5126,new Float32Array([0,0,0,1]));if(!opt)want++;
  fetch(src).then(r=>{if(!r.ok)throw 0;return r.arrayBuffer();}).then(ab=>{if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,w,h,0,6408,5126,new Float32Array(ab));gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);t.loaded=true;if(!opt)got++;}).catch(()=>{if(!opt)got++;});return t;}
 // fp16 float texture (RGBA16F internalformat=34842, filterable in WebGL2) for the real HDR tonemap LUTs
@@ -626,7 +626,8 @@ function cubeTex(prefix){const t=gl.createTexture();gl.bindTexture(34067,t);
    if(nface===6){ gl.bindTexture(34067,t); gl.generateMipmap(34067);       // mipmaps kill the high-freq cloud moire
      gl.texParameteri(34067,10241,9987);   // MIN_FILTER = LINEAR_MIPMAP_LINEAR (trilinear)
      gl.texParameteri(34067,10240,9729);gl.texParameteri(34067,10242,33071);gl.texParameteri(34067,10243,33071);gl.texParameteri(34067,32882,33071);
-   }};})(s,im); im.src=BASE+prefix+'_face'+CUBE_SLOTS[s]+'.png';}
+   }};})(s,im); im.onerror=function(){got++;};   // count failed faces so a lost request can never freeze ready() (cube stays placeholder; nface untouched so mipmap only builds when all 6 truly load)
+   im.src=BASE+prefix+'_face'+CUBE_SLOTS[s]+'.png';}
  return t;}
 
 function buildVC(corners){const s=D.shared;const vc=new Float32Array(104);const set=(i,a)=>{vc[i*4]=a[0];vc[i*4+1]=a[1];vc[i*4+2]=a[2];vc[i*4+3]=a[3];};
@@ -679,26 +680,41 @@ function applySceneFcAtmo(s){
 let _psFrame=null, _psScat=null, _psSurfTex=null;
 // cap set: select the captured in-scatter+limb LUT textures for the current scene at the nearest
 // captured frame to the current playback position (real per-scene LUTs; null for scenes not yet captured).
-function capSceneLut(si, t){
+// STICKY per-scene LUT selection + lookahead prefetch. The plain lazy load returned null until the
+// nearest bin arrived, silently swapping in the STATIC fallback assets (captured from a DIFFERENT
+// scene) and toggling the limb on/off -> flicker / objects popping / cross-scene asset mismatch,
+// worst on the slow LFS media endpoint. Now: prefetch the playhead bin + LUT_LOOKAHEAD upcoming
+// bins, and while the exact-nearest bin is still in flight HOLD the last LOADED bin of the same
+// scene (else the last loaded of any scene; the dip-to-black scene fade covers that brief hold).
+const LUT_LOOKAHEAD=8;
+let _lutStick={}, _toneStick={};   // SAME-SCENE sticky only: never show another scene's lighting (a cross-scene hold made scene boundaries render a mismatched limb glow). Until the scene's own first bin arrives the in-path static fallback is used (and no limb).
+let SCENE_HAS_TONE=true;           // per-scene faithful-path gate (set in setFC)
+let SCENE_SKIP=new Set();          // degenerate (static-artifact) scene indices, skipped in the cycle
+function _nearestIdx(list,fr){ let bi=0; for(let i=1;i<list.length;i++){ if(Math.abs(list[i].fr-fr)<Math.abs(list[bi].fr-fr)) bi=i; } return bi; }
+function capSceneLut(si, t, frOpt){
  if(!CAP_SCENE_LUTS||!SCENES_IDX||!SCENES_IDX[si]) return null;
  const s=SCENES_IDX[si]; const list=CAP_SCENE_LUTS[String(s.scene)];
  if(!list||!list.length) return null;
- const fr=s.frame0 + t*((s.frame1-s.frame0)||1);
- let best=list[0]; for(const e of list){ if(Math.abs(e.fr-fr)<Math.abs(best.fr-fr)) best=e; }
- let c=CAP_LUT_CACHE[best.fr];   // lazy + non-blocking: load this scene's nearest in-scatter/limb bin on demand (opt=true so it never blocks ready)
- if(!c) c=CAP_LUT_CACHE[best.fr]={surf:texF32(lfsURL(best.surf),256,128,true), limb:texF32(lfsURL(best.limb),256,128,true)};
- return (c.surf.loaded&&c.limb.loaded)?c:null;  // null until loaded (or if absent) -> static fallback
+ const fr=(frOpt!==undefined)?frOpt:(s.frame0 + t*((s.frame1-s.frame0)||1));
+ const bi=_nearestIdx(list,fr);
+ for(let k=0;k<=LUT_LOOKAHEAD && bi+k<list.length;k++){ const e=list[bi+k];
+   if(!CAP_LUT_CACHE[e.fr]) CAP_LUT_CACHE[e.fr]={surf:texF32(lfsURL(e.surf),256,128,true), limb:texF32(lfsURL(e.limb),256,128,true)}; }
+ const c=CAP_LUT_CACHE[list[bi].fr];
+ if(c.surf.loaded&&c.limb.loaded){ _lutStick[String(s.scene)]=c; return c; }
+ return _lutStick[String(s.scene)]||null;
 }
 // cap set: select this scene's REAL surface-fp tonemap LUT (tex14/tex15) at the nearest captured frame.
-function capSceneTone(si, t){
+function capSceneTone(si, t, frOpt){
  if(!CAP_SCENE_TONE||!SCENES_IDX||!SCENES_IDX[si]) return null;
  const s=SCENES_IDX[si]; const list=CAP_SCENE_TONE[String(s.scene)];
  if(!list||!list.length) return null;
- const fr=s.frame0 + t*((s.frame1-s.frame0)||1);
- let best=list[0]; for(const e of list){ if(Math.abs(e.fr-fr)<Math.abs(best.fr-fr)) best=e; }
- let c=CAP_TONE_CACHE[best.fr];   // lazy + non-blocking: load this scene's nearest tonemap LUT on demand
- if(!c) c=CAP_TONE_CACHE[best.fr]={t14:texF16(lfsURL(best.t14),128,128,true), t15:texF16(lfsURL(best.t15),128,128,true)};
- return (c.t14.loaded&&c.t15.loaded)?c:null;  // null until loaded (or if absent) -> static fallback
+ const fr=(frOpt!==undefined)?frOpt:(s.frame0 + t*((s.frame1-s.frame0)||1));
+ const bi=_nearestIdx(list,fr);
+ for(let k=0;k<=LUT_LOOKAHEAD && bi+k<list.length;k++){ const e=list[bi+k];
+   if(!CAP_TONE_CACHE[e.fr]) CAP_TONE_CACHE[e.fr]={t14:texF16(lfsURL(e.t14),128,128,true), t15:texF16(lfsURL(e.t15),128,128,true)}; }
+ const c=CAP_TONE_CACHE[list[bi].fr];
+ if(c.t14.loaded&&c.t15.loaded){ _toneStick[String(s.scene)]=c; return c; }
+ return _toneStick[String(s.scene)]||null;
 }
 function resolveInscat(){
  _psFrame=null; _psScat=null; _psName=null;
@@ -837,7 +853,7 @@ function starCubeTex(src){ const t=gl.createTexture(); gl.bindTexture(34067,t);
    for(let s=0;s<6;s++) gl.texImage2D(CUBE_FACE_ENUM[s],0,6408,6408,5121,im);   // same real star tile on all 6 faces (firmware tiles it)
    gl.texParameteri(34067,10241,9729);gl.texParameteri(34067,10240,9729);
    gl.texParameteri(34067,10242,33071);gl.texParameteri(34067,10243,33071);gl.texParameteri(34067,32882,33071);
-   got++; }; im.src=src; return t; }
+   got++; }; im.onerror=function(){got++;}; im.src=src; return t; }
 // 2D star texture, REPEAT-wrapped + mipmapped: the firmware tiles this on the cube; tiling -> minification ->
 // the mipmap averages most of the gray band down, leaving sparse crisp ~1px stars (see STARTEX_FS uTile).
 function star2DTex(src){ const t=gl.createTexture(); gl.bindTexture(3553,t);
@@ -848,7 +864,7 @@ function star2DTex(src){ const t=gl.createTexture(); gl.bindTexture(3553,t);
    gl.texParameteri(3553,10240,9729);                                       // mag LINEAR
    gl.texParameteri(3553,10241,9987);                                       // min LINEAR_MIPMAP_LINEAR
    gl.generateMipmap(3553);
-   got++; }; im.src=src; return t; }
+   got++; }; im.onerror=function(){got++;}; im.src=src; return t; }
 function drawStarsTex(){
  if(!STARTEX||!starTexProg||!starBoxBuf||!star2D||!D) return;
  const s=D.shared; if(!s['260']||!s['263']) return;
@@ -1135,7 +1151,7 @@ function drawAtmoLinear(){
 
 function draw(){
  if(!gl||!D||!eMesh||got<want)return;
- if(GLOWFAITH && hdrExt && cprog && glowVAO && typeof GlobeGlow!=='undefined' && (!TONELUT_PS || CAP_T14)){ drawGlowFaith(); return; }   // faithful path; needs the per-scene tonemap LUT when TONELUT_PS -> else fall through to drawGlow (works with static LUTs when the per-scene LUT bins are not deployed)
+ if(GLOWFAITH && hdrExt && cprog && glowVAO && typeof GlobeGlow!=='undefined' && (!TONELUT_PS || SCENE_HAS_TONE)){ drawGlowFaith(); return; }   // faithful path; per-SCENE gate (not per-frame load state, which flipped pipelines mid-scene = full-frame flicker). While a bin is in flight drawGlowFaith degrades IN-PATH via CAP_T14||sharedTex.tex14.
  if(GLOW && hdrExt && cprog && glowVAO && typeof GlobeGlow!=='undefined'){ drawGlow(); return; }   // gated new path (needs RGBA16F FBO)
  const W=canvas.width,H=canvas.height;
  gl.viewport(0,0,W,H);gl.clearColor(0,0,0,1);gl.clear(16640);gl.enable(2929);gl.depthFunc(515);
@@ -1255,13 +1271,30 @@ let USE_COH=true;    // DEFAULT = coherent set (9 scenes) + aligned atmosphere l
                      // to 1:1 (it ADDS the atmosphere limb the real globe has). Reverts to fc_cap5 via
                      // MPGlobe.coherent=false. Correct exposure ships when the decode lands (GLOBE_FINISH_PROCEDURE).
 function setFC(){ curFC = (SCENE_FC && SCENES_IDX && SCENES_IDX[sceneIdx] && SCENE_FC[String(SCENES_IDX[sceneIdx].scene)]) || null;
- ATMO_SCENE = (ATMO_SCENES && ATMO_SCENES[sceneIdx]) || null; }
+ ATMO_SCENE = (ATMO_SCENES && ATMO_SCENES[sceneIdx]) || null;
+ SCENE_HAS_TONE = !TONELUT_PS || !!(CAP_SCENE_TONE && SCENES_IDX && SCENES_IDX[sceneIdx] && (CAP_SCENE_TONE[String(SCENES_IDX[sceneIdx].scene)]||[]).length); }
 const SCENE_KEYS=['260','261','262','263','264','265','268','269','270','454','455','456','457','458','459','460','461','462','463','464','465','466','467'];
+const HOLD_KEYS=new Set(['463','464','465','466','467']);   // STEPPED consts (LOD geomorph vc21 + tile UV transforms): the firmware switches them discretely; LERPING mid-step makes an invalid geomorph/UV for a window = spiky vertices + black tile checkerboard. Hold-previous instead.
 function sceneAt(F,t){
   if(t<=F[0].t)return F[0]; if(t>=F[F.length-1].t)return F[F.length-1];
   for(let i=0;i<F.length-1;i++){const a=F[i],b=F[i+1]; if(t>=a.t&&t<=b.t){const w=(t-a.t)/((b.t-a.t)||1);
-    const o={}; for(const k of SCENE_KEYS){const va=a[k],vb=b[k]; o[k]=va&&vb?va.map((x,j)=>x+(vb[j]-x)*w):va;} return o;}}
+    const o={}; for(const k of SCENE_KEYS){const va=a[k],vb=b[k]; o[k]=va&&vb?(HOLD_KEYS.has(k)?va:va.map((x,j)=>x+(vb[j]-x)*w)):va;}
+    if(a.fr!==undefined&&b.fr!==undefined) o.fr=a.fr+(b.fr-a.fr)*w;   // capture-frame of this playback moment (aligns LUT selection exactly, incl. trimmed rows)
+    return o;}}
   return F[F.length-1];
+}
+// Collapse capture-artifact STATIC HOLDS: the firmware globe sat frozen for stretches (inactive
+// globe) so consecutive captured rows are bit-identical; played back compressed this looked like
+// random FREEZING then a lurch. Dropping rows identical to the previous kept row makes playback
+// interpolate smoothly between the real distinct captured states across the hold instead.
+function trimStaticRows(F){
+  if(!F||F.length<3) return F;
+  const same=(a,b)=>{ for(const k of SCENE_KEYS){ const va=a[k],vb=b[k]; if(!va!==!vb) return false;
+    if(va&&vb){ if(va.length!==vb.length) return false; for(let j=0;j<va.length;j++) if(Math.abs(va[j]-vb[j])>1e-3) return false; } } return true; };
+  const keep=[F[0]];
+  for(let i=1;i<F.length-1;i++){ if(!same(keep[keep.length-1],F[i])) keep.push(F[i]); }
+  keep.push(F[F.length-1]);
+  return keep;
 }
 function tick(){
   if(!running||!D||!eMesh||got<want) return false;
@@ -1283,15 +1316,20 @@ function tick(){
       // bind this scene's REAL captured in-scatter (surface tex4) + limb (atmo tex0) LUT at the
       // nearest captured frame; draw the limb only where both the LUT and the per-scene atmo consts
       // exist (scenes 0-5). Scenes without captured LUTs -> CAP_LUT/CAP_LIMB null = static + no limb.
-      const cl=capSceneLut(sceneIdx,animT);
+      const cl=capSceneLut(sceneIdx,animT,s.fr);
       CAP_LUT = cl?cl.surf:null; CAP_LIMB = cl?cl.limb:null;
       ATMO = (CAP_LIMB && ATMO_SCENE) ? 1 : 0;
-      if(TONELUT_PS){ const ct=capSceneTone(sceneIdx,animT); CAP_T14=ct?ct.t14:null; CAP_T15=ct?ct.t15:null; }
+      if(TONELUT_PS){ const ct=capSceneTone(sceneIdx,animT,s.fr); CAP_T14=ct?ct.t14:null; CAP_T15=ct?ct.t15:null; }
       else { CAP_T14=null; CAP_T15=null; }
     }
     draw();
     drawFade(fadeFactor(animT, span/60));   // dip-to-black at scene boundaries (fade length = FADE_SECS of THIS scene's real duration)
-    animT += 1/span; if(animT>1){ animT=0; sceneIdx=(sceneIdx+1)%SCENES.length; setFC(); }
+    if(USE_CAP && animT>0.8){   // prefetch the NEXT scene's first bins during this scene's tail/fade so its limb+tonemap are ready at the cut
+      let ns=sceneIdx,g=0; do{ ns=(ns+1)%SCENES.length; }while(SCENE_SKIP&&SCENE_SKIP.has(ns)&&++g<SCENES.length);
+      capSceneLut(ns,0); if(TONELUT_PS) capSceneTone(ns,0);
+    }
+    animT += 1/span;
+    if(animT>1){ animT=0; let g=0; do{ sceneIdx=(sceneIdx+1)%SCENES.length; }while(SCENE_SKIP&&SCENE_SKIP.has(sceneIdx)&&++g<SCENES.length); setFC(); }
     return true;
   }
   if(!PATHS||!preset) return false;     // fallback: firmware camera.path (camera only)
@@ -1377,6 +1415,17 @@ async function load(){
  try{ const idx=(await fetch(BASE+'scenes_index'+SUF+'.json').then(r=>r.json())).filter(s=>!s.skip);
    SCENES_IDX=idx;
    SCENES=await Promise.all(idx.map(s=>fetch(BASE+s.file).then(r=>r.json()))); sceneIdx=0; animT=0;
+   SCENES=SCENES.map(trimStaticRows);   // collapse frozen capture stretches (see trimStaticRows)
+   // SKIP degenerate scenes: a scene with no perceptible captured motion is a capture artifact (the
+   // inactive-globe freeze: shipped scene 0 = 318s whose consts drift ~1e-4 total = renders pixel-
+   // identical; real scenes measure 30+) or a 2-row transition fragment - playing one shows a dead
+   // globe for up to 30s ("no movement at all").
+   const motionOf=F=>{ if(!F) return 0; let m=0;
+     for(let i=1;i<F.length;i++){ for(const k of SCENE_KEYS){ const a=F[i-1][k],b=F[i][k];
+       if(a&&b) for(let j=0;j<a.length;j++) m+=Math.abs(b[j]-a[j]); } } return m; };
+   SCENE_SKIP=new Set(); SCENES.forEach((F,i)=>{ if(!F||F.length<3||motionOf(F)<1.0) SCENE_SKIP.add(i); });
+   if(SCENE_SKIP.size>=SCENES.length) SCENE_SKIP.clear();
+   while(SCENE_SKIP.has(sceneIdx)) sceneIdx=(sceneIdx+1)%SCENES.length;   // start on the first real scene
    try{ SCENE_FC=await fetch(BASE+'scene_fc'+SUF+'.json').then(r=>r.json()); }catch(e){ SCENE_FC=null; }
    if(USE_COH && !USE_CAP){ ATMO_SCENES=await Promise.all(idx.map(s=>fetch(BASE+'atmo_scene_'+String(s.scene).padStart(2,'0')+'_coh.json').then(r=>r.ok?r.json():null).catch(()=>null))); ATMO=1; }
    else if(USE_CAP){
@@ -1463,8 +1512,8 @@ const MPGlobe={
    running=false;                                                     // path frozen at (sid,t), no fade/advance
    sceneIdx=((sid%SCENES.length)+SCENES.length)%SCENES.length; animT=t;
    const F=SCENES[sceneIdx]; const s=sceneAt(F,animT); for(const k of SCENE_KEYS){ if(s[k]) D.shared[k]=s[k]; }
-   if(USE_CAP){ const cl=capSceneLut(sceneIdx,animT); CAP_LUT=cl?cl.surf:null; CAP_LIMB=cl?cl.limb:null; ATMO=(CAP_LIMB&&ATMO_SCENE)?1:0;
-     if(TONELUT_PS){ const ct=capSceneTone(sceneIdx,animT); CAP_T14=ct?ct.t14:null; CAP_T15=ct?ct.t15:null; } else { CAP_T14=null; CAP_T15=null; } }
+   if(USE_CAP){ const cl=capSceneLut(sceneIdx,animT,s.fr); CAP_LUT=cl?cl.surf:null; CAP_LIMB=cl?cl.limb:null; ATMO=(CAP_LIMB&&ATMO_SCENE)?1:0;
+     if(TONELUT_PS){ const ct=capSceneTone(sceneIdx,animT,s.fr); CAP_T14=ct?ct.t14:null; CAP_T15=ct?ct.t15:null; } else { CAP_T14=null; CAP_T15=null; } }
    draw(); return 'ok'; },
  set stars(v){ STARS_ON=v?1:0; },
  get stars(){ return STARS_ON; },
@@ -1540,6 +1589,9 @@ set cull(v){ CULL=v?1:0; },
  get assetBase(){ return BASE; },
  get coherent(){ return USE_COH; },
  get _info(){ return {scene:sceneIdx, nScenes:SCENES?SCENES.length:0, animT:animT.toFixed(3)}; },
+ get _diag(){ return {scene:sceneIdx, t:+animT.toFixed(4), capT14:!!CAP_T14, capLut:!!CAP_LUT, capLimb:!!CAP_LIMB, atmo:ATMO,
+   lutCache:Object.keys(CAP_LUT_CACHE||{}).length, toneCache:Object.keys(CAP_TONE_CACHE||{}).length,
+   faithPath:!!(GLOWFAITH&&hdrExt&&cprog&&(!TONELUT_PS||CAP_T14))}; },
  // DEBUG: capture the EXACT gl_Position the surface VS produces for patch `pi` via transform feedback.
  // flip = the uFlipY to apply (default -1 = the shipped firmware-viewport value). Returns Float32Array[289*4]
  // of final clip-space positions. Used to validate the per-scene earth framing against captured presents.
