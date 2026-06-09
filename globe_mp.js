@@ -1249,10 +1249,10 @@ function pickPreset(i){ // resolve a PRESETS entry to a loaded camera path (fall
 // exact per-scene camera AND lighting (no clipping). Cycles all captured scenes like the real XMB.
 let SCENES=null, sceneIdx=0, SCENES_IDX=null, SCENE_FC=null, curFC=null;
 let REALDUR=true;    // cap2: play each scene over its REAL captured duration ((frame1-frame0)/30fps) so the camera moves at the firmware's real rate (MPGlobe.realdur=false -> uniform SCENE_SECS)
-let SCENE_CAP=30;    // REALDUR playback is CLAMPED to [10s, SCENE_CAP s] per scene so the camera is always perceptibly
-                     // moving: the captured "scenes" can be 80-318s near-static stretches (segmentation artifact) which
-                     // otherwise look frozen. The within-scene camera PATH stays the exact captured path; only the time
-                     // scaling is normalized for perceptibility. Tunable via MPGlobe.sceneCap (compare to the real XMB).
+let SCENE_CAP=240;   // REALDUR playback clamped to [10s, SCENE_CAP s]. MEASURED from the reference recording
+                     // (Recording 2026-06-07): real scenes run 79-230s, so 240 keeps every real duration intact
+                     // (the earlier 30s cap made the cycle ~5-10x too fast vs the real XMB). Dead static scenes
+                     // are skipped (SCENE_SKIP) so long playback can no longer freeze. MPGlobe.sceneCap tunable.
 let SCENE_SECS=60;   // wall-seconds per scene before advancing (tunable via MPGlobe.sceneSecs). The within-scene
                      // camera path is the REAL captured motion; the old 18s played it 4-13x too fast vs the real
                      // per-scene durations (~80-236s, un-dumped sequencer) = the "too fast/erratic" the user saw.
