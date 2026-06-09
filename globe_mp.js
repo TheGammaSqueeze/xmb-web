@@ -1233,6 +1233,10 @@ function pickPreset(i){ // resolve a PRESETS entry to a loaded camera path (fall
 // exact per-scene camera AND lighting (no clipping). Cycles all captured scenes like the real XMB.
 let SCENES=null, sceneIdx=0, SCENES_IDX=null, SCENE_FC=null, curFC=null;
 let REALDUR=true;    // cap2: play each scene over its REAL captured duration ((frame1-frame0)/30fps) so the camera moves at the firmware's real rate (MPGlobe.realdur=false -> uniform SCENE_SECS)
+let SCENE_CAP=30;    // REALDUR playback is CLAMPED to [10s, SCENE_CAP s] per scene so the camera is always perceptibly
+                     // moving: the captured "scenes" can be 80-318s near-static stretches (segmentation artifact) which
+                     // otherwise look frozen. The within-scene camera PATH stays the exact captured path; only the time
+                     // scaling is normalized for perceptibility. Tunable via MPGlobe.sceneCap (compare to the real XMB).
 let SCENE_SECS=60;   // wall-seconds per scene before advancing (tunable via MPGlobe.sceneSecs). The within-scene
                      // camera path is the REAL captured motion; the old 18s played it 4-13x too fast vs the real
                      // per-scene durations (~80-236s, un-dumped sequencer) = the "too fast/erratic" the user saw.
@@ -1273,7 +1277,7 @@ function tick(){
     // slowed the short ones). *2 = 30fps-real -> 60fps-web ticks. Falls back to SCENE_SECS otherwise.
     const F=SCENES[sceneIdx];
     const _si=(REALDUR&&SCENES_IDX&&SCENES_IDX[sceneIdx])?SCENES_IDX[sceneIdx]:null;
-    const span=_si?Math.max(60,(_si.frame1-_si.frame0)*2):SCENE_SECS*60;
+    const span=_si?Math.min(SCENE_CAP*60,Math.max(600,(_si.frame1-_si.frame0)*2)):SCENE_SECS*60;   // clamp to [10s, SCENE_CAP s] (camera path faithful; only time-scaling normalized so it is never frozen)
     const s=sceneAt(F,animT); for(const k of SCENE_KEYS){ if(s[k]) D.shared[k]=s[k]; }
     if(USE_CAP){
       // bind this scene's REAL captured in-scatter (surface tex4) + limb (atmo tex0) LUT at the
@@ -1439,6 +1443,7 @@ const MPGlobe={
  gotwant(){ return got+'/'+want; },
  stop(){ running=false; },
  set sceneSecs(v){ SCENE_SECS=v; }, set realdur(v){ REALDUR=!!v; }, get realdur(){ return REALDUR; },
+ set sceneCap(v){ SCENE_CAP=+v; }, get sceneCap(){ return SCENE_CAP; },   // max wall-seconds a scene may take (camera never frozen)
  get sceneSecs(){ return SCENE_SECS; },
  set fadeSecs(v){ FADE_SECS=+v; },
  get fadeSecs(){ return FADE_SECS; },
