@@ -605,11 +605,11 @@ function texPNG(src){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texIma
 // shimmer/aliasing at patch boundaries (the firmware tiles are mipmapped). 512x512 = power of two.
 function texPNGmip(src){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));want++;
  const im=new Image();im.onload=function(){if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,6408,5121,im);gl.generateMipmap(3553);gl.texParameteri(3553,10241,9987);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;};im.src=src;return t;}
-function texF32(src,w,h){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,1,1,0,6408,5126,new Float32Array([0,0,0,1]));want++;
- fetch(src).then(r=>{if(!r.ok)throw 0;return r.arrayBuffer();}).then(ab=>{if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,w,h,0,6408,5126,new Float32Array(ab));gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);t.loaded=true;got++;}).catch(()=>{got++;});return t;}
+function texF32(src,w,h,opt){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,1,1,0,6408,5126,new Float32Array([0,0,0,1]));if(!opt)want++;
+ fetch(src).then(r=>{if(!r.ok)throw 0;return r.arrayBuffer();}).then(ab=>{if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,w,h,0,6408,5126,new Float32Array(ab));gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);t.loaded=true;if(!opt)got++;}).catch(()=>{if(!opt)got++;});return t;}
 // fp16 float texture (RGBA16F internalformat=34842, filterable in WebGL2) for the real HDR tonemap LUTs
-function texF16(src,w,h){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,34842,1,1,0,6408,5126,new Float32Array([0,0,0,1]));want++;
- fetch(src).then(r=>{if(!r.ok)throw 0;return r.arrayBuffer();}).then(ab=>{if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,34842,w,h,0,6408,5126,new Float32Array(ab));gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);t.loaded=true;got++;}).catch(()=>{got++;});return t;}
+function texF16(src,w,h,opt){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,34842,1,1,0,6408,5126,new Float32Array([0,0,0,1]));if(!opt)want++;
+ fetch(src).then(r=>{if(!r.ok)throw 0;return r.arrayBuffer();}).then(ab=>{if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,34842,w,h,0,6408,5126,new Float32Array(ab));gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);t.loaded=true;if(!opt)got++;}).catch(()=>{if(!opt)got++;});return t;}
 function blackTex(){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));return t;}
 // Build a WebGL cube-map from the firmware's 6 assembled cube faces (earth.qrc CUBEEARTH/clouds/mask).
 // Calibrated arrangement (slots/flip) verified vs geography: continents seamless, poles centered.
@@ -685,7 +685,9 @@ function capSceneLut(si, t){
  if(!list||!list.length) return null;
  const fr=s.frame0 + t*((s.frame1-s.frame0)||1);
  let best=list[0]; for(const e of list){ if(Math.abs(e.fr-fr)<Math.abs(best.fr-fr)) best=e; }
- const c=CAP_LUT_CACHE[best.fr]; return (c&&c.surf&&c.surf.loaded&&c.limb&&c.limb.loaded)?c:null;  // null if bins absent -> static fallback
+ let c=CAP_LUT_CACHE[best.fr];   // lazy + non-blocking: load this scene's nearest in-scatter/limb bin on demand (opt=true so it never blocks ready)
+ if(!c) c=CAP_LUT_CACHE[best.fr]={surf:texF32(lfsURL(best.surf),256,128,true), limb:texF32(lfsURL(best.limb),256,128,true)};
+ return (c.surf.loaded&&c.limb.loaded)?c:null;  // null until loaded (or if absent) -> static fallback
 }
 // cap set: select this scene's REAL surface-fp tonemap LUT (tex14/tex15) at the nearest captured frame.
 function capSceneTone(si, t){
@@ -694,7 +696,9 @@ function capSceneTone(si, t){
  if(!list||!list.length) return null;
  const fr=s.frame0 + t*((s.frame1-s.frame0)||1);
  let best=list[0]; for(const e of list){ if(Math.abs(e.fr-fr)<Math.abs(best.fr-fr)) best=e; }
- const c=CAP_TONE_CACHE[best.fr]; return (c&&c.t14&&c.t14.loaded&&c.t15&&c.t15.loaded)?c:null;  // null if bins absent -> static fallback
+ let c=CAP_TONE_CACHE[best.fr];   // lazy + non-blocking: load this scene's nearest tonemap LUT on demand
+ if(!c) c=CAP_TONE_CACHE[best.fr]={t14:texF16(lfsURL(best.t14),128,128,true), t15:texF16(lfsURL(best.t15),128,128,true)};
+ return (c.t14.loaded&&c.t15.loaded)?c:null;  // null until loaded (or if absent) -> static fallback
 }
 function resolveInscat(){
  _psFrame=null; _psScat=null; _psName=null;
@@ -1378,16 +1382,12 @@ async function load(){
      // LUT and atmo consts exist (all scenes here); tick() binds each frame's nearest captured LUT.
      try{
        CAP_SCENE_LUTS=await fetch(BASE+'cap_scene_luts2.json').then(r=>r.ok?r.json():null).catch(()=>null);
-       if(CAP_SCENE_LUTS){ CAP_LUT_CACHE={};
-         for(const k in CAP_SCENE_LUTS) for(const e of CAP_SCENE_LUTS[k]){
-           if(!CAP_LUT_CACHE[e.fr]) CAP_LUT_CACHE[e.fr]={surf:texF32(lfsURL(e.surf),256,128), limb:texF32(lfsURL(e.limb),256,128)}; } }
+       if(CAP_SCENE_LUTS) CAP_LUT_CACHE={};   // lazy: capSceneLut() loads each scene's nearest bin on demand (non-blocking; avoids preloading ~345MB)
      }catch(e){ CAP_SCENE_LUTS=null; }
      // per-scene surface-fp tonemap LUTs (brightness fix); loaded if present, gated by TONELUT_PS. 128x128 rgba32f (ch0/ch1).
      try{
        CAP_SCENE_TONE=await fetch(BASE+'cap_scene_tonelut.json').then(r=>r.ok?r.json():null).catch(()=>null);
-       if(CAP_SCENE_TONE){ CAP_TONE_CACHE={};
-         for(const k in CAP_SCENE_TONE) for(const e of CAP_SCENE_TONE[k]){
-           if(!CAP_TONE_CACHE[e.fr]) CAP_TONE_CACHE[e.fr]={t14:texF16(lfsURL(e.t14),128,128), t15:texF16(lfsURL(e.t15),128,128)}; } }
+       if(CAP_SCENE_TONE) CAP_TONE_CACHE={};   // lazy: capSceneTone() loads on demand (non-blocking)
      }catch(e){ CAP_SCENE_TONE=null; }
      ATMO_SCENES=await Promise.all(idx.map(s=>fetch(BASE+'atmo_scene_'+String(s.scene).padStart(2,'0')+'_cap2.json').then(r=>r.ok?r.json():null).catch(()=>null)));
      ATMO=0;   // per-scene gated in tick() (1 only when the scene has both a limb LUT and atmo consts)
