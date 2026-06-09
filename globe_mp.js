@@ -9,7 +9,7 @@
 // ============================================================================
 (function(global){
 'use strict';
-const BASE = 'globe_assets/';
+let BASE = 'globe_assets/';   // asset root; MPGlobe.assetBase overrides (validation: point at a rebuilt set without swapping the ship)
 // main scenes in numeric order. Per-scene camera motion is EXACT (firmware camera.path +
 // Catmull-Rom); only the cross-scene ORDER is a documented approximation (the real top-level
 // sequencer lives in the un-dumped vsh music module). Each preset plays once then advances.
@@ -18,9 +18,16 @@ const PRESETS = ['preset_0','preset_1','preset_2','preset_3','preset_4',
 
 let gl=null, canvas=null, prog=null, aprog=null, raf=0, running=false;
 let cprog=null;                 // GLOW composite fullscreen program
+let gsProg=null;                // GlareSource bright-pass (verbatim firmware post-proc)
+let _gsRef={cur:null};          // bright-pass RT holder
 let hdrExt=null;                // EXT_color_buffer_float (RGBA16F FBO) - required for the GLOW path; null = fall back to forward
 let hdrFBO=null, glowVAO=null;  // lazy HDR scene FBO + composite VAO
+let GLOWFAITH=1;                // MPGlobe.glowfaith: FAITHFUL path (col0 earth + separate HDR limb/sun bloom); default off until validated
 let GLOW=1;                     // GLOW path flag (MPGlobe.glow) -- DEFAULT ON: the verbatim golden composite (EXT-guarded; falls back to forward if no RGBA16F FBO). ~20ms/frame w/ sync = real-time.
+let LUTWARM=0;                  // WIP (MPGlobe.lutwarm): use the real surface-fp LUT tonemap (gold) in the composite instead of the reinhard. Default OFF until validated.
+let LUTSCALE=1.0;               // MPGlobe.lutscale
+let FEEDBACK_PS=0;             // MPGlobe.feedback: apply the steady-state backbuffer feedback x1/(1-fc21) (default off): firmware tex14/15 COORD_SCALE2 (UNNORMALIZED LUT -> 1/128); default 1.0 (legacy, no change to shipped paths)
+let LUTEXPO=0.1;               // exposure of the web earth into the firmware r2 range for the LUT (matched-scene calibrated ~0.1; MPGlobe.lutexpo)
 let _lastGlow=null;             // diagnostic handle to last buildGlow result
 // ---- GLOW composite calibration (BLUE per-channel earth term) ---------------------------------
 // REWRITTEN 2026-06-07: the composite is now additive-bloom-in-linear-HDR then the firmware HDR.mnu
@@ -29,7 +36,12 @@ let _lastGlow=null;             // diagnostic handle to last buildGlow result
 // project_globe_ground_truth_2026-06-07). GLOW_SLUM = the firmware HDR.mnu EXPOSURE (0.789, same as
 // the ENC0 surface path that measured B/G=1.10 == the real present). GLOW_GAIN = additive bloom
 // strength (neutral; the sun glint/limb halo). Both verified via /tmp/render_compare.py vs the present.
-let GLOW_GAIN=[0.00222,0.00222,0.00222];
+// Glare-add weight: the firmware composite (59b4612/316de80a) does display += glare_bloom at the
+// per-scene GLARE LEVEL (HDR.mnu, default 5.59). The web bloom now blooms the GlareSource BRIGHT-PASS
+// (gsRT), so its accumulator magnitude differs from the firmware glare RT -> this is a NORMALIZATION of
+// the web bloom into the firmware glare proportion (a modest additive halo, not the dominant haze the
+// old raw-HDR bloom produced). Set so the limb/sun halo is visible but the toned scene dominates.
+let GLOW_GAIN=[0.012,0.012,0.012];
 let GLOW2=0;  // sun-glare pass (verbatim fp 727d0242); gated default off until validated
 let glowSprite=null;
 let GLOW_FC=[[1920,1080,0,0],[1.00918,0,0,0],[-1,0,0,0],[0.249846,-0.956276,-5.25935,0],[1920,1080,0,0],[0.249846,-0.956276,-5.25935,0],[-1,1,0,0],[1,0,0,0],[1,1,1,1],[1,1,1,1],[1,1,1,1],[1,1,1,1],[0,0,0,2],[0.433875,0.0737772,0.0257549,0],[1,0,0,0],[1,1,1,1],[0.433875,0.0737772,0.0257549,0]];  // bloom gain = 1/450 (web bloom accumulator ~450x firmware) -> adds the firmware bloom at FULL weight per the verbatim composite fp 316de80a (scene*0.125 + bloom*1). NOT a tiny limb-halo: the bloom is the dominant haze.
@@ -43,6 +55,7 @@ let GLOW_WARM=[1.0,1.0,1.0];   // retained for the MPGlobe.glowWarm setter API; 
 // [77,86,95] vs real present [74,84,94] = ratio 1.03, B/G 1.11 (== the real present). The old 0.42 was
 // eyeball-tuned and 4.3x too bright (overexposed every bright scene to white).
 let GLOW_SLUM=0.789;  // decode exposure (HDR.mnu EXPOSURE) applied to the verbatim composite (scene*0.125 + bloom); scene*0.125*0.789=0.0986 keeps the surface match
+let GLARE_THRESH=0.552855;  // HDR.mnu GLARE THRESH (default scene) -> the GlareSource bright-pass threshold (only > this blooms)
 let GLOW_CHROMA=0;             // retained for the MPGlobe.glowChroma setter API; no longer used by C_FS
 let D=null, eMesh=null, want=0, got=0, sharedTex={}, patchTex=[], black=null;
 let aMesh=null, scatterTex=null, fcAtmo=null;        // verbatim atmosphere shell pass
@@ -50,6 +63,61 @@ let ATMO_SCENES=null, ATMO_SCENE=null, ATMO=0;       // per-scene aligned atmosp
 const ATMO_KEYS=['256','257','258','259','460','461','462'];
 let PATHS=null, animT=0, preset=null, presetIdx=7, errlog='';
 let starProg=null, starBuf=null, starN=0;   // celestial star field (triangulated from real presents)
+let starBoxBuf=null;                         // star skybox cube VBO (36 verts: pos.xyz + tc.xy)
+let fadeProg=null;                           // scene-transition black-fade program
+let FADE_SECS=1.2;                           // dip-to-black duration at each scene end/start (APPROX; MPGlobe.fadeSecs)
+let starCube=null, starTexProg=null, star2D=null;  // FAITHFUL stars: real firmware star texture (face_neg_z_ul.dds)
+let STARTEX=1;                              // 1 = use the real star-texture cube; 0 = legacy catalog points
+let STAR_WHITE=0.217;                       // EARTH.mnu STARS WHITENESS (per-scene FACTOR folds in later)
+let STAR_POW=2.1493;                        // EARTH.mnu STARS POWSCALE (sparsens the field: pow(tex,POWSCALE))
+let STAR_TILE=6.0;                          // firmware tiles the texture on the cube -> MINIFICATION (crisp 1px stars).
+                                            // 1-tile/face = magnification blobs+streaks (the "snow"). tile=6 matches the
+                                            // real s15 present: size 1px, density 605 vs 598/MP, peak 14 vs 12 (score 0.12).
+let STARSONLY=0;                            // debug: render only the star field (skip earth) for validation
+// ECLIPSE SUN BURST (the "huge light burst from behind the globe"). SunDisc_FP (decompiled verbatim):
+// uv=quadUV-0.5; w=|uv.x|*SCALE_X - |uv.y|*SCALE_Y; glow=exp(w); col=glow*Color; occluded by the earth (ray-sphere).
+// Rendered bright into the HDR FBO so the bloom pyramid makes the corona (validated 3-Gaussian sigma 41/117/304 px).
+let sunDiscProg=null;                        // procedural sun-disc program (no texture)
+let SUNDISC=1;                               // MPGlobe.sundisc: render the burst
+let SUN_BRI=3.4;                             // SUN.mnu BRIGHTNESS 3.4 (the disc's HDR intensity scale)
+let SUN_SCX=3.0, SUN_SCY=6.0;                // SUN.mnu SCALE X/Y = _SpikeFalloff (the exp glow anisotropy, verbatim)
+let SUN_SIZE=0.16;                           // NDC half-size of the disc quad (the geometry/UV-range is CPU-side in fw; calibrated to the real corona)
+let SUN_NOOCC=0;                              // debug: skip earth occlusion (verify the disc renders when the sun is occluded)
+// IN-SCATTER per-scene (eclipse). The surface fp + atmosphere shell both sample _AtmSpaceIv (tex4==scatterTex).
+// The shipped web uses the DAYTIME _AtmSpaceIv (bright -> lit earth); the eclipse needs the ECLIPSE _AtmSpaceIv
+// (dark, warm only at the back-lit limb -> dark earth + warm limb arc). The eclipse RT is decoded on disk.
+let INSCAT_ECL=0;                             // MPGlobe.inscatecl: use the eclipse _AtmSpaceIv LUT (per-scene; manual eclipse override)
+// ---- PER-SCENE IN-SCATTER (runtime nearest-LUT selection from the 32-scene dataset) ----
+// The in-scatter LUT (surface fp tex4, RT ac6f80000) AND the atmosphere limb LUT (atmo fp tex0,
+// RT ac6e80000) are PER-SCENE: they vary with the full sun direction + ATTN. The dataset
+// globe_assets/gaia_lut/inscatter/manifest.json carries 32 captured scenes; each scene .bin is the
+// REAL decoded RT (256x128 RGBA f32). Runtime picks the nearest captured scene by sun direction
+// (dominant) + ATTN_ATM (secondary), lazy-loads + binds its EARTH lut as tex4 and its LIMB lut as the
+// atmosphere scatter, and feeds its atmo_mvp/atmo_basis/atmo_fc to the limb shell. This generalizes the
+// manual eclipse override to every scene. The eclipse scene (ecl2) reproduces the validated 1:1 path
+// byte-for-byte (ecl2.bin == the shipped tex4ecl; ecl2_limb.bin == the shipped tex0atmEcl).
+let INSCAT_PS=0;                              // MPGlobe.inscatps: runtime per-scene in-scatter selection
+let CAP_LUT=null, CAP_LIMB=null;             // captured per-frame in-scatter + limb LUT override (validation/wiring)
+let CAP_T14=null, CAP_T15=null;              // per-scene surface-fp tonemap LUT (tex14/tex15) override; null=static lut14/lut15
+let TONELUT_PS=1;                            // MPGlobe.tonelut: per-scene tonemap LUT + verbatim ramp-encode output (brightness fix); default OFF until per-scene LUTs captured+validated
+let CAP_SCENE_TONE=null;                     // {sceneNum:[{fr,t14,t15}]} per-scene captured tonemap-LUT manifest (cap_scene_tonelut.json)
+let CAP_TONE_CACHE={};                        // frame -> {t14:tex, t15:tex} preloaded per-scene tonemap LUT textures
+let CAPLIB=null, CAPLIB_ON=0;                // captured LUT library {scenes:[{sun,c263,eye,name,limb}]} + nearest-pick
+let CAP_SCENE_LUTS=null;                     // cap set: {sceneNum:[{fr,surf,limb}]} per-scene captured in-scatter+limb LUT manifest
+let CAP_LUT_CACHE={};                        // frame -> {surf:tex, limb:tex} preloaded captured LUT textures (cap set)
+let INSCAT_MANIFEST=null;                     // loaded manifest.json (scenes[])
+let INSCAT_CACHE={};                          // name -> {lut:tex, limb:tex} lazy-loaded F32 textures
+let INSCAT_PICK_W=1.2;                        // ATTN_ATM penalty weight in pickScene score (sun-dir dominant)
+let _psName=null;                             // diagnostic: last picked scene name
+let SURF_ECLFLIP=0;                           // DEPRECATED no-op: the surface earth now uses uFlipY=-1 for ALL scenes
+                                              // (firmware-viewport identity, proven via TF gl_Position vs ecl2/warm2 presents).
+                                              // The old per-eclipse flip experiment is gone; the setter is retained for harness compat.
+let ATMO_VFLIP=0;                             // orientation probe for the atmo shell _AtmSpaceIv LUT
+let ATMO_SOLID=0;                             // debug: bind a solid-warm LUT to test shader math/coord
+let ATMO_FLIPY=1.0;                           // shell uFlipY (orientation probe)
+let ATMO_HDR=7.863;                           // firmware preexpose scale = TEX15/TEX14 LUT (lut15_rgba32f) max 7.863, = the atmo fp's r0 exposure before the scene RT (replaces the rounded 8.0 approximation)
+let IEFULL=1;                                 // use the UNCLAMPED IE LUT (the clamped tex5 loses the night/negative term = proven bug; ieFull restores the dark side)
+let FCATMO_OVR=0;                              // when set (MPGlobe.fcatmo used), use the REAL per-scene atmo fp consts (_AtmFactor from the atmo draw) instead of the curFC[4].y approximation
 let STARS_ON=1;                              // MPGlobe.stars
 let TILES=1;                                 // 1 = faithful per-patch tile sampling (firmware 24-patch x 4-tile); 0 = legacy cube map (MPGlobe.tiles)
 let CULL=1;                                   // per-patch back-face cull (MPGlobe.cull); 0 = no cull (rely on depth) - test for grazing-patch triangular gaps
@@ -68,7 +136,7 @@ const _dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
 const VS=`#version 300 es
 precision highp float;
 in vec4 in_pos; uniform vec4 vc[26]; uniform float uFlipY;
-out vec4 tc0,tc3,tc4,tc5,tc6,tc8,tc9; out vec3 vN; out vec3 vL; out vec3 vSph;
+out vec4 tc0,tc3,tc4,tc5,tc6,tc8,tc9; out vec3 vN; out vec3 vL; out vec3 vSph; out vec4 vClip;
 float fma1(float a,float b,float c){return a*b+c;}
 vec3 fma3(vec3 a,vec3 b,vec3 c){return a*b+c;}
 vec2 fma2(vec2 a,vec2 b,vec2 c){return a*b+c;}
@@ -212,6 +280,7 @@ vec4 ip = in_pos;
   d10.y = (r0.y * r1.x);
   d10.x = (cc0.x == 0.0) ? (r0.x * vc[13].w) : d10.x;
   tc0=d7; vN=d14.xyz; vL=d8.xyz; tc3=d10; tc4=d11; tc5=d12; tc6=d13; tc8=d15; tc9=d6;
+  vClip=d0;
   vec4 clip=d0;
   vec2 ndc=clip.xy/clip.w; vec2 win=ndc*vec2(960.0,-540.0)+vec2(960.0,540.0);
   clip.xy=((win/vec2(960.0,540.0))-1.0)*clip.w;
@@ -219,11 +288,12 @@ vec4 ip = in_pos;
 }`;
 const FS=`#version 300 es
 precision highp float;
-in vec4 tc0,tc3,tc4,tc5,tc6,tc8,tc9; in vec3 vN; in vec3 vL; in vec3 vSph;
+in vec4 tc0,tc3,tc4,tc5,tc6,tc8,tc9; in vec3 vN; in vec3 vL; in vec3 vSph; in vec4 vClip;
 uniform sampler2D tex0,tex1,tex2,tex3,tex4,tex5,tex6,tex13,tex14,tex15;   // tex0-3 = THIS patch's 4 firmware tiles (t00-t03)
 uniform samplerCube earthCube, cloudsCube, maskCube;   // legacy cube-map path (kept for DBG/fallback)
 uniform vec4 fc[23];
 uniform float uDbg, uMode, uSlum, uTiles, uT2bad;   // uTiles=1 -> per-patch tiles; uT2bad=1 -> this patch's t02 detail tile is corrupt, sample cloud from the cube instead
+uniform float uLutScale, uFeedback;   // firmware LUT COORD_SCALE2 (tex14/15 are UNNORMALIZED: scale=1/128). default 1.0 (legacy). r2 is sampled at r2*uLutScale.
 out vec4 ocol0;
 vec3 nrm(vec3 v){return length(v)>0.0?normalize(v):v;}
 vec3 fma3(vec3 a,vec3 b,vec3 c){return a*b+c;}
@@ -269,6 +339,7 @@ void main(){
   h0.w = fc[11].y;
   r0.zw = fc[12].xy;
   r2.x = texture(tex6, h7.zw).y;   // fp: TEX2D(6).x = env/specular BRDF LUT (ocean sun-glint). TEXDUMP of the 0xbf format stores its single channel in G (R/B all-zero, verified); the firmware's RSX remap reads it via .x -> sample .y here. Reading .x was all-zero => the glint never rendered.
+  float gGlint=r2.x;   // DEBUG: the glint BRDF sample (uDbg>5.5 isolates it)
   h1.xyz = fma3(r1.www, fc[13].xyz, vec3(r0.z,r0.w,r0.w));
   r3.x = fc[14].x;
   r4.z = fc[15].y;
@@ -283,7 +354,7 @@ void main(){
   h3.xyz = fma3(-h0.xyz, h0.www, fc[19].xxx);
   r3.xyz = max(h6.xyz, fc[20].xxx);
   r2.xyz = (h4.xyz * r3.xyz);
-  r2.xyz = (fma3(r2.xyz, h3.xyz, h2.xyz) * 8.0);
+  r2.xyz = (fma3(r2.xyz, h3.xyz, h2.xyz) * 8.0);   // VERBATIM: firmware surface fp 506ad546 has this *8 ("* 8.")
   // firmware globe HDR.mnu tonemap of the HDR scene r2: EXPOSURE 0.789, WHITE LEVEL 3.40918,
   // extended Reinhard, GAMMA 1. Real .mnu params, verified vs the real surface RT (0.65/255).
   vec3 tc = r2.xyz * 0.789;
@@ -293,11 +364,25 @@ void main(){
   // the UV clamp on r2 rolls off highlights -> bright close scenes stay dark, not blown white).
   float maxlum = max(r2.x, r2.y);
   vec4 r0d = texture(tex13, gl_FragCoord.xy/32.0);   // backbuffer/dither (black -> 0)
-  vec2 e15 = texture(tex15, r2.xy).xy;
-  vec2 e14 = texture(tex14, vec2(r2.z, maxlum)).xy;   // LUT bins store the 2 real channels in .xy (B,A=0); firmware's .zw maps to these via the RSX texture swizzle
+  // VERBATIM firmware: tex14/tex15 are Y16_X16_FLOAT which CANNOT be remapped on real hw -> RPCS3 forces
+  // remap to YXXX (captured remap=0x0000aae4 -> low byte 0x66). So texture().rgb = X (all three), .a = Y.
+  // fp reads tex15.xy=(X,X) -> R=G; tex14.zw=(X,Y) -> B,A. X = the LUT's ch1 (the .y channel as I store it;
+  // the channel that carries the tonemap, measured 0.589 vs ch0~0). uLutScale=1/128 (UNNORMALIZED LUT).
+  // remap 0x0000aae4 -> channel_map (2,1,2,1) with native (ch0=Y,ch1=X): fp reads tex15.xy=(R,G)=(ch1,ch0),
+  // tex14.zw=(B,A)=(ch1,ch0). So R=tex15.ch1(.y), G=tex15.ch0(.x), B=tex14.ch1(.y). Validated R<G<B vs presents.
+  vec2 e15 = texture(tex15, r2.xy*uLutScale).xy;                 // (.x=ch0, .y=ch1)
+  float X14 = texture(tex14, vec2(r2.z, maxlum)*uLutScale).y;    // ch1 -> B
+  // firmware: col0 = backbuffer(tex13)*fc21 + LUT. The web has no prev-frame feedback (tex13~0), so apply the
+  // STEADY-STATE fixed point col0 = LUT/(1-fc21) (exact for a static frame; fc21=fc22=0.125 real). uFeedback toggles it.
   vec4 col0 = vec4(0.);
-  col0.xy = fma2(r0d.xy, fc[21].xx, e15);
-  col0.zw = fma2(r0d.zw, fc[22].xx, e14);
+  float fb21 = (uFeedback>0.5) ? (1.0/(1.0-fc[21].x)) : 1.0;
+  float fb22 = (uFeedback>0.5) ? (1.0/(1.0-fc[22].x)) : 1.0;
+  col0.x = fma1(r0d.x, fc[21].x, e15.y) * fb21;   // R = tex15.ch1
+  col0.y = fma1(r0d.y, fc[21].x, e15.x) * fb21;   // G = tex15.ch0
+  col0.z = fma1(r0d.z, fc[22].x, X14) * fb22;     // B = tex14.ch1
+  if(uDbg>5.5){ ocol0=vec4(gGlint, clamp(h7.z*0.5+0.5,0.,1.), clamp(h7.w,0.,1.), 1.0); return; }  // DBG: glint BRDF sample (R), sun-reflect dot h7.z (G), land mask h7.w (B)
+  if(uDbg>4.5){ ocol0=vec4(length(vSph), vClip.w/16.0, vClip.y/16.0+0.5, 1.0); return; }  // DBG: |vSph| (R, should be 1.0), d0.w (G), d0.y (B)
+  if(uDbg>3.5){ float ny=vClip.y/vClip.w; ocol0=vec4((ny+8.0)/16.0, vClip.w/16.0, 0.0, 1.0); return; }  // DBG: raw d0 ndc.y (encoded) + w
   if(uDbg>2.5){ ocol0=vec4(sd*0.5+0.5,1.0); return; }          // sd direction as color (should be smooth)
   if(uDbg>1.5){ ocol0=vec4(texture(cloudsCube,sd).xyz,1.0); return; }
   if(uDbg>0.5){ float d=clamp(dot(normalize(vN),normalize(vL))*0.8+0.4,0.0,1.0); ocol0=vec4(texture(earthCube,sd).xyz*d,1.0); return; }
@@ -338,7 +423,7 @@ void main(){
 }`;
 const A_FS=`#version 300 es
 precision highp float;
-in vec2 vTC; out vec4 ocol0; uniform sampler2D tex0; uniform vec4 fc[17]; uniform float uLinear;
+in vec2 vTC; out vec4 ocol0; uniform sampler2D tex0; uniform vec4 fc[17]; uniform float uLinear; uniform float uAtmoHdr;
 float pc(float x,float a,float b){return (x!=x)?0.:clamp(x,a,b);} float fma1(float a,float b,float c){return a*b+c;}
 void main(){
  vec4 tc0=vec4(vTC,0.,1.);vec4 r0=vec4(0.),r1=vec4(0.),r2=vec4(0.),r3=vec4(0.);
@@ -348,7 +433,7 @@ void main(){
  r1.x=(-r1.x*fc[8].x);r1.z=(r1.y+-fc[9].w);r3.x=pc(r1.z/r3.x,0.,1.);r3.z=(-r1.w+fc[10].x);r3.y=r2.x*r3.z;r0.w=r1.x*fc[11].x;
  r1.x=pc(r1.y/fc[12].y,0.,1.);r1.w=(-r2.x+fc[13].x);r2.x=fma1(r3.w,r1.w,-r3.y);r1.w=r1.x*2.;r1.w=(-r1.w+fc[14].x);r1.x=r1.x*r1.x;r1.x=r1.x*r1.w;
  r1.w=r3.x*2.;r1.w=(-r1.w+fc[15].x);r1.y=r3.x*r3.x;r1.y=r1.y*r1.w;r0.w=exp2(r0.w);r0.w=r2.x*r0.w;
- r0.xyz=r0.xyz*fc[16].x;r0.xyz=(-r1.y*r0.xyz+r0.xyz);r0.w=(-r1.x*r0.w+r0.w);r0.xyz=((r0.w*r0.xyz+r0.xyz)*8.0);
+ r0.xyz=r0.xyz*fc[16].x;r0.xyz=(-r1.y*r0.xyz+r0.xyz);r0.w=(-r1.x*r0.w+r0.w);r0.xyz=((r0.w*r0.xyz+r0.xyz)*uAtmoHdr);
  if(uLinear>0.5){ ocol0=vec4(r0.xyz,1.0); return; }   // GLOW path: emit linear HDR atmo so it feeds the bloom
  vec3 tcol=r0.xyz*0.789; float Wl=3.40918; tcol=(tcol*(1.0+tcol/(Wl*Wl)))/(1.0+tcol);
  ocol0=vec4(clamp(tcol,0.0,1.0),1.0);
@@ -377,6 +462,8 @@ uniform vec3  uGlowGain;    // per-channel additive bloom gain (sun glint / limb
 in vec2 vUV; out vec4 ocol0;
 uniform sampler2D uSprite; uniform float uGlow2; uniform vec2 uDims;
 uniform vec4 c260,c261,c262,c263; uniform vec4 gfc[17];
+uniform sampler2D uLut15,uLut14; uniform float uLutOn,uLutExpo,uLutFb;   // real surface-fp LUT tonemap (the gold warmth); uLutFb = backbuffer feedback 1/(1-fc21)
+uniform float uPassthru;   // faithful path: uEarth is ALREADY the LDR display scene (col0 earth + tonemapped limb) -> just add the limb/sun bloom, NO re-tonemap
 float gdivsq(float a,float b){return a/sqrt(abs(b)+1e-12);}
 vec3 computeGlare(){
   vec2 ndc=vUV*2.0-1.0;
@@ -427,10 +514,52 @@ void main(){
   // then *0.789 decode exposure (HDR.mnu). scene*0.125*0.789 = scene*0.0986 -> surface stays at
   // the validated 0.65/255; bloom restored to FULL weight (the dominant haze the firmware adds).
   if(uGlow2>0.5) e = e + computeGlare();   // verbatim firmware sun-glare (fp 727d0242), gated
-  vec3 hc = (e * 0.125 + g * uGlowGain) * uSlum;
+  if(uPassthru>0.5){ ocol0 = vec4(clamp(e + g * uGlowGain, 0.0, 1.0), 1.0); return; }   // faithful: LDR scene + limb/sun bloom
+  if(uLutOn>0.5){
+    // VERBATIM firmware surface-fp LUT tonemap = THE GOLD WARMTH (measured: LUT(real r2)=gold 1:0.90:0.17).
+    // R,G = tex15(hc.xy); B = tex14(hc.z, max(hc.x,hc.y)).x. hc = earth exposed to the firmware r2 range
+    // (~0..0.3) via uLutExpo (matched-scene calibration vs ac18c0000: web r2 p50 1.02 -> firmware 0.10 => ~0.1).
+    vec3 hc = e * uLutExpo;   // per-scene faithful: uLutExpo=1/128 (UN-flag scale)
+    float ml = max(hc.x, hc.y);
+    vec2 e15 = texture(uLut15, clamp(hc.xy, 0.0, 0.999)).xy;   // .x=ch0, .y=ch1
+    float bz = texture(uLut14, clamp(vec2(hc.z, ml), 0.0, 0.999)).y;   // ch1 -> B
+    // firmware remap 0x0000aae4: R=tex15.ch1, G=tex15.ch0, B=tex14.ch1; uLutFb = backbuffer feedback 1/(1-fc21)
+    vec3 disp = vec3(e15.y, e15.x, bz) * uLutFb;
+    ocol0 = vec4(clamp(disp + g * uGlowGain, 0.0, 1.0), 1.0);   // + additive limb/sun bloom
+    return;
+  }
+  // ---- VERBATIM firmware post-proc composite ----
+  // The PS3 Gaia pipeline (earth.qrc draws 1-95, ecl2 capture) tonemaps the SCENE to display in the
+  // surface/atmosphere shaders (8beeea83/2060b02 -> 0e500000), then ADDS the glare bloom ON TOP at full
+  // weight (59b4612/316de80a, blend ONE,ONE: display += glare). It does NOT fold the bloom into the
+  // tonemap. The glare is the bloom of a BRIGHT-PASS (GlareSource 56200844/fp_061fd0), so only the
+  // over-display-range energy (the sun-rising point) blooms warm -- the cyan limb stays cyan, and the
+  // dramatic warm sunrise glow is a localized additive, not a whole-arc white-blow.
+  //   1) scene tonemap : extended Reinhard per channel, EXPOSURE=uSlum (HDR.mnu 0.789/8), WHITE 3.40918.
+  //   2) glare add     : + bloom(brightpass) * uGlowGain  (uGlowGain = GLARE LEVEL / web-bloom-norm).
+  vec3 L = e * uSlum;
   float W = 3.40918;
-  vec3 toned = (hc*(1.0 + hc/(W*W)))/(1.0 + hc);
-  ocol0 = vec4(clamp(toned,0.0,1.0), 1.0);
+  vec3 toned = (L*(1.0 + L/(W*W)))/(1.0 + L);
+  ocol0 = vec4(clamp(toned + g * uGlowGain, 0.0, 1.0), 1.0);
+}`;
+// ---- VERBATIM GlareSource bright-pass (RSX fp 0x0619a0 family = lib/glutils GlareSource, the canonical
+//      threshold form). Extracts ONLY the over-display-range energy that the glare blooms:
+//        glare = max( extReinhard(scene * _Exposure) - _Threshold , 0 )
+//      with the SAME extended-Reinhard as the display tonemap (Exposure, WhiteSqrRcp) then -_Threshold,
+//      clamp>=0 (decompiled fp_0619a0: MADH H0=H2*H0 - _Threshold; MAXR R0=H0,0). _Threshold = the
+//      per-scene HDR.mnu GLARE THRESH (default 0.552855). This is what keeps the warm sunrise localized
+//      (only the bright sun-point exceeds threshold and blooms) -- the cyan limb mid-tones do NOT bloom.
+//      Operates on the LINEAR HDR scene (uEarth) with the same exposure as the composite tonemap.
+const GS_FS=`#version 300 es
+precision highp float; precision highp sampler2D;
+uniform sampler2D uTone; uniform float uSlum; uniform float uThresh;
+in vec2 vUV; out vec4 ocol0;
+void main(){
+  vec3 L = texture(uTone, vUV).xyz * uSlum;          // scene * Exposure (0.789/8)
+  float W = 3.40918;                                  // WHITE LEVEL (HDR.mnu) ; _WhiteSqrRcp = 1/W^2
+  vec3 toned = (L*(1.0 + L/(W*W)))/(1.0 + L);          // extended Reinhard (same as the display tonemap)
+  vec3 glare = max(toned - uThresh, 0.0);             // GlareSource: subtract GLARE THRESH, clamp >=0
+  ocol0 = vec4(glare, 1.0);                            // over-range energy only -> feeds the bloom pyramid
 }`;
 
 // ---- STAR FIELD (real-derived) : 1122 stars triangulated from the camera-sweep presents (back-projected
@@ -468,10 +597,10 @@ function texPNG(src){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texIma
 function texPNGmip(src){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));want++;
  const im=new Image();im.onload=function(){if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,6408,5121,im);gl.generateMipmap(3553);gl.texParameteri(3553,10241,9987);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;};im.src=src;return t;}
 function texF32(src,w,h){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,1,1,0,6408,5126,new Float32Array([0,0,0,1]));want++;
- fetch(src).then(r=>r.arrayBuffer()).then(ab=>{if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,w,h,0,6408,5126,new Float32Array(ab));gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;});return t;}
+ fetch(src).then(r=>{if(!r.ok)throw 0;return r.arrayBuffer();}).then(ab=>{if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,w,h,0,6408,5126,new Float32Array(ab));gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);t.loaded=true;got++;}).catch(()=>{got++;});return t;}
 // fp16 float texture (RGBA16F internalformat=34842, filterable in WebGL2) for the real HDR tonemap LUTs
 function texF16(src,w,h){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,34842,1,1,0,6408,5126,new Float32Array([0,0,0,1]));want++;
- fetch(src).then(r=>r.arrayBuffer()).then(ab=>{if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,34842,w,h,0,6408,5126,new Float32Array(ab));gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;});return t;}
+ fetch(src).then(r=>{if(!r.ok)throw 0;return r.arrayBuffer();}).then(ab=>{if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,34842,w,h,0,6408,5126,new Float32Array(ab));gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);t.loaded=true;got++;}).catch(()=>{got++;});return t;}
 function blackTex(){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));return t;}
 // Build a WebGL cube-map from the firmware's 6 assembled cube faces (earth.qrc CUBEEARTH/clouds/mask).
 // Calibrated arrangement (slots/flip) verified vs geography: continents seamless, poles centered.
@@ -496,6 +625,100 @@ function buildVC(corners){const s=D.shared;const vc=new Float32Array(104);const 
  const map={3:260,4:261,5:262,6:263,7:264,8:265,9:268,10:269,11:270,12:454,13:455,14:456,15:457,16:458,17:459,18:460,19:461,20:462,21:463,22:464,23:465,24:466,25:467};
  for(const k in map){const v=s[map[k]];if(v)set(+k,v);}return vc;}
 function bindT(unit,name,tex){gl.activeTexture(33984+unit);gl.bindTexture(3553,tex);gl.uniform1i(gl.getUniformLocation(prog,name),unit);}
+// ---- PER-SCENE in-scatter: nearest captured scene + lazy-load of its EARTH + LIMB LUTs ----
+// Score = dot(sun, s.sun) [-1..1, dominant] - W*|attn_A - s.attn_A| [secondary]. sun-direction match
+// dominates (the scattering geometry is set by the sun azimuth/elevation); ATTN_ATM (the atmosphere
+// density multiplier) breaks ties between same-direction captures (e.g. eclipse vs daytime same sun).
+function pickScene(sun,attn){
+ if(!INSCAT_MANIFEST||!INSCAT_MANIFEST.scenes) return null;
+ const sl=Math.hypot(sun[0],sun[1],sun[2])||1; const sx=sun[0]/sl,sy=sun[1]/sl,sz=sun[2]/sl;
+ const aA=(attn&&attn.length>1)?attn[1]:0;
+ let best=null,bestScore=-1e9;
+ for(const s of INSCAT_MANIFEST.scenes){
+   const d=sx*s.sun[0]+sy*s.sun[1]+sz*s.sun[2];
+   const score=d - INSCAT_PICK_W*Math.abs(aA - (s.attn?s.attn[1]:0));
+   if(score>bestScore){ bestScore=score; best=s; }
+ }
+ return best;
+}
+// lazy-load (and cache) a scene's EARTH lut (ac6f80000, surface tex4) + LIMB lut (ac6e80000, atmo tex0).
+function loadSceneTex(s){
+ if(!s) return null;
+ let c=INSCAT_CACHE[s.name];
+ if(!c){ c={lut:s.lut?texF32(BASE+s.lut,INSCAT_MANIFEST.w,INSCAT_MANIFEST.h):null,
+            limb:s.limb_lut?texF32(BASE+s.limb_lut,INSCAT_MANIFEST.w,INSCAT_MANIFEST.h):null};
+   INSCAT_CACHE[s.name]=c; }
+ return c;
+}
+// resolve the per-scene atmosphere injection (atmo_mvp -> 256-259, atmo_basis -> 460/461/462) for the limb.
+function sceneAtmoFrame(s){
+ if(!s||!s.atmo_mvp||!s.atmo_basis) return null;
+ const f={t:0.0};
+ f['256']=s.atmo_mvp[0]; f['257']=s.atmo_mvp[1]; f['258']=s.atmo_mvp[2]; f['259']=s.atmo_mvp[3];
+ f['460']=s.atmo_basis['460']; f['461']=s.atmo_basis['461']; f['462']=s.atmo_basis['462'];
+ return f;
+}
+// load the per-scene atmo fp consts into fcAtmo (atmo_fc{0..16}) when per-scene mode picks this scene.
+function applySceneFcAtmo(s){
+ if(!s||!s.atmo_fc||!fcAtmo) return;
+ for(const k in s.atmo_fc){ const i=+k,a=s.atmo_fc[k]; fcAtmo[i*4]=a[0];fcAtmo[i*4+1]=a[1];fcAtmo[i*4+2]=a[2];fcAtmo[i*4+3]=a[3]; }
+ FCATMO_OVR=1;
+}
+// Decide the in-scatter binding for THIS draw: returns {tex4, scat, frame, name} where tex4 = the surface
+// in-scatter LUT, scat = the atmosphere limb LUT, frame = the per-scene atmo injection (or null). When
+// per-scene mode is on, picks the nearest captured scene from the current sun (fc[8]) + attn (fc[4]).
+let _psFrame=null, _psScat=null, _psSurfTex=null;
+// cap set: select the captured in-scatter+limb LUT textures for the current scene at the nearest
+// captured frame to the current playback position (real per-scene LUTs; null for scenes not yet captured).
+function capSceneLut(si, t){
+ if(!CAP_SCENE_LUTS||!SCENES_IDX||!SCENES_IDX[si]) return null;
+ const s=SCENES_IDX[si]; const list=CAP_SCENE_LUTS[String(s.scene)];
+ if(!list||!list.length) return null;
+ const fr=s.frame0 + t*((s.frame1-s.frame0)||1);
+ let best=list[0]; for(const e of list){ if(Math.abs(e.fr-fr)<Math.abs(best.fr-fr)) best=e; }
+ const c=CAP_LUT_CACHE[best.fr]; return (c&&c.surf&&c.surf.loaded&&c.limb&&c.limb.loaded)?c:null;  // null if bins absent -> static fallback
+}
+// cap set: select this scene's REAL surface-fp tonemap LUT (tex14/tex15) at the nearest captured frame.
+function capSceneTone(si, t){
+ if(!CAP_SCENE_TONE||!SCENES_IDX||!SCENES_IDX[si]) return null;
+ const s=SCENES_IDX[si]; const list=CAP_SCENE_TONE[String(s.scene)];
+ if(!list||!list.length) return null;
+ const fr=s.frame0 + t*((s.frame1-s.frame0)||1);
+ let best=list[0]; for(const e of list){ if(Math.abs(e.fr-fr)<Math.abs(best.fr-fr)) best=e; }
+ const c=CAP_TONE_CACHE[best.fr]; return (c&&c.t14&&c.t14.loaded&&c.t15&&c.t15.loaded)?c:null;  // null if bins absent -> static fallback
+}
+function resolveInscat(){
+ _psFrame=null; _psScat=null; _psName=null;
+ if(!INSCAT_PS||!INSCAT_MANIFEST){ return; }
+ const fcsrc=curFC||(D&&D.fc); if(!fcsrc||!fcsrc[8]||!fcsrc[4]) return;
+ const sun=fcsrc[8], attn=fcsrc[4];
+ const s=pickScene(sun,attn); if(!s) return;
+ _psName=s.name;
+ const c=loadSceneTex(s);
+ if(c&&c.lut) _psSurfTex=c.lut; else _psSurfTex=null;
+ if(c&&c.limb){ _psScat=c.limb; }
+ _psFrame=sceneAtmoFrame(s);
+ applySceneFcAtmo(s);
+ // per-scene mode drives the limb from the picked scene (unless an eclipse override is active). Mark the
+ // ATMO_SCENE as auto-managed so it is refreshed every frame when the picked scene changes.
+ if(_psFrame&&!INSCAT_ECL){ ATMO_SCENE=[_psFrame,Object.assign({},_psFrame,{t:1})]; ATMO_SCENE._auto=true; ATMO=1; }
+}
+// ECLIPSE-ORIENTATION discriminator (firmware RT viewport-Y). The eclipse RT renders the earth disc at the
+// BOTTOM of the frame with the warm limb arc at the top (measured vs the ecl2 present: earth NDC center y
+// =+1.78, radius 2.0). The verbatim VS's hardcoded win-remap (960,-540) y-flip + uFlipY=+1 places it at the
+// TOP instead -> the eclipse needs the INVERTED viewport-Y (uFlipY=-1) on BOTH the surface earth AND the
+// atmosphere limb so they stay registered (the prior agent flipped only the limb -> earth ended up on the
+// wrong side, the arc floating in empty space). Daytime (front-lit) keeps uFlipY=+1. The discriminator is
+// geometric (camera-frame-locked, no scene names): an eclipse is back-lit -- the sun is roughly behind the
+// earth from the camera, dot(viewDir, sunDir) > 0.5. ecl2=+1.00 (eclipse), warm2=-0.92 (daytime).
+function isEclipseView(){
+ if(INSCAT_ECL) return true;                 // manual eclipse override always eclipse-oriented
+ if(!D||!D.shared||!D.shared['263']) return false;
+ const fcsrc=curFC||D.fc; const sun=fcsrc&&fcsrc[8]; if(!sun) return false;
+ const v=D.shared['263']; const vl=Math.hypot(v[0],v[1],v[2])||1, sl=Math.hypot(sun[0],sun[1],sun[2])||1;
+ const d=(v[0]*sun[0]+v[1]*sun[1]+v[2]*sun[2])/(vl*sl);
+ return d>0.5;
+}
 function windSign(c){const A=[c[0][0],c[1][0],c[2][0]],B=[c[0][1],c[1][1],c[2][1]],
   C=[c[0][2],c[1][2],c[2][2]],D2=[c[0][3],c[1][3],c[2][3]];
   const u=[B[0]-A[0],B[1]-A[1],B[2]-A[2]],v=[D2[0]-A[0],D2[1]-A[1],D2[2]-A[2]];
@@ -521,6 +744,35 @@ function ensureHDR(W,H){
  gl.bindFramebuffer(36160,null);
  hdrFBO={fbo,tex,depth,w:W,h:H}; return hdrFBO;
 }
+let hdrFBO2=null;   // 2nd depth-HDR FBO: the limb/sun HDR bloom SOURCE (faithful path keeps it separate from the LDR display)
+function ensureHDR2(W,H){
+ if(hdrFBO2 && hdrFBO2.w===W && hdrFBO2.h===H) return hdrFBO2;
+ if(hdrFBO2){ gl.deleteFramebuffer(hdrFBO2.fbo); gl.deleteTexture(hdrFBO2.tex); gl.deleteRenderbuffer(hdrFBO2.depth); }
+ const tex=gl.createTexture(); gl.bindTexture(3553,tex);
+ gl.texImage2D(3553,0,gl.RGBA16F,W,H,0,6408,gl.HALF_FLOAT,null);
+ gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);
+ gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);
+ const depth=gl.createRenderbuffer(); gl.bindRenderbuffer(36161,depth);
+ gl.renderbufferStorage(36161,gl.DEPTH_COMPONENT16,W,H);
+ const fbo=gl.createFramebuffer(); gl.bindFramebuffer(36160,fbo);
+ gl.framebufferTexture2D(36160,36064,3553,tex,0);
+ gl.framebufferRenderbuffer(36160,36096,36161,depth);
+ gl.bindFramebuffer(36160,null);
+ hdrFBO2={fbo,tex,depth,w:W,h:H}; return hdrFBO2;
+}
+// color-only RGBA16F RT (no depth) for the post-proc passes (tonemap / bright-pass)
+function ensureColorRT(ref,W,H){
+ if(ref.cur && ref.cur.w===W && ref.cur.h===H) return ref.cur;
+ if(ref.cur){ gl.deleteFramebuffer(ref.cur.fbo); gl.deleteTexture(ref.cur.tex); }
+ const tex=gl.createTexture(); gl.bindTexture(3553,tex);
+ gl.texImage2D(3553,0,gl.RGBA16F,W,H,0,6408,gl.HALF_FLOAT,null);
+ gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);
+ gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);
+ const fbo=gl.createFramebuffer(); gl.bindFramebuffer(36160,fbo);
+ gl.framebufferTexture2D(36160,36064,3553,tex,0);
+ gl.bindFramebuffer(36160,null);
+ ref.cur={fbo,tex,w:W,h:H}; return ref.cur;
+}
 
 // star field pass: render the real-derived celestial points at far depth, into whatever framebuffer is
 // bound (HDR FBO for the GLOW path, canvas for the forward path). Depth write on so the earth occludes.
@@ -536,6 +788,130 @@ function drawStars(){
  gl.disable(2884); gl.enable(2929); gl.depthFunc(515); gl.depthMask(true); gl.disable(3042);
  gl.drawArrays(0,0,starN);   // 0 = POINTS
 }
+// ===== FAITHFUL STARS (firmware) =====
+// The firmware (qgl_gaia_app vaddr 0x31fa0) tiles the real star texture earth/flashrom/face_neg_z_ul.dds
+// (1024x1024 BC1, ~30k dots) onto a 6-face star CUBE and samples it by VIEW DIRECTION (rotation-only
+// parallax). NOT a catalog of positions. We replicate: a cube (all faces = the real star texture) sampled
+// per-pixel by the camera-rotated view ray = the inverse of the proven STAR_VS projection. Brightness =
+// EARTH.mnu STARS WHITENESS (0.217) * STARS FACTOR (per-scene). Replaces the (wrong) catalog point sprites.
+// STAR CUBE SKYBOX (firmware method): a unit cube around the camera, each face textured with the real star
+// tile (texcoord 0..uTile, REPEAT) -> minified+mipmapped so most of the gray band averages away, leaving
+// sparse crisp ~1px stars. Per-face interpolated texcoords have smooth derivatives -> NO fan/LOD streaks.
+// Projection = the validated direction->NDC map (ndcx=c260.d/c263.d, ndcy=-c261.d/c263.d), same as the sun disc.
+const STARTEX_VS=`#version 300 es
+in vec3 inPos; in vec2 inTC;
+uniform vec4 c260,c261,c263; uniform float uTile;
+out vec2 vTC;
+void main(){ vec3 d=normalize(inPos); float w=dot(c263.xyz,d);
+ gl_Position=vec4(dot(c260.xyz,d), -dot(c261.xyz,d), w*0.999999, w);   // far depth; w<0 (behind) -> clipped
+ vTC=inTC*uTile; }`;
+const STARTEX_FS=`#version 300 es
+precision highp float; in vec2 vTC; out vec4 ocol0;
+uniform sampler2D starTex; uniform float uWhite; uniform float uPow;
+uniform sampler2D uEarthTex;   // earth HDR FBO; .a = earth/atmo/sun coverage (earth writes alpha=1; sky cleared to 0)
+void main(){
+ vec3 tx=texture(starTex, vTC).rgb;   // REPEAT + mipmaps; smooth per-face UV -> hardware LOD, no streaks
+ // EARTH.mnu star curve: pow(tex, STARS POWSCALE) darkens the dim background -> sparse dots; * STARS WHITENESS.
+ vec3 st=pow(max(tx,0.0), vec3(uPow))*uWhite;
+ // OCCLUDE by the earth (firmware renders stars BEHIND it); display-space pass has no depth, so mask by HDR-FBO coverage .a at this pixel.
+ float ea=texelFetch(uEarthTex, ivec2(gl_FragCoord.xy), 0).a; st*=clamp(1.0-ea,0.0,1.0);
+ ocol0=vec4(st, 1.0);
+}`;
+function starCubeTex(src){ const t=gl.createTexture(); gl.bindTexture(34067,t);
+ for(let s=0;s<6;s++) gl.texImage2D(CUBE_FACE_ENUM[s],0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));
+ want++; const im=new Image(); im.onload=function(){ if(!gl)return;
+   gl.bindTexture(34067,t);
+   for(let s=0;s<6;s++) gl.texImage2D(CUBE_FACE_ENUM[s],0,6408,6408,5121,im);   // same real star tile on all 6 faces (firmware tiles it)
+   gl.texParameteri(34067,10241,9729);gl.texParameteri(34067,10240,9729);
+   gl.texParameteri(34067,10242,33071);gl.texParameteri(34067,10243,33071);gl.texParameteri(34067,32882,33071);
+   got++; }; im.src=src; return t; }
+// 2D star texture, REPEAT-wrapped + mipmapped: the firmware tiles this on the cube; tiling -> minification ->
+// the mipmap averages most of the gray band down, leaving sparse crisp ~1px stars (see STARTEX_FS uTile).
+function star2DTex(src){ const t=gl.createTexture(); gl.bindTexture(3553,t);
+ gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));
+ want++; const im=new Image(); im.onload=function(){ if(!gl)return;
+   gl.bindTexture(3553,t); gl.texImage2D(3553,0,6408,6408,5121,im);
+   gl.texParameteri(3553,10242,10497);gl.texParameteri(3553,10243,10497);   // GL_REPEAT (tiling)
+   gl.texParameteri(3553,10240,9729);                                       // mag LINEAR
+   gl.texParameteri(3553,10241,9987);                                       // min LINEAR_MIPMAP_LINEAR
+   gl.generateMipmap(3553);
+   got++; }; im.src=src; return t; }
+function drawStarsTex(){
+ if(!STARTEX||!starTexProg||!starBoxBuf||!star2D||!D) return;
+ const s=D.shared; if(!s['260']||!s['263']) return;
+ if(gl.bindVertexArray)gl.bindVertexArray(null);   // use the default VAO (don't corrupt glowVAO state)
+ gl.useProgram(starTexProg); const U=n=>gl.getUniformLocation(starTexProg,n);
+ gl.uniform4fv(U('c260'),s['260']);gl.uniform4fv(U('c261'),s['261']||s['260']);gl.uniform4fv(U('c263'),s['263']);
+ gl.uniform1f(U('uWhite'),STAR_WHITE); gl.uniform1f(U('uPow'),STAR_POW); gl.uniform1f(U('uTile'),STAR_TILE);
+ gl.activeTexture(33984+0); gl.bindTexture(3553,star2D); gl.uniform1i(U('starTex'),0);
+ gl.activeTexture(33984+1); gl.bindTexture(3553, hdrFBO?hdrFBO.tex:black); gl.uniform1i(U('uEarthTex'),1);
+ gl.bindBuffer(34962,starBoxBuf);
+ const pl=gl.getAttribLocation(starTexProg,'inPos'); const tl=gl.getAttribLocation(starTexProg,'inTC');
+ gl.enableVertexAttribArray(pl); gl.vertexAttribPointer(pl,3,5126,false,20,0);
+ gl.enableVertexAttribArray(tl); gl.vertexAttribPointer(tl,2,5126,false,20,12);
+ // EARTH.mnu STARS IN HDR=0 -> add in DISPLAY space (additive, post-tonemap), drowned where the earth is bright.
+ gl.disable(2884); gl.disable(2929); gl.depthMask(false); gl.enable(3042); gl.blendFunc(1,1);
+ gl.drawArrays(4,0,36);   // star skybox cube (6 faces x 2 tris)
+ gl.disable(3042);
+ gl.disableVertexAttribArray(pl); gl.disableVertexAttribArray(tl);
+}
+// ===== ECLIPSE SUN BURST (SunDisc_FP, decompiled verbatim) =====
+// A small bright disc at the projected sun, rendered INTO the HDR FBO (after the earth) so the bloom pyramid
+// makes the corona (firmware: 24 additive glare passes; validated radial = 3-Gaussian sigma 41/117/304 px).
+// glow=exp(|uv.x|*SCALE_X - |uv.y|*SCALE_Y) (the verbatim FP). The earth occludes via the depth buffer
+// (geometrically identical to the FP's ray-sphere occlusion: the view ray that hits the unit earth is blocked).
+// Color is white -> the composite LUT tonemaps it to warm-white, same as the surface (firmware const8-11={1,1,1,1}).
+const SUNDISC_VS=`#version 300 es
+uniform vec2 uSunNdc; uniform float uSize; uniform float uAspect; out vec2 vUV;
+const vec2 Q[6]=vec2[6](vec2(0.,0.),vec2(1.,0.),vec2(0.,1.),vec2(0.,1.),vec2(1.,0.),vec2(1.,1.));
+void main(){ vec2 c=Q[gl_VertexID]; vUV=c;
+ vec2 off=(c*2.0-1.0)*uSize; off.x/=uAspect;                 // square in pixels
+ gl_Position=vec4(uSunNdc+off, 0.9999, 1.0); }`;             // far depth -> earth occludes
+const SUNDISC_FS=`#version 300 es
+precision highp float; in vec2 vUV; out vec4 ocol0;
+uniform vec2 uScale; uniform float uBri;
+void main(){ vec2 uv=vUV-0.5;
+ float w=abs(uv.x)*uScale.x - abs(uv.y)*uScale.y;           // SunDisc_FP: |uv.x|*SCALE_X - |uv.y|*SCALE_Y
+ float glow=exp(w);                                          // (*1.4427 then EX2) == exp(w)
+ ocol0=vec4(vec3(glow*uBri), 1.0); }`;                       // white HDR -> bloom=corona, composite LUT=warm-white
+function drawSunDisc(){
+ if(!SUNDISC||!sunDiscProg||!D) return;
+ const s=D.shared; if(!s['260']||!s['263']) return;
+ const fcsrc=curFC||D.fc; const sun=fcsrc&&fcsrc[8]; if(!sun) return;
+ const c260=s['260'],c261=s['261']||s['260'],c263=s['263'];
+ const d3=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+ const d263=d3(c263,sun); if(d263<=1e-6) return;             // sun behind camera -> no burst
+ const ndcx=d3(c260,sun)/d263, ndcy=-d3(c261,sun)/d263;     // proven STAR_VS forward projection of the sun dir
+ gl.useProgram(sunDiscProg); const U=n=>gl.getUniformLocation(sunDiscProg,n);
+ gl.uniform2f(U('uSunNdc'),ndcx,ndcy);
+ gl.uniform2f(U('uScale'),SUN_SCX,SUN_SCY); gl.uniform1f(U('uBri'),SUN_BRI);
+ gl.uniform1f(U('uSize'),SUN_SIZE); gl.uniform1f(U('uAspect'),canvas.width/canvas.height);
+ gl.disable(2884); if(SUN_NOOCC){gl.disable(2929);}else{gl.enable(2929); gl.depthFunc(515);} gl.depthMask(false);  // earth (closer) occludes; don't write depth
+ gl.enable(3042); gl.blendFunc(1,1);                                          // additive into the HDR scene
+ gl.drawArrays(4,0,6); gl.disable(3042);
+}
+// SCENE-TRANSITION fade-to-black. The real globe dips through black between scenes (the user observed it;
+// firmware has a BLACK FADE param in atm ATM.mnu). The exact per-scene sequencer timing is NOT dumped, so
+// the duration FADE_SECS is an APPROXIMATION (tunable via MPGlobe.fadeSecs) -- flagged, not firmware-exact.
+const FADE_VS=`#version 300 es
+void main(){ vec2 p=vec2(float((gl_VertexID<<1)&2), float(gl_VertexID&2)); gl_Position=vec4(p*2.0-1.0,0.0,1.0); }`;
+const FADE_FS=`#version 300 es
+precision highp float; out vec4 ocol0; uniform float uA;
+void main(){ ocol0=vec4(0.0,0.0,0.0,uA); }`;   // black with opacity uA (=1-fade) over the rendered frame
+function drawFade(fade){
+ if(fade>=0.999||!fadeProg) return;
+ if(gl.bindVertexArray)gl.bindVertexArray(null);
+ gl.useProgram(fadeProg); gl.uniform1f(gl.getUniformLocation(fadeProg,'uA'),Math.min(1,Math.max(0,1.0-fade)));
+ gl.disable(2884); gl.disable(2929); gl.depthMask(false);
+ gl.enable(3042); gl.blendFunc(770,771);   // SRC_ALPHA, ONE_MINUS_SRC_ALPHA -> black over scene
+ gl.drawArrays(4,0,3); gl.disable(3042);
+}
+function fadeFactor(t,durSecs){   // 1.0 = full scene; 0.0 = black. dip-to-black at each scene end/start.
+ const f=FADE_SECS/Math.max(1,durSecs||SCENE_SECS);   // fade fraction of THIS scene (real duration) at each end
+ if(t<f) return t/f;                          // fade IN
+ if(t>1.0-f) return (1.0-t)/f;                // fade OUT
+ return 1.0;
+}
 // GLOW render path: earth+atmo -> linear-HDR FBO -> buildGlow -> composite CURVE((earthHDR+glow*g)*slum*warmbias) -> canvas.
 function drawGlow(){
  const W=canvas.width,H=canvas.height;
@@ -543,37 +919,67 @@ function drawGlow(){
  // 1) render earth patches + atmo into the HDR FBO with the LINEAR-HDR output mode (uMode=5 / uLinear=1).
  gl.bindFramebuffer(36160,F.fbo);
  gl.viewport(0,0,W,H);gl.clearColor(0,0,0,0);gl.clear(16640);gl.enable(2929);gl.depthFunc(515);
- drawStars();                            // stars into the HDR scene (tonemapped + may bloom faintly)
+ if(!STARTEX)drawStars();               // catalog stars (legacy) into HDR; texture stars are added post-composite (display space)
  if(CULL){gl.enable(2884);gl.cullFace(1029);}else{gl.disable(2884);}
  gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
- gl.uniform1f(U('uFlipY'),1.0);
+ const fcsrc=curFC||D.fc;
+ const fc=new Float32Array(23*4); for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
+ resolveInscat();   // per-scene: pick nearest scene -> _psSurfTex (earth lut), _psScat (limb lut), _psFrame (atmo inj), fcAtmo
+ const eclView=isEclipseView();
+ // VIEWPORT-Y: the firmware RSX viewport (scale.y=-540) + WebGL's bottom-left framebuffer origin make the
+ // NET firmware->WebGL y-map the IDENTITY (proven: gl_Position.y/w must equal the raw MVP clip.y/w; the
+ // win-remap in the VS already negates clip.y, so uFlipY=-1 cancels it -> correct, scene-independent). The
+ // old default +1 mirrored the disc vertically (only invisible for near-centred daytime discs; glaring for
+ // the eclipse, where the earth sits far below the frame). Verified vs TF gl_Position + ecl2/warm2 presents.
+ gl.uniform1f(U('uFlipY'),-1.0);
  gl.uniform1f(U('uDbg'),0.0);
  gl.uniform1f(U('uMode'),5.0);          // linear HDR earth scene (r2.xyz)
  gl.uniform1f(U('uSlum'),SLUM);
- const fcsrc=curFC||D.fc;
- const fc=new Float32Array(23*4); for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
+ gl.uniform1f(U('uLutScale'),LUTSCALE); gl.uniform1f(U('uFeedback'),FEEDBACK_PS);
  gl.uniform4fv(U('fc'),fc);
- bindT(4,'tex4',sharedTex.tex4);bindT(5,'tex5',sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
- bindT(7,'tex14',sharedTex.tex14);bindT(8,'tex15',sharedTex.tex15);bindT(9,'tex13',black);
+ const surfTex4 = CAP_LUT || ((INSCAT_PS&&_psSurfTex) ? _psSurfTex : ((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
+ bindT(4,'tex4',surfTex4);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
+ bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black);
  gl.uniform1f(U('uTiles'),TILES);
  const bindCube=(unit,name,tex)=>{gl.activeTexture(33984+unit);gl.bindTexture(34067,tex);gl.uniform1i(U(name),unit);};
  bindCube(10,'earthCube',sharedTex.earthCube);bindCube(11,'cloudsCube',sharedTex.cloudsCube);bindCube(12,'maskCube',sharedTex.maskCube);
  const pl=gl.getAttribLocation(prog,'in_pos');gl.bindBuffer(34962,eMesh.pb);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
  gl.bindBuffer(34963,eMesh.ib);
- if(!ATMO_ONLY) for(let i=0;i<D.patches.length;i++){
-   gl.frontFace(windSign(D.patches[i].corners)<0?2304:2305);
+ // uFlipY=-1 inverts the screen-space winding -> invert the per-patch frontFace so back-face cull still
+ // removes the FAR hemisphere (else it shows the fully-lit back side = the bright-earth bug). This is now
+ // unconditional (matches the unconditional uFlipY=-1 viewport fix above).
+ const wflip = -1;
+ if(!ATMO_ONLY&&!STARSONLY) for(let i=0;i<D.patches.length;i++){
+   gl.frontFace(windSign(D.patches[i].corners)*wflip<0?2304:2305);
    const pt=patchTex[D.patches[i].idx];
    if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
    gl.uniform1f(U('uT2bad'), (T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
+ // (per-scene limb atmo frame is set in resolveInscat -> ATMO_SCENE auto-managed)
  // 1b) atmosphere limb additively INTO the HDR FBO (linear HDR), so it both feeds the bloom and gets
  //     tonemapped together with the earth -- the faithful pipeline. The per-channel composite no longer
  //     warm-biases, so the limb's Rayleigh blue survives (no need for the old separate canvas pass).
- if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex) drawAtmoLinear();
- // 2) build the bloom glow from the linear-HDR scene (GlobeGlow uses this same gl context).
+ if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex&&!STARSONLY) drawAtmoLinear();
+ // 1c) eclipse sun-disc burst into the HDR FBO (bright, occluded by the earth) so the bloom builds the corona.
+ if(!STARSONLY) drawSunDisc();
+ // 2) VERBATIM firmware glare pipeline: GlareSource bright-pass (fp_0619a0 = extReinhard(scene*Exp) -
+ //    GLARE THRESH, clamp>=0) so only over-display-range energy (the sun-rising point) blooms, then bloom
+ //    the BRIGHT-PASS (not the raw HDR scene). This keeps the warm sunrise localized (no whole-arc
+ //    white-blow) and the cyan limb mid-tones out of the bloom. The display scene tonemap stays in C_FS.
+ gl.disable(2929);gl.disable(3042);gl.disable(2884);
+ gl.bindVertexArray(glowVAO);
+ const GR=ensureColorRT(_gsRef,W,H);
+ gl.bindFramebuffer(36160,GR.fbo);gl.viewport(0,0,W,H);
+ gl.useProgram(gsProg);
+ gl.activeTexture(33984+0);gl.bindTexture(3553,F.tex);gl.uniform1i(gl.getUniformLocation(gsProg,'uTone'),0);
+ gl.uniform1f(gl.getUniformLocation(gsProg,'uSlum'),GLOW_SLUM*0.125);     // EXPOSURE 0.789/8
+ gl.uniform1f(gl.getUniformLocation(gsProg,'uThresh'),GLARE_THRESH);      // HDR.mnu GLARE THRESH
+ gl.drawArrays(4,0,3);
+ gl.bindVertexArray(null);
+ // 2b) bloom the BRIGHT-PASS (the verbatim downsample/upsample pyramid, globe_glow.js)
  gl.bindFramebuffer(36160,null);
- const glow=GlobeGlow.buildGlow(gl, F.tex, W, H);
+ const glow=GlobeGlow.buildGlow(gl, GR.tex, W, H);
  _lastGlow=glow;
  // 3) composite earthHDR + glow through the firmware CURVE onto the canvas.
  gl.bindFramebuffer(36160,null);
@@ -581,10 +987,18 @@ function drawGlow(){
  gl.useProgram(cprog);const C=n=>gl.getUniformLocation(cprog,n);
  gl.activeTexture(33984+0);gl.bindTexture(3553,F.tex);gl.uniform1i(C('uEarth'),0);
  gl.activeTexture(33984+1);gl.bindTexture(3553,glow.tex);gl.uniform1i(C('uGlow'),1);
- gl.uniform1f(C('uSlum'),GLOW_SLUM);     // exposure into the per-channel HDR.mnu tonemap (firmware EXPOSURE 0.789)
+ gl.uniform1f(C('uSlum'),GLOW_SLUM*0.125);  // EXPOSURE 0.789 / 8 (undo the surface fp's r2 *8) into the per-channel ext-Reinhard
  gl.uniform3fv(C('uGlowGain'),new Float32Array(GLOW_GAIN));
  gl.activeTexture(33984+2);gl.bindTexture(3553,glowSprite||black);gl.uniform1i(C('uSprite'),2);
- gl.uniform1f(C('uGlow2'),GLOW2); gl.uniform2f(C('uDims'),W,H);
+ gl.uniform1f(C('uGlow2'),GLOW2); gl.uniform2f(C('uDims'),W,H); gl.uniform1f(C('uPassthru'),0.0);
+ // per-scene FAITHFUL tonemap in the composite (TONELUT_PS): bind the scene's real tex14/15 + the firmware
+ // scale (1/128, UN-flag) + backbuffer feedback 1/(1-fc21=0.125). Falls back to the static LUTWARM otherwise.
+ const psTone = TONELUT_PS && CAP_T15 && CAP_T14;
+ gl.activeTexture(33984+3);gl.bindTexture(3553,(psTone?CAP_T15:sharedTex.tex15));gl.uniform1i(C('uLut15'),3);
+ gl.activeTexture(33984+4);gl.bindTexture(3553,(psTone?CAP_T14:sharedTex.tex14));gl.uniform1i(C('uLut14'),4);
+ gl.uniform1f(C('uLutOn'), psTone?1.0:LUTWARM);
+ gl.uniform1f(C('uLutExpo'), psTone?(1.0/128.0):LUTEXPO);
+ gl.uniform1f(C('uLutFb'), psTone?(1.0/(1.0-0.125)):1.0);
  {const sh=D.shared||{};const gv=k=>{const v=sh[k]||[0,0,0,0];return [v[0],v[1],v[2],v[3]];};
   gl.uniform4f(C('c260'),...gv('260'));gl.uniform4f(C('c261'),...gv('261'));gl.uniform4f(C('c262'),...gv('262'));gl.uniform4f(C('c263'),...gv('263'));
   const gf=new Float32Array(17*4);for(let i=0;i<17;i++){const v=GLOW_FC[i]||[0,0,0,0];gf[i*4]=v[0];gf[i*4+1]=v[1];gf[i*4+2]=v[2];gf[i*4+3]=v[3];}
@@ -592,8 +1006,88 @@ function drawGlow(){
  gl.bindVertexArray(glowVAO);
  gl.drawArrays(4,0,3);
  gl.bindVertexArray(null);
+ if(STARTEX)drawStarsTex();   // real star field, additive in DISPLAY space (STARS IN HDR=0), drowned where the earth is bright
  // (atmosphere is now rendered additively into the HDR FBO above, step 1b, so it blooms + tonemaps
  //  with the earth and keeps its blue -- no separate post pass needed.)
+}
+// FAITHFUL render (GLOWFAITH): the firmware pipeline = earth -> col0 per-scene LUT -> DISPLAY (LDR), and the
+// LIMB/SUN -> their OWN tonemap + a SEPARATE HDR bloom -> additive composite. So we render TWO targets:
+//   F_disp (LDR): col0 earth (uMode=1, per-scene tex14/15, 1/128 scale, feedback) + drawAtmo (tonemapped limb)
+//   F_bloom (HDR): the earth DEPTH (blitted) occludes drawAtmoLinear (HDR limb) + drawSunDisc -> bright-pass -> bloom
+// composite (uPassthru): canvas = F_disp + bloom (NO re-tonemap; F_disp is already LDR).
+function drawGlowFaith(){
+ const W=canvas.width,H=canvas.height;
+ const Fd=ensureHDR(W,H), Fb=ensureHDR2(W,H);
+ // ---- 1) F_disp = col0 earth (LDR) + tonemapped limb ----
+ gl.bindFramebuffer(36160,Fd.fbo);
+ gl.viewport(0,0,W,H);gl.clearColor(0,0,0,0);gl.clear(16640);gl.enable(2929);gl.depthFunc(515);
+ if(CULL){gl.enable(2884);gl.cullFace(1029);}else{gl.disable(2884);}
+ gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
+ const fcsrc=curFC||D.fc; const fc=new Float32Array(23*4);for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
+ resolveInscat();
+ gl.uniform1f(U('uFlipY'),-1.0);gl.uniform1f(U('uDbg'),0.0);
+ gl.uniform1f(U('uMode'),1.0);   // col0
+ gl.uniform1f(U('uSlum'),SLUM);
+ gl.uniform1f(U('uLutScale'),1.0/128.0);gl.uniform1f(U('uFeedback'),1.0);   // faithful: 1/128 UN-scale + steady-state feedback
+ gl.uniform4fv(U('fc'),fc);
+ const surfTex4 = CAP_LUT || ((INSCAT_PS&&_psSurfTex)?_psSurfTex:((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
+ bindT(4,'tex4',surfTex4);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
+ bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black);
+ gl.uniform1f(U('uTiles'),TILES);
+ const bindCube=(unit,name,tex)=>{gl.activeTexture(33984+unit);gl.bindTexture(34067,tex);gl.uniform1i(U(name),unit);};
+ bindCube(10,'earthCube',sharedTex.earthCube);bindCube(11,'cloudsCube',sharedTex.cloudsCube);bindCube(12,'maskCube',sharedTex.maskCube);
+ const pl=gl.getAttribLocation(prog,'in_pos');gl.bindBuffer(34962,eMesh.pb);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
+ gl.bindBuffer(34963,eMesh.ib);
+ const wflip=-1;
+ if(!ATMO_ONLY&&!STARSONLY) for(let i=0;i<D.patches.length;i++){
+   gl.frontFace(windSign(D.patches[i].corners)*wflip<0?2304:2305);
+   const pt=patchTex[D.patches[i].idx];
+   if(pt){bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]);}
+   gl.uniform1f(U('uT2bad'),(T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
+   gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
+ gl.disable(2884);
+ if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex&&!STARSONLY) drawAtmo();   // tonemapped limb (uLinear=0, LDR) into F_disp
+ // ---- 2) composite F_disp -> canvas NOW (before buildGlow alters GL state): passthrough, NO bloom ----
+ const C=n=>gl.getUniformLocation(cprog,n);
+ gl.bindFramebuffer(36160,null);gl.viewport(0,0,W,H);gl.disable(2929);gl.disable(3042);gl.disable(2884);
+ gl.useProgram(cprog);
+ gl.activeTexture(33984+0);gl.bindTexture(3553,Fd.tex);gl.uniform1i(C('uEarth'),0);
+ gl.activeTexture(33984+1);gl.bindTexture(3553,black);gl.uniform1i(C('uGlow'),1);
+ gl.activeTexture(33984+2);gl.bindTexture(3553,black);gl.uniform1i(C('uSprite'),2);
+ gl.uniform3fv(C('uGlowGain'),new Float32Array([0,0,0]));
+ gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uLutOn'),0.0);gl.uniform1f(C('uGlow2'),0.0);gl.uniform2f(C('uDims'),W,H);
+ gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
+ // ---- 3) blit F_disp depth -> F_bloom; render HDR limb+sun (bloom source) ----
+ gl.bindFramebuffer(36008,Fd.fbo);gl.bindFramebuffer(36009,Fb.fbo);
+ gl.blitFramebuffer(0,0,W,H,0,0,W,H,256,9728);   // DEPTH_BUFFER_BIT, NEAREST
+ gl.bindFramebuffer(36160,Fb.fbo);gl.viewport(0,0,W,H);
+ gl.colorMask(true,true,true,true);gl.clearColor(0,0,0,0);gl.clear(16384);   // clear COLOR only, keep blitted depth
+ gl.enable(2929);gl.depthFunc(515);
+ if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex&&!STARSONLY) drawAtmoLinear();   // HDR limb
+ if(!STARSONLY) drawSunDisc();                                            // sun, occluded by earth depth
+ // ---- 4) bright-pass(F_bloom) -> buildGlow ----
+ gl.disable(2929);gl.disable(3042);gl.disable(2884);
+ gl.bindVertexArray(glowVAO);
+ const GR=ensureColorRT(_gsRef,W,H);
+ gl.bindFramebuffer(36160,GR.fbo);gl.viewport(0,0,W,H);
+ gl.useProgram(gsProg);
+ gl.activeTexture(33984+0);gl.bindTexture(3553,Fb.tex);gl.uniform1i(gl.getUniformLocation(gsProg,'uTone'),0);
+ gl.uniform1f(gl.getUniformLocation(gsProg,'uSlum'),GLOW_SLUM*0.125);
+ gl.uniform1f(gl.getUniformLocation(gsProg,'uThresh'),GLARE_THRESH);
+ gl.drawArrays(4,0,3);gl.bindVertexArray(null);
+ gl.bindFramebuffer(36160,null);
+ const glow=GlobeGlow.buildGlow(gl,GR.tex,W,H);_lastGlow=glow;
+ // ---- 5) ADD the bloom onto the canvas (blend ONE,ONE): canvas += clamp(bloom*gain) ----
+ gl.bindFramebuffer(36160,null);gl.viewport(0,0,W,H);gl.disable(2929);gl.disable(2884);
+ gl.enable(3042);gl.blendFunc(1,1);   // additive
+ gl.useProgram(cprog);
+ gl.activeTexture(33984+0);gl.bindTexture(3553,black);gl.uniform1i(C('uEarth'),0);
+ gl.activeTexture(33984+1);gl.bindTexture(3553,glow.tex);gl.uniform1i(C('uGlow'),1);
+ gl.uniform3fv(C('uGlowGain'),new Float32Array(GLOW_GAIN));
+ gl.uniform1f(C('uPassthru'),1.0);
+ gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
+ gl.disable(3042);
+ if(STARTEX)drawStarsTex();
 }
 // atmosphere shell with LINEAR-HDR output (uLinear=1), additive into the HDR FBO so it feeds the bloom.
 function drawAtmoLinear(){
@@ -605,12 +1099,20 @@ function drawAtmoLinear(){
  if(!m0||!m1||!m2||!m3)return;
  gl.useProgram(aprog); const U=n=>gl.getUniformLocation(aprog,n);
  gl.uniform4fv(U('mvp0'),m0);gl.uniform4fv(U('mvp1'),m1);gl.uniform4fv(U('mvp2'),m2);gl.uniform4fv(U('mvp3'),m3);
- gl.uniform1f(U('uFlipY'),1.0);
+ const eclMode=INSCAT_ECL||(INSCAT_PS&&isEclipseView());   // (retained for callers that read it)
+ // VIEWPORT-Y: -1 unconditionally, matching the surface earth's firmware-viewport identity fix (the shell
+ // shares the same win-remap; with the surface now at uFlipY=-1 for ALL scenes the limb must follow to stay
+ // registered to the earth). ATMO_FLIPY stays the orientation-probe knob (default 1.0 -> shipped -1.0).
+ gl.uniform1f(U('uFlipY'),-ATMO_FLIPY);
  gl.uniform1f(U('uLinear'),1.0);
+ gl.uniform1f(U('uAtmoHdr'),ATMO_HDR);
  gl.uniform3fv(U('c5'),c5);gl.uniform3fv(U('c6'),c6);gl.uniform3fv(U('c7'),c7);gl.uniform3fv(U('c8'),c8);
- if(curFC&&curFC[4])fcAtmo[16*4]=curFC[4][1];   // per-scene atmosphere intensity: real const[16].x == surface fc[4].y (the per-scene lighting scale, ~1.3 dim..3.7 eclipse); fcAtmo was one-config (~1.485) so the eclipse atmosphere was ~0.4x too dim
+ if(curFC&&curFC[4]&&!FCATMO_OVR)fcAtmo[16*4]=curFC[4][1];   // per-scene atmosphere intensity approximation (real const[16].x != surface fc[4].y); skipped when the REAL atmo fp consts are fed via MPGlobe.fcatmo
  gl.uniform4fv(U('fc'),fcAtmo);
- gl.activeTexture(33984);gl.bindTexture(3553,scatterTex);gl.uniform1i(U('tex0'),0);
+ // _AtmSpaceIv (TEXUNIT0 of the atmo shell fp): per-scene -> the picked scene's LIMB lut (ac6e80000); eclipse ->
+ // the shipped tex0atmEcl (broad warm scatter); else the daytime scatterTex. NOT the surface tex4 (nearly black).
+ const aScat=CAP_LIMB || ((INSCAT_PS&&_psScat) ? _psScat : (INSCAT_ECL ? ((ATMO_SOLID&&sharedTex.tex0atmEclSolid)?sharedTex.tex0atmEclSolid:((ATMO_VFLIP&&sharedTex.tex0atmEclFlip)?sharedTex.tex0atmEclFlip:(sharedTex.tex0atmEcl||sharedTex.tex4ecl||scatterTex))) : scatterTex));
+ gl.activeTexture(33984);gl.bindTexture(3553,aScat);gl.uniform1i(U('tex0'),0);
  gl.disable(2884); gl.depthMask(false); gl.enable(3042); gl.blendFunc(1,1);
  let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
  let tl=gl.getAttribLocation(aprog,'in_tc0');gl.bindBuffer(34962,aMesh.tbuf);gl.enableVertexAttribArray(tl);gl.vertexAttribPointer(tl,4,5126,false,0,0);
@@ -620,28 +1122,34 @@ function drawAtmoLinear(){
 
 function draw(){
  if(!gl||!D||!eMesh||got<want)return;
+ if(GLOWFAITH && hdrExt && cprog && glowVAO && typeof GlobeGlow!=='undefined' && (!TONELUT_PS || CAP_T14)){ drawGlowFaith(); return; }   // faithful path; needs the per-scene tonemap LUT when TONELUT_PS -> else fall through to drawGlow (works with static LUTs when the per-scene LUT bins are not deployed)
  if(GLOW && hdrExt && cprog && glowVAO && typeof GlobeGlow!=='undefined'){ drawGlow(); return; }   // gated new path (needs RGBA16F FBO)
  const W=canvas.width,H=canvas.height;
  gl.viewport(0,0,W,H);gl.clearColor(0,0,0,1);gl.clear(16640);gl.enable(2929);gl.depthFunc(515);
- drawStars();                          // real-derived celestial star field, behind the earth
+ if(!STARTEX)drawStars();             // catalog stars (legacy); texture stars added post-composite (display space)
  if(CULL){gl.enable(2884);gl.cullFace(1029);}else{gl.disable(2884);}   // back-face cull (per-patch frontFace)
  gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
- gl.uniform1f(U('uFlipY'),1.0);
+ const fcsrc=curFC||D.fc;  // per-scene captured fragment constants when cycling, else baked
+ const fc=new Float32Array(23*4); for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
+ resolveInscat();
+ const eclView=isEclipseView();
+ gl.uniform1f(U('uFlipY'),-1.0);   // firmware-viewport identity (see the glow path); -1 for ALL scenes
  gl.uniform1f(U('uDbg'),DBG);
  gl.uniform1f(U('uMode'),ENC);
  gl.uniform1f(U('uSlum'),SLUM);
- const fcsrc=curFC||D.fc;  // per-scene captured fragment constants when cycling, else baked
- const fc=new Float32Array(23*4); for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
+ gl.uniform1f(U('uLutScale'),LUTSCALE); gl.uniform1f(U('uFeedback'),FEEDBACK_PS);
  gl.uniform4fv(U('fc'),fc);
- bindT(4,'tex4',sharedTex.tex4);bindT(5,'tex5',sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
- bindT(7,'tex14',sharedTex.tex14);bindT(8,'tex15',sharedTex.tex15);bindT(9,'tex13',black);
+ const surfTex4 = CAP_LUT || ((INSCAT_PS&&_psSurfTex) ? _psSurfTex : ((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
+ bindT(4,'tex4',surfTex4);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
+ bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black);
  gl.uniform1f(U('uTiles'),TILES);
  const bindCube=(unit,name,tex)=>{gl.activeTexture(33984+unit);gl.bindTexture(34067,tex);gl.uniform1i(U(name),unit);};
  bindCube(10,'earthCube',sharedTex.earthCube);bindCube(11,'cloudsCube',sharedTex.cloudsCube);bindCube(12,'maskCube',sharedTex.maskCube);
  const pl=gl.getAttribLocation(prog,'in_pos');gl.bindBuffer(34962,eMesh.pb);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
  gl.bindBuffer(34963,eMesh.ib);
- if(!ATMO_ONLY) for(let i=0;i<D.patches.length;i++){
-   gl.frontFace(windSign(D.patches[i].corners)<0?2304:2305);
+ const wflip = -1;   // uFlipY=-1 unconditional -> invert frontFace so back-face cull keeps the near hemisphere
+ if(!ATMO_ONLY&&!STARSONLY) for(let i=0;i<D.patches.length;i++){
+   gl.frontFace(windSign(D.patches[i].corners)*wflip<0?2304:2305);
    const pt=patchTex[D.patches[i].idx];
    if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
    gl.uniform1f(U('uT2bad'), (T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
@@ -660,12 +1168,19 @@ function drawAtmo(){
  if(!m0||!m1||!m2||!m3)return;
  gl.useProgram(aprog); const U=n=>gl.getUniformLocation(aprog,n);
  gl.uniform4fv(U('mvp0'),m0);gl.uniform4fv(U('mvp1'),m1);gl.uniform4fv(U('mvp2'),m2);gl.uniform4fv(U('mvp3'),m3);
- gl.uniform1f(U('uFlipY'),1.0);
+ const eclMode=INSCAT_ECL||(INSCAT_PS&&isEclipseView());   // (retained for callers that read it)
+ // VIEWPORT-Y: -1 unconditionally, matching the surface earth's firmware-viewport identity fix (the shell
+ // shares the same win-remap; with the surface now at uFlipY=-1 for ALL scenes the limb must follow to stay
+ // registered to the earth). ATMO_FLIPY stays the orientation-probe knob (default 1.0 -> shipped -1.0).
+ gl.uniform1f(U('uFlipY'),-ATMO_FLIPY);
  gl.uniform1f(U('uLinear'),0.0);
+ gl.uniform1f(U('uAtmoHdr'),ATMO_HDR);
  gl.uniform3fv(U('c5'),c5);gl.uniform3fv(U('c6'),c6);gl.uniform3fv(U('c7'),c7);gl.uniform3fv(U('c8'),c8);
- if(curFC&&curFC[4])fcAtmo[16*4]=curFC[4][1];   // per-scene atmosphere intensity: real const[16].x == surface fc[4].y (the per-scene lighting scale, ~1.3 dim..3.7 eclipse); fcAtmo was one-config (~1.485) so the eclipse atmosphere was ~0.4x too dim
+ if(curFC&&curFC[4]&&!FCATMO_OVR)fcAtmo[16*4]=curFC[4][1];   // per-scene atmosphere intensity approximation (real const[16].x != surface fc[4].y); skipped when the REAL atmo fp consts are fed via MPGlobe.fcatmo
  gl.uniform4fv(U('fc'),fcAtmo);
- gl.activeTexture(33984);gl.bindTexture(3553,scatterTex);gl.uniform1i(U('tex0'),0);
+ // _AtmSpaceIv (TEXUNIT0): per-scene -> picked scene's LIMB lut; eclipse -> atmo draw's own tex0 RT (tex0atmEcl).
+ const aScat=CAP_LIMB || ((INSCAT_PS&&_psScat) ? _psScat : (INSCAT_ECL ? ((ATMO_SOLID&&sharedTex.tex0atmEclSolid)?sharedTex.tex0atmEclSolid:((ATMO_VFLIP&&sharedTex.tex0atmEclFlip)?sharedTex.tex0atmEclFlip:(sharedTex.tex0atmEcl||sharedTex.tex4ecl||scatterTex))) : scatterTex));
+ gl.activeTexture(33984);gl.bindTexture(3553,aScat);gl.uniform1i(U('tex0'),0);
  gl.disable(2884); gl.depthMask(false); gl.enable(3042); gl.blendFunc(1,1);   // ONE,ONE additive
  let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
  let tl=gl.getAttribLocation(aprog,'in_tc0');gl.bindBuffer(34962,aMesh.tbuf);gl.enableVertexAttribArray(tl);gl.vertexAttribPointer(tl,4,5126,false,0,0);
@@ -704,12 +1219,18 @@ function pickPreset(i){ // resolve a PRESETS entry to a loaded camera path (fall
 // SCENE replay: captured per-frame consts (camera c260-263 + firmware lighting basis c461-467) ->
 // exact per-scene camera AND lighting (no clipping). Cycles all captured scenes like the real XMB.
 let SCENES=null, sceneIdx=0, SCENES_IDX=null, SCENE_FC=null, curFC=null;
-let SCENE_SECS=18;   // wall-seconds per scene before advancing (tunable via MPGlobe.sceneSecs)
+let REALDUR=true;    // cap2: play each scene over its REAL captured duration ((frame1-frame0)/30fps) so the camera moves at the firmware's real rate (MPGlobe.realdur=false -> uniform SCENE_SECS)
+let SCENE_SECS=60;   // wall-seconds per scene before advancing (tunable via MPGlobe.sceneSecs). The within-scene
+                     // camera path is the REAL captured motion; the old 18s played it 4-13x too fast vs the real
+                     // per-scene durations (~80-236s, un-dumped sequencer) = the "too fast/erratic" the user saw.
+                     // 60s is slower/smooth (still an APPROX of the un-dumped duration; flagged, tunable).
 let DBG=0;           // debug output selector (MPGlobe.dbg): 1=earth 2=clouds 3=sd-direction
 let ENC=3;           // DEFAULT 3=VALIDATED firmware curve composite (also the GLOW-off fallback). 0=interim Reinhard, 1=verbatim ramp-encoded (MPGlobe.enc)
 let SLUM=0.30;       // calibration: colored HDR r2 -> tonemap-curve domain (MPGlobe.slum); tuned via CDP vs the real present
                      // NOTE: the GLOW composite path uses its own calibrated SLUM (~0.15) -- set by MPGlobe.glow defaults below.
 let ATMO_ONLY=0;     // render only the atmosphere shell over black (MPGlobe.atmoOnly) -- for color validation
+let USE_CAP=true;    // 2026-06-09 cap2: coherent full-cycle capture (11 scenes) with REAL per-frame camera + in-scatter + limb LUTs, validated vs presents (per-scene color/camera/limb match). Brightness ~1.5x dim (glint pending). MPGlobe.usecap.
+                     // Cameras are real/correct, but the surface fp renders raw captured fc too dark for some scenes (port-correctness gap) -> staged OFF until the fp is fixed + validated vs the captured presents.
 let USE_COH=true;    // DEFAULT = coherent set (9 scenes) + aligned atmosphere limb (verified cyan Rayleigh).
                      // QA confirmed BOTH sets overexpose equally at bright moments under the interim Reinhard
                      // tonemap (fc_cap5 scene0=0.21, coherent 0.16-0.27) -- the HDR decode (DRAW 18) is the
@@ -733,9 +1254,26 @@ function tick(){
     // to perceive cycling, so we play each scene over a uniform, visible duration. SCENE_SECS is tunable
     // (MPGlobe.sceneSecs); the WITHIN-scene camera motion is the exact captured path, only its playback
     // speed is normalized.
-    const F=SCENES[sceneIdx]; const span=SCENE_SECS*60;
+    // Playback span. REALDUR (default, cap2): play each scene's captured camera path over its REAL
+    // duration = (frame1-frame0)/30fps, so the within-scene camera moves at the firmware's real rate
+    // (fixes "motion too fast/erratic" - the uniform 60s sped the long cinematic scenes up 3-5x and
+    // slowed the short ones). *2 = 30fps-real -> 60fps-web ticks. Falls back to SCENE_SECS otherwise.
+    const F=SCENES[sceneIdx];
+    const _si=(REALDUR&&SCENES_IDX&&SCENES_IDX[sceneIdx])?SCENES_IDX[sceneIdx]:null;
+    const span=_si?Math.max(60,(_si.frame1-_si.frame0)*2):SCENE_SECS*60;
     const s=sceneAt(F,animT); for(const k of SCENE_KEYS){ if(s[k]) D.shared[k]=s[k]; }
+    if(USE_CAP){
+      // bind this scene's REAL captured in-scatter (surface tex4) + limb (atmo tex0) LUT at the
+      // nearest captured frame; draw the limb only where both the LUT and the per-scene atmo consts
+      // exist (scenes 0-5). Scenes without captured LUTs -> CAP_LUT/CAP_LIMB null = static + no limb.
+      const cl=capSceneLut(sceneIdx,animT);
+      CAP_LUT = cl?cl.surf:null; CAP_LIMB = cl?cl.limb:null;
+      ATMO = (CAP_LIMB && ATMO_SCENE) ? 1 : 0;
+      if(TONELUT_PS){ const ct=capSceneTone(sceneIdx,animT); CAP_T14=ct?ct.t14:null; CAP_T15=ct?ct.t15:null; }
+      else { CAP_T14=null; CAP_T15=null; }
+    }
     draw();
+    drawFade(fadeFactor(animT, span/60));   // dip-to-black at scene boundaries (fade length = FADE_SECS of THIS scene's real duration)
     animT += 1/span; if(animT>1){ animT=0; sceneIdx=(sceneIdx+1)%SCENES.length; setFC(); }
     return true;
   }
@@ -745,6 +1283,7 @@ function tick(){
   const m=lookAtMVP(cf.eye,cf.center,cf.up,cf.fovy,asp);
   D.shared['260']=m.c260; D.shared['261']=m.c261; D.shared['262']=m.cw; D.shared['263']=m.cw; D.shared['460']=m.eye;
   draw();
+  drawFade(fadeFactor(animT/tmax));
   animT += 0.242;
   if(animT>tmax){ animT=0; presetIdx=(presetIdx+1)%PRESETS.length; preset=pickPreset(presetIdx); }
   return true;
@@ -756,6 +1295,21 @@ async function load(){
  sharedTex.tex4=texF32(BASE+'full_tex/t04_f32.bin',256,128);
  sharedTex.tex5=texF32(BASE+'full_tex/t05_f32.bin',256,1);
  sharedTex.tex6=texF32(BASE+'full_tex/t06_f32.bin',64,64);
+ // Gaia atmospheric-scattering LUTs (REAL firmware, extracted from earth.qrc) for the per-frame in-scatter
+ // gloss generation (replaces the static t04). odLut=optical-depth/transmittance 256(sun-elev)x40(shell);
+ // ieFull=irradiance-on-earth LUT 256, UNCLAMPED (real HDR night values). Loaded now; wired by the in-scatter pass.
+ sharedTex.odLut=texF32(BASE+'gaia_lut/od_lut_256x40_rgba_f32_le.bin',256,40);
+ sharedTex.ieFull=texF32(BASE+'gaia_lut/ie_lut_256x1_rgba_f32_le.bin',256,1);
+ sharedTex.tex4ecl=texF32(BASE+'gaia_lut/inscatter_eclipse_tex4_256x128_rgba_f32_le.bin',256,128);  // eclipse SURFACE fp tex4 (real RT ac6f80000; mostly black, warm sliver at V=1)
+ // eclipse ATMOSPHERE SHELL _AtmSpaceIv = the atmo draw's OWN tex0 RT (ac6e80000), a broad warm+cyan scatter
+ // (50.6% nonzero, peak V=0.48). This is a DIFFERENT RT from the surface tex4 (ac6f80000, 6.5% nonzero). The
+ // limb shell MUST sample this one (the surface tex4 is nearly black -> limb rendered nothing). Both extracted
+ // from /mnt/c/rpcs3dev/xmb_dump2/ecl2 (atmo draw vp=0x3f6eeb47 tex0=0x06e80000 vs surface vp=0x0f331863 tex4=0x06f80000).
+ sharedTex.tex0atmEcl=texF32(BASE+'gaia_lut/atmospace_eclipse_atm_tex0_256x128_rgba_f32_le.bin',256,128);
+ sharedTex.tex0atmEclFlip=texF32(BASE+'gaia_lut/atmospace_eclipse_atm_tex0_256x128_rgba_f32_le_flip.bin',256,128);  // V-flipped variant (orientation probe)
+ sharedTex.tex0atmEclSolid=texF32(BASE+'gaia_lut/atmospace_eclipse_atm_tex0_256x128_rgba_f32_le_SOLID.bin',256,128);  // solid-warm debug LUT (shader-math probe)
+ // PER-SCENE in-scatter manifest (32 captured scenes). Lazy-load each scene's LUTs on demand (do NOT preload).
+ fetch(BASE+'gaia_lut/inscatter/manifest.json').then(r=>r.ok?r.json():null).then(m=>{INSCAT_MANIFEST=m;}).catch(()=>{INSCAT_MANIFEST=null;});
  // REAL fp16 HDR tonemap LUTs (RTDUMP'd ac2b90000/ac2b70000, Y16_X16_FLOAT, max ~7.86) -- replaces
  // the old 8-bit t14/t15.png which clipped the HDR. tex15 row0 .y = the validated tonemap CURVE.
  sharedTex.tex14=texF16(BASE+'lut14_rgba32f_128.bin',128,128);
@@ -802,13 +1356,34 @@ async function load(){
  // Per-scene replays (camera + lighting). DEFAULT = fc_cap5 clean set (scene_NN), no overexposure.
  // USE_COH = coherent set (scene_NN_coh) + ALIGNED atmosphere (atmo_scene_NN_coh) -- the limb shell registers
  // to the earth, but the coherent set's brighter scenes overexpose under the interim tonemap (decode pending).
- const SUF = USE_COH ? '_coh' : '';
+ const SUF = USE_CAP ? '_cap2' : (USE_COH ? '_coh' : '');
  try{ const idx=(await fetch(BASE+'scenes_index'+SUF+'.json').then(r=>r.json())).filter(s=>!s.skip);
    SCENES_IDX=idx;
    SCENES=await Promise.all(idx.map(s=>fetch(BASE+s.file).then(r=>r.json()))); sceneIdx=0; animT=0;
    try{ SCENE_FC=await fetch(BASE+'scene_fc'+SUF+'.json').then(r=>r.json()); }catch(e){ SCENE_FC=null; }
-   if(USE_COH){ ATMO_SCENES=await Promise.all(idx.map(s=>fetch(BASE+'atmo_scene_'+String(s.scene).padStart(2,'0')+'_coh.json').then(r=>r.ok?r.json():null).catch(()=>null))); ATMO=1; }
-   else { ATMO_SCENES=null; ATMO=0; }   // fc_cap5 has no aligned atmosphere -> keep the limb off (no misaligned shell)
+   if(USE_COH && !USE_CAP){ ATMO_SCENES=await Promise.all(idx.map(s=>fetch(BASE+'atmo_scene_'+String(s.scene).padStart(2,'0')+'_coh.json').then(r=>r.ok?r.json():null).catch(()=>null))); ATMO=1; }
+   else if(USE_CAP){
+     // cap2 set (2026-06-09 coherent full-cycle capture): every scene has its REAL per-frame in-scatter
+     // (ac6f80000) + limb (ac6e80000) RTs + atmosphere-draw consts (atmo_scene_NN_cap2, vp 3f6eeb47),
+     // captured continuously (RT dump works even minimized). The limb draws per-scene where both a limb
+     // LUT and atmo consts exist (all scenes here); tick() binds each frame's nearest captured LUT.
+     try{
+       CAP_SCENE_LUTS=await fetch(BASE+'cap_scene_luts2.json').then(r=>r.ok?r.json():null).catch(()=>null);
+       if(CAP_SCENE_LUTS){ CAP_LUT_CACHE={};
+         for(const k in CAP_SCENE_LUTS) for(const e of CAP_SCENE_LUTS[k]){
+           if(!CAP_LUT_CACHE[e.fr]) CAP_LUT_CACHE[e.fr]={surf:texF32(BASE+e.surf,256,128), limb:texF32(BASE+e.limb,256,128)}; } }
+     }catch(e){ CAP_SCENE_LUTS=null; }
+     // per-scene surface-fp tonemap LUTs (brightness fix); loaded if present, gated by TONELUT_PS. 128x128 rgba32f (ch0/ch1).
+     try{
+       CAP_SCENE_TONE=await fetch(BASE+'cap_scene_tonelut.json').then(r=>r.ok?r.json():null).catch(()=>null);
+       if(CAP_SCENE_TONE){ CAP_TONE_CACHE={};
+         for(const k in CAP_SCENE_TONE) for(const e of CAP_SCENE_TONE[k]){
+           if(!CAP_TONE_CACHE[e.fr]) CAP_TONE_CACHE[e.fr]={t14:texF16(BASE+e.t14,128,128), t15:texF16(BASE+e.t15,128,128)}; } }
+     }catch(e){ CAP_SCENE_TONE=null; }
+     ATMO_SCENES=await Promise.all(idx.map(s=>fetch(BASE+'atmo_scene_'+String(s.scene).padStart(2,'0')+'_cap2.json').then(r=>r.ok?r.json():null).catch(()=>null)));
+     ATMO=0;   // per-scene gated in tick() (1 only when the scene has both a limb LUT and atmo consts)
+   }
+   else { ATMO_SCENES=null; ATMO=0; }
    setFC(); ATMO_SCENE=ATMO_SCENES?ATMO_SCENES[0]:null;
  }catch(e){ SCENES=null; }
 }
@@ -828,16 +1403,36 @@ const MPGlobe={
    // GLOW composite program + fullscreen VAO (gated path; harmless if GLOW stays off)
    cprog=gl.createProgram();gl.attachShader(cprog,sh(35633,C_VS));gl.attachShader(cprog,sh(35632,C_FS));gl.linkProgram(cprog);
    if(!gl.getProgramParameter(cprog,gl.LINK_STATUS)){errlog+=' composite link: '+gl.getProgramInfoLog(cprog);}
+   // verbatim GlareSource bright-pass that feeds the bloom (only over-display-range energy blooms)
+   gsProg=gl.createProgram();gl.attachShader(gsProg,sh(35633,C_VS));gl.attachShader(gsProg,sh(35632,GS_FS));gl.linkProgram(gsProg);
+   if(!gl.getProgramParameter(gsProg,gl.LINK_STATUS)){errlog+=' glaresrc link: '+gl.getProgramInfoLog(gsProg);}
    starProg=gl.createProgram();gl.attachShader(starProg,sh(35633,STAR_VS));gl.attachShader(starProg,sh(35632,STAR_FS));gl.linkProgram(starProg);
+   starTexProg=gl.createProgram();gl.attachShader(starTexProg,sh(35633,STARTEX_VS));gl.attachShader(starTexProg,sh(35632,STARTEX_FS));gl.linkProgram(starTexProg);
+   // star skybox cube: 6 faces, each a quad (texcoord 0..1, tiled in the VS); inside-out, no cull
+   { const F=[ [[1,-1,-1],[1,-1,1],[1,1,1],[1,1,-1]], [[-1,-1,1],[-1,-1,-1],[-1,1,-1],[-1,1,1]],
+               [[-1,1,-1],[1,1,-1],[1,1,1],[-1,1,1]], [[-1,-1,1],[1,-1,1],[1,-1,-1],[-1,-1,-1]],
+               [[1,-1,1],[-1,-1,1],[-1,1,1],[1,1,1]], [[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1]] ];
+     const TC=[[0,0],[1,0],[1,1],[0,1]]; const v=[];
+     for(const f of F){ for(const i of [0,1,2,0,2,3]){ v.push(f[i][0],f[i][1],f[i][2],TC[i][0],TC[i][1]); } }
+     starBoxBuf=gl.createBuffer(); gl.bindBuffer(34962,starBoxBuf); gl.bufferData(34962,new Float32Array(v),35044); }
+   starCube=starCubeTex(BASE+'gaia_lut/starfield.png');   // legacy cube (kept for fallback)
+   star2D=star2DTex(BASE+'gaia_lut/starfield.png');       // real firmware star texture, REPEAT+mipmap for tiling
+   sunDiscProg=gl.createProgram();gl.attachShader(sunDiscProg,sh(35633,SUNDISC_VS));gl.attachShader(sunDiscProg,sh(35632,SUNDISC_FS));gl.linkProgram(sunDiscProg);
+   fadeProg=gl.createProgram();gl.attachShader(fadeProg,sh(35633,FADE_VS));gl.attachShader(fadeProg,sh(35632,FADE_FS));gl.linkProgram(fadeProg);
+   if(!gl.getProgramParameter(fadeProg,gl.LINK_STATUS)){errlog+=' fade link: '+gl.getProgramInfoLog(fadeProg);}
+   if(!gl.getProgramParameter(sunDiscProg,gl.LINK_STATUS)){errlog+=' sundisc link: '+gl.getProgramInfoLog(sunDiscProg);}
    if(!gl.getProgramParameter(starProg,gl.LINK_STATUS)){errlog+=' star link: '+gl.getProgramInfoLog(starProg);}
    glowVAO=gl.createVertexArray();
    if(!D) load().catch(e=>console.warn('MPGlobe load:',e));   // fetch assets once
  },
  tick,                                   // music loop calls this each frame, then drawImage(canvas)
  ready(){ return !!(running && D && eMesh && got>=want); },
+ gotwant(){ return got+'/'+want; },
  stop(){ running=false; },
- set sceneSecs(v){ SCENE_SECS=v; },
+ set sceneSecs(v){ SCENE_SECS=v; }, set realdur(v){ REALDUR=!!v; }, get realdur(){ return REALDUR; },
  get sceneSecs(){ return SCENE_SECS; },
+ set fadeSecs(v){ FADE_SECS=+v; },
+ get fadeSecs(){ return FADE_SECS; },
  _setScene(i){ if(SCENES){ sceneIdx=((i%SCENES.length)+SCENES.length)%SCENES.length; animT=0; setFC(); } },  // diagnostic: force a scene
  _setT(t){ animT=t; },
  _render(obj){ if(!D)return; running=false;        // inject exact-frame consts + draw (decode/validation)
@@ -845,6 +1440,18 @@ const MPGlobe={
    if(obj.fc) curFC=obj.fc;
    if(obj.atmo){ const a={t:0}; for(const k in obj.atmo) a[k]=obj.atmo[k]; ATMO_SCENE=[a,Object.assign({},a,{t:1})]; ATMO=1; } else { ATMO=0; }
    animT=0.0; draw(); },
+ _renderKeep(obj){ if(!D)return;        // inject exact-frame consts + draw WITHOUT running=false (offscreen-CDP safe)
+   for(const k in (obj.shared||{})) D.shared[k]=obj.shared[k];
+   if(obj.fc) curFC=obj.fc;
+   if(obj.atmo){ const a={t:0}; for(const k in obj.atmo) a[k]=obj.atmo[k]; ATMO_SCENE=[a,Object.assign({},a,{t:1})]; ATMO=1; }
+   animT=0.0; draw(); return 'ok'; },
+ _frame(sid,t){ if(!SCENES||!SCENES.length||!D) return 'no scenes';   // diagnostic: render exactly tick()'s
+   running=false;                                                     // path frozen at (sid,t), no fade/advance
+   sceneIdx=((sid%SCENES.length)+SCENES.length)%SCENES.length; animT=t;
+   const F=SCENES[sceneIdx]; const s=sceneAt(F,animT); for(const k of SCENE_KEYS){ if(s[k]) D.shared[k]=s[k]; }
+   if(USE_CAP){ const cl=capSceneLut(sceneIdx,animT); CAP_LUT=cl?cl.surf:null; CAP_LIMB=cl?cl.limb:null; ATMO=(CAP_LIMB&&ATMO_SCENE)?1:0;
+     if(TONELUT_PS){ const ct=capSceneTone(sceneIdx,animT); CAP_T14=ct?ct.t14:null; CAP_T15=ct?ct.t15:null; } else { CAP_T14=null; CAP_T15=null; } }
+   draw(); return 'ok'; },
  set stars(v){ STARS_ON=v?1:0; },
  get stars(){ return STARS_ON; },
 set cull(v){ CULL=v?1:0; },
@@ -865,17 +1472,94 @@ set cull(v){ CULL=v?1:0; },
  get atmo(){ return ATMO; },
  set glow(v){ GLOW=v?1:0; },                                   // GLOW render path (HDR FBO -> bloom -> CURVE composite)
  get glow(){ return GLOW; },
+ set lutwarm(v){ LUTWARM=v?1:0; }, get lutwarm(){ return LUTWARM; },   // WIP: real LUT tonemap (gold) vs reinhard
+ set lutexpo(v){ LUTEXPO=+v; }, get lutexpo(){ return LUTEXPO; },
+ set startex(v){ STARTEX=v?1:0; }, get startex(){ return STARTEX; },   // real star-texture cube vs catalog points
+ set starwhite(v){ STAR_WHITE=+v; }, get starwhite(){ return STAR_WHITE; },
+ set starpow(v){ STAR_POW=+v; }, get starpow(){ return STAR_POW; },
+ set startile(v){ STAR_TILE=+v; }, get startile(){ return STAR_TILE; },   // cube tiling factor (minification -> crisp stars)
+ set starsonly(v){ STARSONLY=v?1:0; }, get starsonly(){ return STARSONLY; },   // debug: render only the stars (no earth)
+ set tonelut(v){ TONELUT_PS=v?1:0; }, get tonelut(){ return TONELUT_PS; },     // per-scene surface-fp tonemap LUT (brightness fix); needs cap_scene_tonelut.json
+ set lutscale(v){ LUTSCALE=+v; }, get lutscale(){ return LUTSCALE; },
+ set glowfaith(v){ GLOWFAITH=v?1:0; }, get glowfaith(){ return GLOWFAITH; },   // faithful render (col0 earth + separate limb/sun bloom)           // firmware tex14/15 COORD_SCALE2 (UNNORMALIZED -> 1/128)
+ set feedback(v){ FEEDBACK_PS=v?1:0; }, get feedback(){ return FEEDBACK_PS; },   // steady-state backbuffer feedback x1/(1-0.125)
+ get tonelutinfo(){ try{return JSON.stringify({on:!!TONELUT_PS,manifest:!!CAP_SCENE_TONE,cached:Object.keys(CAP_TONE_CACHE).length,t14:!!CAP_T14,t15:!!CAP_T15});}catch(e){return ''+e;} },
+ set sundisc(v){ SUNDISC=v?1:0; }, get sundisc(){ return SUNDISC; },           // eclipse sun-disc burst on/off
+ set sunbri(v){ SUN_BRI=+v; }, get sunbri(){ return SUN_BRI; },                // disc HDR intensity (SUN.mnu BRIGHTNESS 3.4)
+ set sunsize(v){ SUN_SIZE=+v; }, get sunsize(){ return SUN_SIZE; },            // disc NDC half-size (calibrated to real corona)
+ set sunscx(v){ SUN_SCX=+v; }, get sunscx(){ return SUN_SCX; },
+ set sunscy(v){ SUN_SCY=+v; }, get sunscy(){ return SUN_SCY; },
+ set sunnoocc(v){ SUN_NOOCC=v?1:0; }, get sunnoocc(){ return SUN_NOOCC; },     // debug: ignore earth occlusion
+ set inscatecl(v){ INSCAT_ECL=v?1:0; }, get inscatecl(){ return INSCAT_ECL; }, // eclipse _AtmSpaceIv in-scatter LUT (surface tex4 + atmosphere scatterTex)
+ set inscatps(v){ INSCAT_PS=v?1:0; }, get inscatps(){ return INSCAT_PS; },     // RUNTIME per-scene in-scatter (nearest-LUT selection from the 32-scene manifest)
+ set caplut(u){ CAP_LUT = u ? texF32(BASE+u,256,128) : null; }, get caplut(){ return !!CAP_LUT; },   // captured per-frame in-scatter LUT override
+ set caplimb(u){ CAP_LIMB = u ? texF32(BASE+u,256,128) : null; }, get caplimb(){ return !!CAP_LIMB; }, // captured per-frame limb LUT override
+ set surfeclflip(v){ SURF_ECLFLIP=v?1:0; }, get surfeclflip(){ return SURF_ECLFLIP; },  // experiment: invert surface earth viewport-Y for eclipse views (default off; see framing diagnostics)
+ get _eclView(){ try{return isEclipseView();}catch(e){return ''+e;} },
+ set inscatW(v){ INSCAT_PICK_W=+v; }, get inscatW(){ return INSCAT_PICK_W; },    // pickScene ATTN_ATM penalty weight
+ get inscatPick(){ return _psName; },                                            // diagnostic: last picked scene name
+ get inscatReady(){ return !!(INSCAT_MANIFEST&&INSCAT_MANIFEST.scenes); },
+ get inscatScenes(){ return INSCAT_MANIFEST?INSCAT_MANIFEST.scenes.map(s=>s.name):[]; },
+ _pickScene(sun,attn){ const s=pickScene(sun,attn); return s?s.name:null; },      // diagnostic: pure pickScene by explicit sun/attn
+ set iefull(v){ IEFULL=v?1:0; }, get iefull(){ return IEFULL; },               // unclamped IE LUT (restores night/dark side)
+ set atmovflip(v){ ATMO_VFLIP=v?1:0; }, get atmovflip(){ return ATMO_VFLIP; },  // orientation probe for the atmo shell scatter LUT
+ set atmosolid(v){ ATMO_SOLID=v?1:0; }, get atmosolid(){ return ATMO_SOLID; },
+ set atmoflipy(v){ ATMO_FLIPY=+v; }, get atmoflipy(){ return ATMO_FLIPY; },     // shell uFlipY orientation probe
+ set atmohdr(v){ ATMO_HDR=+v; }, get atmohdr(){ return ATMO_HDR; },             // shell pre-bloom HDR scale probe
+ set atmoscene(v){ ATMO_SCENE=v; if(v)ATMO=1; }, get atmoscene(){ return ATMO_SCENE; },  // inject a per-scene atmosphere frame list [{t,'256'..'259','460'..'462'}] (its 460-462 override the surface's via atmoAt, no buildVC conflict)
+ get atmodbg(){ try{return JSON.stringify({aMesh:!!aMesh,scatterTex:!!scatterTex,got:got,want:want,ATMO:ATMO,ATMO_SCENE:!!ATMO_SCENE,fcAtmo:!!fcAtmo,tex4ecl:!!(sharedTex&&sharedTex.tex4ecl),err:errlog.slice(0,200)});}catch(e){return ''+e;} },
+ get _dbgAtmo(){ try{ const a=[]; for(let i=0;i<17;i++)a.push([fcAtmo[i*4],fcAtmo[i*4+1],fcAtmo[i*4+2],fcAtmo[i*4+3]]); return JSON.stringify({FCATMO_OVR:FCATMO_OVR,tex0atmEcl:!!(sharedTex&&sharedTex.tex0atmEcl),fc:a}); }catch(e){return ''+e;} },
+ set fcatmo(v){ if(v&&fcAtmo){ FCATMO_OVR=1; for(const k in v){ const i=+k,a=v[k]; fcAtmo[i*4]=a[0];fcAtmo[i*4+1]=a[1];fcAtmo[i*4+2]=a[2];fcAtmo[i*4+3]=a[3]; } } else { FCATMO_OVR=0; } },  // override per-scene atmosphere fp consts (eclipse: _Params/_Asahi/_AsahiIndicator/_AtmFactor)
  set glowGain(v){ if(Array.isArray(v)&&v.length===3) GLOW_GAIN=v.slice(); else if(typeof v==='number') GLOW_GAIN=[v,v,v]; },
  get glowGain(){ return GLOW_GAIN.slice(); },
  set glowWarm(v){ if(Array.isArray(v)&&v.length===3) GLOW_WARM=v.slice(); },
  get glowWarm(){ return GLOW_WARM.slice(); },
  set glowSlum(v){ GLOW_SLUM=v; },                              // GLOW-path earth exposure (separate from ENC=3 SLUM)
  get glowSlum(){ return GLOW_SLUM; },
+ set glareThresh(v){ GLARE_THRESH=+v; },                       // GlareSource bright-pass threshold (HDR.mnu GLARE THRESH)
+ get glareThresh(){ return GLARE_THRESH; },
  set glowChroma(v){ GLOW_CHROMA=v; },                          // 0=pure luminance earth (golden); small=ocean tint back
  get glowChroma(){ return GLOW_CHROMA; },
  set coherent(v){ USE_COH=!!v; },   // switch to coherent surface set + aligned atmosphere (dev; overexposes until decode lands)
+ set usecap(v){ USE_CAP=!!v; },      // switch to the 22-scene fresh-capture set (true per-scene camera paths); must be set BEFORE start()
+ set assetBase(v){ BASE = v.endsWith('/')?v:v+'/'; },  // validation: load a rebuilt dataset dir without swapping the ship; set BEFORE start()
+ get assetBase(){ return BASE; },
  get coherent(){ return USE_COH; },
  get _info(){ return {scene:sceneIdx, nScenes:SCENES?SCENES.length:0, animT:animT.toFixed(3)}; },
+ // DEBUG: capture the EXACT gl_Position the surface VS produces for patch `pi` via transform feedback.
+ // flip = the uFlipY to apply (default -1 = the shipped firmware-viewport value). Returns Float32Array[289*4]
+ // of final clip-space positions. Used to validate the per-scene earth framing against captured presents.
+ _tfClip(pi,flip){ try{
+   if(!D||!D.patches||!eMesh) return 'not ready';
+   pi=pi||0; flip=(flip===undefined)?-1.0:flip;
+   const tfVS = VS.replace('gl_Position=clip;','gl_Position=clip; oClip=clip;')
+                  .replace('out vec4 tc0,','out vec4 oClip; out vec4 tc0,');
+   const fsStub='#version 300 es\nprecision highp float; out vec4 o; void main(){o=vec4(0.);}';
+   const p=gl.createProgram(); const vs=gl.createShader(35633); gl.shaderSource(vs,tfVS); gl.compileShader(vs);
+   if(!gl.getShaderParameter(vs,35713)) return 'VScompile:'+gl.getShaderInfoLog(vs);
+   const fss=gl.createShader(35632); gl.shaderSource(fss,fsStub); gl.compileShader(fss);
+   gl.attachShader(p,vs); gl.attachShader(p,fss);
+   gl.transformFeedbackVaryings(p,['oClip'],35980); gl.linkProgram(p);
+   if(!gl.getProgramParameter(p,35714)) return 'link:'+gl.getProgramInfoLog(p);
+   gl.useProgram(p);
+   const U=n=>gl.getUniformLocation(p,n);
+   gl.uniform4fv(U('vc'),buildVC(D.patches[pi].corners));
+   gl.uniform1f(U('uFlipY'),flip);
+   const N=289; const out=gl.createBuffer(); gl.bindBuffer(34962,out); gl.bufferData(34962,N*16,35040);
+   const tf=gl.createTransformFeedback(); gl.bindTransformFeedback(36386,tf);
+   gl.bindBufferBase(35982,0,out);
+   const pl=gl.getAttribLocation(p,'in_pos'); gl.bindBuffer(34962,eMesh.pb);
+   gl.enableVertexAttribArray(pl); gl.vertexAttribPointer(pl,4,5126,false,0,0);
+   gl.enable(35977); gl.beginTransformFeedback(0); gl.drawArrays(0,0,N); gl.endTransformFeedback(); gl.disable(35977);
+   gl.bindBufferBase(35982,0,null);
+   const res=new Float32Array(N*4); gl.bindBuffer(34962,out); gl.getBufferSubData(34962,0,res);
+   gl.bindTransformFeedback(36386,null); gl.bindBuffer(34962,null);
+   return Array.from(res);
+ }catch(e){return ''+e;} },
+ get _vcDbg(){ try{ if(!D||!D.patches)return 'no D'; const vc=buildVC(D.patches[0].corners);
+   const r=k=>[vc[k*4],vc[k*4+1],vc[k*4+2],vc[k*4+3]];
+   const c260=r(3),c261=r(4),c263=r(6);
+   return JSON.stringify({c260,c261,c263, sphereCenterNDCy: c261[3]/c263[3], eclView:isEclipseView()}); }catch(e){return ''+e;} },
  _glowStats(){    // diagnostic: float magnitude of HDR FBO + glow tex (calibration only)
    if(!gl||!hdrFBO||!_lastGlow) return 'no glow yet';
    const readF=(fbo,tex,w,h)=>{ const f=gl.createFramebuffer(); gl.bindFramebuffer(36160,f);

@@ -1,0 +1,2385 @@
+[
+ {
+  "fp": "506ad546026da506",
+  "role": "earth surface lighting + atmosphere/rim + final HDR tonemap composite (per-vertex lit globe surface: diffuse/specular from light dir consts, atmosphere fresnel ramp via tex2, glow layer mul tex4*tex5, blend two surface mips tex0/tex1, then *8 HDR and tonemap through dual Y16X16 LUTs tex14/tex15 added onto display-RT tex13). This is the textured globe-body draw (560 verts, prim 6 = triangles), not a fullscreen pass.",
+  "portable_glsl": "// Ported VERBATIM from RSX fp 506ad546026da506 fs_main().\n// const[] inlined from DRAW 1 (frame 14922). Helpers translated:\n//   clamp16(x)=clamp(x,-65504.,65504.) ; fma(a,b,c)=a*b+c ; precision_clamp=clamp (NaN->0)\n//   TEX2D(n,uv)=texture(texN,uv) ; get_wpos: see vUV note (we use gl_FragCoord/screen uv for tex13)\n//\n// Inputs (from vp 0f331863c999266c, all are vec4 varyings, NOT plain screen UV):\n//   tc0 = dst_reg7 : .xy = surface uv set A, .zw = surface uv set B (two-mip blend)\n//   tc1 = dst_reg8 : view/normal-ish vector (normalized * gl_FragCoord.w)  -> \"h0\" light/normal\n//   tc3 = dst_reg10: .xy glow-layer uv (tex4)\n//   tc4 = dst_reg11: .x mip blend factor between tex0 and tex1\n//   tc5 = dst_reg12: .xy 1D ramp uv (tex5)\n//   tc6 = dst_reg13: .xy atmosphere offset scale (tex2 reflection uv slope)\n//   tc7 = dst_reg14: view-space normal/halfvector (normalized * gl_FragCoord.w) -> \"h2\"\n//   tc8 = dst_reg15: .zw atmosphere uv base, .xy other tex2/tex3 uv\n//   tc9 = dst_reg6 : .x point-size-derived term (feeds r4.zw)\n// wpos: tex13 sampled at gl_FragCoord screen position (dither/feedback of display RT).\n\n#version 430\nuniform sampler2D tex0;  // 0x07395d00 512x512  earth surface mip A\nuniform sampler2D tex1;  // 0x07395d00 512x512  earth surface mip B (same RT, diff sampler params)\nuniform sampler2D tex2;  // 0x01a80100 512x512  atmosphere / scatter table (sampled 3x)\nuniform sampler2D tex3;  // 0x07841100 512x512  surface detail / mask\nuniform sampler2D tex4;  // 0x06f80000 256x128  glow accumulation layer\nuniform sampler2D tex5;  // 0x07b0c800 256x1    1D ramp\nuniform sampler2D tex6;  // 0x07930000 64x64    rim/falloff table\nuniform sampler2D tex13; // 0x0791f980 32x32    display/feedback RT (dither) @ screen pos\nuniform sampler2D tex14; // 0x02b90000 128x128  tonemap LUT (Y16_X16_FLOAT, .zw used)\nuniform sampler2D tex15; // 0x02b70000 128x128  tonemap LUT (Y16_X16_FLOAT, .xy used)\n\nin vec4 tc0;\nin vec4 tc1;\nin vec4 tc3;\nin vec4 tc4;\nin vec4 tc5;\nin vec4 tc6;\nin vec4 tc7;\nin vec4 tc8;\nin vec4 tc9;\nin vec2 vUV;           // screen uv for tex13 (= gl_FragCoord.xy / display size)\n\nout vec4 ocol0;\n\nfloat clamp16(float v){ return clamp(v, -65504., 65504.); }\nvec2  clamp16(vec2  v){ return clamp(v, -65504., 65504.); }\nvec3  clamp16(vec3  v){ return clamp(v, -65504., 65504.); }\nvec4  clamp16(vec4  v){ return clamp(v, -65504., 65504.); }\n\nvec4 precision_clamp(vec4 x, float lo, float hi){\n    bvec4 nans = isnan(x);\n    x = mix(x, vec4(0.), nans);\n    return clamp(x, lo, hi);\n}\n\nvoid main()\n{\n    vec4 r2 = vec4(0.);\n    vec4 h2 = vec4(0.);\n    vec4 r3 = vec4(0.);\n    vec4 r4 = vec4(0.);\n    vec4 h3 = vec4(0.);\n    vec4 r0 = vec4(0.);\n    vec4 r1 = vec4(0.);\n    vec4 h1 = vec4(0.);\n    vec4 h7 = vec4(0.);\n    vec4 h5 = vec4(0.);\n    vec4 h0 = vec4(0.);\n    vec4 h4 = vec4(0.);\n    vec4 h6 = vec4(0.);\n\n    // wpos for tex13: original = gl_FragCoord scaled+biased; here use screen uv\n    vec4 wpos = vec4(vUV, gl_FragCoord.z, 1.);\n\n    // r2.xyz = surface mip A\n    r2.xyz = texture(tex0, tc0.xy).xyz;\n    // h2.xyz = normalize(tc7.xyz * gl_FragCoord.w)   (view normal/half-vec)\n    h2.xyz = normalize((tc7 * gl_FragCoord.w).xyz);\n    // r3.xyz = surface mip B\n    r3.xyz = texture(tex1, tc0.zwzz.xy).xyz;\n    // r3 = mipB - mipA\n    r3.xyz = (r3 + -r2).xyz;\n    // r4 = mipA + blend * (mipB-mipA)   ; blend = tc4.x\n    r4.xyz = fma(tc4.xxxx, r3, r2).xyz;\n    // h0.xyz = normalize(tc1.xyz * gl_FragCoord.w)   (light/normal vec)\n    h0.xyz = normalize((tc1 * gl_FragCoord.w).xyz);\n    // h3.z = clamp16( dot(h2,h0) / 2 )\n    h3.z = clamp16(vec4(dot(h2.xyz, h0.xyz) / 2.).z);\n    // r0.z = dot(-h2,h0) * 2\n    r0.z = (vec4(dot(-h2.xyz, h0.xyz)) * 2.).z;\n    // r1.w = h3.z + const0.x (= +0.5)\n    r1.w = (h3.zzzz + vec4(0.5).xxxx).w;          // const[0]={0.5,0,0,0}\n    // r0.xyz = -h0 * r0.z + (-h2)   (reflect)\n    r0.xyz = fma(-h0, r0.zzzz, -h2).xyz;\n    // h1.zw = clamp16(tc8.zw)   atmosphere uv base\n    h1.zw = clamp16(tc8).zw;\n    // r3.xyz = -r4 + const1   ; const1={0.0599976,0.150024,0.225098,0}\n    r3.xyz = (-r4 + vec4(0.0599976,0.150024,0.225098,0.)).xyz;\n    // r2.x = tex2( tc8.zw ).x\n    r2.x = texture(tex2, tc8.zwzz.xy).x;\n    // h7.w = clamp16( r2.x * const2.x + const2.y )  ; const2={0.6,-0.074996,0.143,0.098}\n    h7.w = clamp16(fma(r2.x, 0.6, -0.074996));\n    // r2.x = tex3( tc8.xy ).x\n    r2.x = texture(tex3, tc8.xy).x;\n    // r1.xyz = r2.x * r3 + r4\n    r1.xyz = fma(r2.xxxx, r3, r4).xyz;\n    // r4.zw = tc9.x , tc9.y  (from tc9.xxxy.zw -> .z=tc9.x, .w=tc9.y)\n    r4.zw = tc9.xxxy.zw;\n    // r4.y = const3.y (=1)   ; const3={0.566935,1,0.433065,0}\n    r4.y = 1.0;\n    // h5.xyz = r1 * const4.x (=0.0179999)   ; const4={0.0179999,0.508002,0,0}\n    h5.xyz = (r1 * 0.0179999).xyz;\n    // r3.xy = tc6.xy   (atmosphere offset slope)\n    r3.xy = tc6.xy;\n    // r4.x = const5.y (=1)   ; const5={0.234661,1,0.765339,0}\n    r4.x = 1.0;\n    // r1.xy = r3 * h7.w + h1.zw     -> atmosphere uv = base + slope*scatter\n    r1.xy = fma(r3.xy, h7.wwww, h1.zwzz.xy).xy;\n    // r1.xyz = tex2( r1.xy ).xyz\n    r1.xyz = texture(tex2, r1.xy).xyz;\n    // h7.xyz = clamp16( r1 * const6.z (=0.143) )  ; const6={0.6,-0.074996,0.143,0.098}\n    h7.xyz = clamp16(r1 * 0.143).xyz;\n    // h7.w = clamp16( r2.x )\n    h7.w = clamp16(r2.x);\n    // h6.xyz = clamp16( -h5 + const7.w (=0.098) )  ; const7={0.6,-0.074996,0.143,0.098}\n    h6.xyz = clamp16(-h5 + 0.098).xyz;\n    // h5.xyz = clamp16( h7*h6 + h5 )\n    h5.xyz = clamp16(fma(h7, h6, h5)).xyz;\n    // h7.z = dot(r0.xyz, const8.xyz)  ; const8={-0.307324,0.104528,0.945847,0}\n    h7.z = vec4(dot(r0.xyz, vec3(-0.307324,0.104528,0.945847))).z;\n    // r0.xy = r4.zw * const9.x (=3.75) + h1.zw   ; const9={3.75,1,0,0}\n    r0.xy = fma(r4.zwzz, vec4(3.75).xxxx, h1.zwzz).xy;\n    // r0.xyz = tex2( r0.xy ).xyz\n    r0.xyz = texture(tex2, r0.xy).xyz;\n    // h0.xyz = clamp( -r1 * const10.x (=0.799805) + r0 , 0,1 )  ; const10={0.799805,0,0,0}\n    h0.xyz = precision_clamp(fma(-r1, vec4(0.799805).xxxx, r0), 0., 1.).xyz;\n    // h0.w = clamp16( const11.y (=1) )  ; const11={3.75,1,0,0}\n    h0.w = clamp16(1.0);\n    // r0.zw = const12.x , const12.y (from const12.xxxy.zw -> .z=const12.x=0.799805, .w=const12.y=0) ; const12={0.799805,0,0,0}\n    r0.zw = vec4(0.799805,0.,0.,0.).xxxy.zw;\n    // r2.x = tex6( h7.zw ).x\n    r2.x = texture(tex6, h7.zwzz.xy).x;\n    // h1.xyz = r1.w * const13 + r0.zww   ; const13={0.0707836,0.788235,0.705882,0}\n    h1.xyz = fma(r1.wwww, vec4(0.0707836,0.788235,0.705882,0.), r0.zwwz).xyz;\n    // r3.x = const14.x (=0.234661) ; const14={0.234661,1,0.765339,0}\n    r3.x = 0.234661;\n    // r4.z = const15.y (=1)        ; const15={0.691272,1,0.308728,0}\n    r4.z = 1.0;\n    // r3.y = const16.x (=0.566935) ; const16={0.566935,1,0.433065,0}\n    r3.y = 0.566935;\n    // r3.z = const17.x (=0.691272) ; const17={0.691272,1,0.308728,0}\n    r3.z = 0.691272;\n    // r1 = tex4( tc3.xy )\n    r1 = texture(tex4, tc3.xy);\n    // h6.xyz = -r1.w * r3 + r4   ; r4 = (1, 1, 1, tc9.y) here -> .xyz uses r4.xyz=(1,1,1)\n    h6.xyz = fma(-r1.wwww, r3, r4).xyz;\n    // r4.xyz = tex5( tc5.xy ).xyz\n    r4.xyz = texture(tex5, tc5.xy).xyz;\n    // h6.xyz = clamp16( r4 * h6 )\n    h6.xyz = clamp16(r4 * h6).xyz;\n    // h2.xyz = clamp16( r1 * const18.y (=0.508002) )  ; const18={0.0179999,0.508002,0,0}\n    h2.xyz = clamp16(r1 * 0.508002).xyz;\n    // h4.xyz = clamp16( h1 * r2.x + h5 )\n    h4.xyz = clamp16(fma(h1, r2.xxxx, h5)).xyz;\n    // h3.xyz = clamp16( -h0 * h0.w + const19.x (=1) )  ; const19={1,0,0,0}\n    h3.xyz = clamp16(fma(-h0, h0.wwww, vec4(1.0).xxxx)).xyz;\n    // r3.xyz = max( h6, const20.x (=0) )  ; const20={0,0,0,0}\n    r3.xyz = max(h6, vec4(0.0).xxxx).xyz;\n    // r2.xyz = h4 * r3\n    r2.xyz = (h4 * r3).xyz;\n    // r2.xyz = ( r2*h3 + h2 ) * 8     <-- HDR exposure\n    r2.xyz = (fma(r2, h3, h2) * 8.).xyz;\n    // r0 = tex13( wpos.xy )   display/feedback RT\n    r0 = texture(tex13, wpos.xy);\n    // h3.w = max(r2.x, r2.y)\n    h3.w = max(r2.xxxx, r2.yyyy).w;\n    // h3.z = clamp16(r2).z   (= r2.z)\n    h3.z = clamp16(r2).z;\n    // r1.xy = tex15( r2.xy ).xy    tonemap LUT lookup (HDR color as uv)\n    r1.xy = texture(tex15, r2.xy).xy;\n    // h0.xy = r0 * const21.x (=0.125) + r1   ; const21={0.125,0,0,0}\n    h0.xy = fma(r0, vec4(0.125).xxxx, r1).xy;\n    // r1.zw = tex14( h3.zw ).zw    second tonemap LUT (uv = (r2.z, max(r2.x,r2.y)))\n    r1.zw = texture(tex14, h3.zwzz.xy).zw;\n    // h0.zw = r0 * const22.x (=0.125) + r1   ; const22={0.125,0,0,0}\n    h0.zw = fma(r0, vec4(0.125).xxxx, r1).zw;\n\n    // col0 = h0 ; ROP rounding to 8-bit happens in HW; emit directly.\n    ocol0 = h0;\n}",
+  "samplers": [
+   {
+    "slot": 0,
+    "rt": "0x07395d00 512x512 fmt0x86",
+    "meaning": "earth surface mip A, sampled tc0.xy"
+   },
+   {
+    "slot": 1,
+    "rt": "0x07395d00 512x512 fmt0x86 (same RT as tex0, different sampler params)",
+    "meaning": "earth surface mip B, sampled tc0.zw; blended into A by tc4.x"
+   },
+   {
+    "slot": 2,
+    "rt": "0x01a80100 512x512 fmt0x86",
+    "meaning": "atmosphere/scatter table, sampled 3x (tc8.zw, base+slope*scatter, tc9*3.75+base)"
+   },
+   {
+    "slot": 3,
+    "rt": "0x07841100 512x512 fmt0x86",
+    "meaning": "surface detail/mask, .x sampled tc8.xy (weights surface tint blend)"
+   },
+   {
+    "slot": 4,
+    "rt": "0x06f80000 256x128 fmt0xba",
+    "meaning": "glow accumulation layer, sampled tc3.xy; .w drives rim falloff, .xyz*0.508 = additive bloom"
+   },
+   {
+    "slot": 5,
+    "rt": "0x07b0c800 256x1 fmt0xba",
+    "meaning": "1D color ramp, sampled tc5.xy; multiplies the rim term"
+   },
+   {
+    "slot": 6,
+    "rt": "0x07930000 64x64 fmt0xbf",
+    "meaning": "rim/falloff lookup, .x sampled at (dot(reflect,lightdir), ...) -> specular mask"
+   },
+   {
+    "slot": 13,
+    "rt": "0x0791f980 32x32 fmt0xe5",
+    "meaning": "display/feedback RT (dither) sampled at screen wpos; added at 0.125 weight (=1/8, undoes the *8 exposure for feedback blend)"
+   },
+   {
+    "slot": 14,
+    "rt": "0x02b90000 128x128 fmt0xff Y16_X16_FLOAT",
+    "meaning": "tonemap LUT B, .zw fetched at uv=(r2.z, max(r2.x,r2.y)) -> ocol0.zw base"
+   },
+   {
+    "slot": 15,
+    "rt": "0x02b70000 128x128 fmt0xff Y16_X16_FLOAT",
+    "meaning": "tonemap LUT A, .xy fetched at uv=r2.xy -> ocol0.xy base"
+   }
+  ],
+  "blend": "opaque (blend=0; src=770 SRC_ALPHA / dst=771 ONE_MINUS_SRC_ALPHA are configured but blending is DISABLED, so this is a straight opaque write)",
+  "constants": [
+   {
+    "idx": 0,
+    "role": "+0.5 bias added to half-lambert dot -> r1.w (drives h1 tint amount)",
+    "value": [
+     0.5,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 1,
+    "role": "surface base/ambient color subtracted from blended surface (r3 = const1 - r4)",
+    "value": [
+     0.0599976,
+     0.150024,
+     0.225098,
+     0
+    ]
+   },
+   {
+    "idx": 2,
+    "role": ".x=0.6 scale, .y=-0.074996 bias for tex2.x scatter coord (h7.w); also .z=0.143 reused",
+    "value": [
+     0.6,
+     -0.074996,
+     0.143,
+     0.098
+    ]
+   },
+   {
+    "idx": 3,
+    "role": ".y=1 -> r4.y (atmosphere/ramp tint G=1)",
+    "value": [
+     0.566935,
+     1,
+     0.433065,
+     0
+    ]
+   },
+   {
+    "idx": 4,
+    "role": ".x=0.0179999 surface->h5 scale (dim base surface contribution)",
+    "value": [
+     0.0179999,
+     0.508002,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 5,
+    "role": ".y=1 -> r4.x (tint R component placeholder)",
+    "value": [
+     0.234661,
+     1,
+     0.765339,
+     0
+    ]
+   },
+   {
+    "idx": 6,
+    "role": ".z=0.143 scale for second tex2 (atmosphere) sample -> h7.xyz",
+    "value": [
+     0.6,
+     -0.074996,
+     0.143,
+     0.098
+    ]
+   },
+   {
+    "idx": 7,
+    "role": ".w=0.098 added to -h5 -> h6 (tint mul factor)",
+    "value": [
+     0.6,
+     -0.074996,
+     0.143,
+     0.098
+    ]
+   },
+   {
+    "idx": 8,
+    "role": "light direction vec for reflect specular dot -> h7.z (tex6 uv)",
+    "value": [
+     -0.307324,
+     0.104528,
+     0.945847,
+     0
+    ]
+   },
+   {
+    "idx": 9,
+    "role": ".x=3.75 uv scale for third tex2 sample (tc9 driven)",
+    "value": [
+     3.75,
+     1,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 10,
+    "role": ".x=0.799805 weight: r0 - 0.799805*r1 -> h0 (atmosphere diff)",
+    "value": [
+     0.799805,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 11,
+    "role": ".y=1 -> h0.w (used as multiplier 1.0 in h3)",
+    "value": [
+     3.75,
+     1,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 12,
+    "role": ".x=0.799805 -> r0.z base offset for h1",
+    "value": [
+     0.799805,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 13,
+    "role": "tint color (cyan/teal) scaled by half-lambert r1.w -> h1",
+    "value": [
+     0.0707836,
+     0.788235,
+     0.705882,
+     0
+    ]
+   },
+   {
+    "idx": 14,
+    "role": ".x=0.234661 -> r3.x (rim color R)",
+    "value": [
+     0.234661,
+     1,
+     0.765339,
+     0
+    ]
+   },
+   {
+    "idx": 15,
+    "role": ".y=1 -> r4.z (rim base)",
+    "value": [
+     0.691272,
+     1,
+     0.308728,
+     0
+    ]
+   },
+   {
+    "idx": 16,
+    "role": ".x=0.566935 -> r3.y (rim color G)",
+    "value": [
+     0.566935,
+     1,
+     0.433065,
+     0
+    ]
+   },
+   {
+    "idx": 17,
+    "role": ".x=0.691272 -> r3.z (rim color B)",
+    "value": [
+     0.691272,
+     1,
+     0.308728,
+     0
+    ]
+   },
+   {
+    "idx": 18,
+    "role": ".y=0.508002 scale for glow layer tex4 -> h2 (additive bloom)",
+    "value": [
+     0.0179999,
+     0.508002,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 19,
+    "role": ".x=1 base for (1 - h0*h0.w) -> h3 (surface visibility mask)",
+    "value": [
+     1,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 20,
+    "role": ".x=0 floor for max(h6,0) (clamp rim to non-negative)",
+    "value": [
+     0,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 21,
+    "role": ".x=0.125 (1/8) weight for display-RT feedback into ocol0.xy",
+    "value": [
+     0.125,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 22,
+    "role": ".x=0.125 (1/8) weight for display-RT feedback into ocol0.zw",
+    "value": [
+     0.125,
+     0,
+     0,
+     0
+    ]
+   }
+  ],
+  "output_register": "h0 (#define col0 h0)",
+  "output_channels": "rgba (all 4 channels of h0: .xy written from tex15 LUT + feedback, .zw from tex14 LUT + feedback)",
+  "vp_texcoords": "NOT a blur and NOT a plain screen quad. The vp (0f331863c999266c) is a full per-vertex lighting/transform program for the globe surface mesh (560 verts, triangles). It reads ATTR0 in_pos, builds a bilinear-interpolated patch from constants 0..2 (corner positions), normalizes tangent/normal frames, and writes:\n tc0=dst_reg7: .zw = fma(r2.xxxy, const24.z, const24.xxxy) ; .xy = fma(r2.xy, const25.z, const25.xy)  -> two surface UV sets (mip A in .xy, mip B in .zw) derived from the lit patch coord r2.\n tc1=dst_reg8 = r2.xyz : the normalized lit position/normal frame (fp normalizes it * w).\n tc3=dst_reg10: .x=const14.y, .y=(r0.y/const16.x), .z=const14.y -> glow-layer uv / level select for tex4.\n tc4=dst_reg11: .x=r0.w (the clamped half-lambert / mip-blend factor used by fp tc4.x).\n tc5=dst_reg12: .x=(r5.w*r0.w), .y/.z from const12 -> 1D ramp uv for tex5.\n tc6=dst_reg13: .xy = r1.zw * r3.w -> atmosphere offset slope (fp r3.xy = tc6.xy).\n tc7=dst_reg14 = r3.xyz : second normalized frame vector (fp normalizes it * w) -> h2.\n tc8=dst_reg15: .zw = fma(r2.xxxy,const22.z,const22.xxxy) ; .xy = fma(r2.xy,const23.z,const23.xy) -> atmosphere uv base (.zw) and tex2/tex3 uv (.xy).\n tc9=dst_reg6: .xy = r3.w*r6.xy (point-size term); fp uses tc9.x,tc9.y as the third tex2 sample driver.\nThere is NO texel-step / blur tap; all tcN are per-vertex computed surface/atmosphere coords. The fp multiplies tc1/tc7 by gl_FragCoord.w to undo perspective (recover view-space normalized vectors) before normalize().",
+  "notes": "Final-composite/tonemap of the globe SURFACE body (not a fullscreen post pass). Reads many work RTs and writes ocol0 to a 512-wide target. The *8 then LUT(tex15/tex14) is HDR exposure then tonemap-curve via two Y16_X16_FLOAT LUTs; tex14/tex15 are 2-channel float LUTs (only .xy of tex15 and .zw of tex14 are used, packing 4 output channels). tex13 (display/feedback RT) is added at 0.125 weight to BOTH halves -> a uniform feedback/dither term added post-tonemap.\nCHAINING: this draw CONSUMES the bloom/glow pyramid result already accumulated into tex4 (glow accum 256x128) and the surface mips tex0/tex1 (same RT 0x07395d00) plus atmosphere/scatter table tex2 and surface mask tex3. It READS tex13 = current display/feedback RT and ADDS onto it (feedback term), so run it AFTER whatever wrote tex13. It WRITES to a 512-class target (earth-surface/work layer), not directly the 1920x1080 present.\nPORT CAVEATS for WebGL: (1) tex14/tex15 are float (RG16F) LUTs - keep them float, do not 8-bit quantize or HDR clips. (2) get_wpos in original = gl_FragCoord*(|wpos_scale|,wpos_scale,1,1)+wpos_bias; I substituted screen uv (vUV) for the 32x32 tex13 fetch - confirm the real wpos scale/bias from FragmentStateBuffer when wiring (it flips Y and normalizes to the small RT). (3) h0.w=1 and r4 partially set (r4.x=1,r4.y=1,r4.z=1) but r4.w=tc9.y carries through unused in .xyz mul. (4) sampler coord xforms (texture_parameters scale/bias/clamp) are identity-ish here in the dump; if a tex needs flip/clamp apply COORD_SCALE per TEX_PARAM. (5) const2/6/7 are identical, const14/18 share x with const4 - all inlined per their used swizzle. (6) ROP does round_to_8bit on output in HW; only matters for exact bit-match.",
+  "vp": "0f331863c999266c",
+  "n": 10,
+  "vc": 560
+ },
+ {
+  "fp": "6db9195a3495f996",
+  "role": "flat constant-color quad fill (clears/fills work layer to dark grey 0.2,0.2,0.2,1)",
+  "portable_glsl": "// fp=6db9195a3495f996  vp=e6435e74717245e8\n// Microcode body of fs_main():\n//   r0 = _fetch_constant(0);   // const[0] = {0.2,0.2,0.2,1}\n//   r2 = _fetch_constant(1);   // const[1] = {0.2,0.2,0.2,1}  (written, never committed -> dead)\n// Output register: #define col0 r0  ->  ocol0 = col0 = r0 = const[0]\n// No texture sampling, no texcoords used. Flat constant fill.\n\nout vec4 ocol0;\n\nvoid main()\n{\n    // r0 = _fetch_constant(0)  (inlined)\n    vec4 r0 = vec4(0.2, 0.2, 0.2, 1.0);\n    // r2 = _fetch_constant(1) is computed by the microcode but col1 (=r2) is not a\n    // committed render output for this single-RT pass, so it is dead. Omitted.\n\n    // Commit: ocol0 = col0 = r0\n    ocol0 = r0;\n}",
+  "output_register": "r0",
+  "output_channels": "rgba",
+  "vp_texcoords": "vp e6435e74717245e8 reads only ATTR0 (in_pos = read_location(0)) and passes it straight to gl_Position (then scale_offset_mat + zclip). ALL texcoords tc0..tc9 are explicitly written to vec4(0,0,0,1) -- no UVs, no tap offsets, no per-vertex tint. primitive=8 (quads), vertex_count=4 = a full screen-aligned quad. The fp uses no texcoords at all, consistent with this. No texel-step / blur constant; not a blur.",
+  "samplers": [],
+  "blend": "opaque (blend=0, blend disabled; src=770 GL_SRC_ALPHA / dst=771 GL_ONE_MINUS_SRC_ALPHA are stale state but blending is OFF, so it is a straight opaque write)",
+  "constants": [
+   {
+    "idx": 0,
+    "role": "output color (RGBA) -> ocol0",
+    "value": [
+     0.2,
+     0.2,
+     0.2,
+     1
+    ]
+   },
+   {
+    "idx": 1,
+    "role": "loaded into r2/col1 but never committed (dead in single-RT pass)",
+    "value": [
+     0.2,
+     0.2,
+     0.2,
+     1
+    ]
+   }
+  ],
+  "notes": "This pass writes a FLAT constant color (0.2,0.2,0.2,1.0) over a 4-vertex screen quad with blending DISABLED. It is effectively a fill/clear of a render target to dark grey. The numerous texN bindings shown in the draw context (tex0..tex6, tex13..tex15 pointing at earth surface 0x070c0200, glow accum 0x06f80000, ramps, dither, tonemap LUTs 0x02b70000/0x02b90000) are LEFTOVER RSX texture state and are NOT sampled by the microcode -- the fragment program only does two _fetch_constant reads and commits const[0]. const[1] is loaded into r2 (col1) but this is a single render-target pass so it is dead. The render target it writes to is not directly given by an explicit RT field in this draw block; given the 0.2 grey fill at the start of the visualizer draw list (draws 11/13/15 before the glow/bloom passes 12+), this is most plausibly priming a work/accumulation layer (e.g. the 512x512 main HDR work layer 0x02360000 region or a 512-wide layer) to a constant grey before the additive glow/bloom accumulation. For the WebGL port: just clear/fill the corresponding target to vec4(0.2,0.2,0.2,1.0) (or draw a fullscreen quad with this flat color, no texturing, no blend). All values are exact from the draw const[] (identical for draws 11,13,15).",
+  "vp": "e6435e74717245e8",
+  "n": 3,
+  "vc": 4
+ },
+ {
+  "fp": "69a20e74f1e52cc4",
+  "role": "Lookup-table-driven 4-tap fractional bilinear/bicubic resample of a layer (tex0) using per-axis interpolation weights+offsets fetched from a 128-wide coefficient table (tex1), with a final 1.33x soft-overshoot/contrast curve. Effectively a separable smooth upsample/blur of tex0 over a 40x40 sample grid. Full-screen quad, one draw (draw 12), 4 verts.",
+  "portable_glsl": "#version 430\n// Verbatim port of fp 69a20e74f1e52cc4 (draw 12).\n// Only tex0 and tex1 are actually sampled by the microcode.\n//   tex0 = 40x40 layer being resampled (offset 0x07b06400). Tap coords are in 0..1 UV space.\n//   tex1 = 128x1 coefficient LUT (offset 0x07af8800): .x,.y = signed per-axis sub-texel\n//          OFFSETS, .z,.w = the two bilinear WEIGHTS for that axis. Indexed by the fractional\n//          texel position (coord-0.5) over a 40-cell grid. Sampler scale_x for tex1 = 1/128.\nuniform sampler2D tex0;   // layer to resample\nuniform sampler2D tex1;   // 128x1 coefficient LUT (x-axis pass = r2, y-axis pass = r3)\n\nin vec2 vUV;              // tc0.xy from the vertex program (screen-quad UV passthrough)\nout vec4 ocol0;\n\n// --- RSX helpers (verbatim) ---\nvec2 clamp16(vec2 v){ return clamp(v, vec2(-65504.0), vec2(65504.0)); }\nvec4 clamp16(vec4 v){ return clamp(v, vec4(-65504.0), vec4(65504.0)); }\nvec4 precision_clamp(vec4 x, float a, float b){\n    bvec4 nans = isnan(x);\n    x = mix(x, vec4(0.0), nans);\n    return clamp(x, a, b);\n}\n// tex1 is a 128-wide LUT; sampler scale 1/128 normalizes the pixel-space coord. tex0 used directly.\n#define TEX1(c) texture(tex1, (c) * vec2(1.0/128.0))\n#define TEX0(c) texture(tex0, (c))\n\nvoid main()\n{\n    // const[] inlined:\n    //  c0 = vec4(40,40,0,0)        c1 = vec4(1.6,0.733038,0.2,0.125)\n    //  c2 = vec4(-0.5,0,0,0)       c3 = vec4(0.025,0.025,0,0)\n    //  c4 = vec4(0.025,0.025,0,0)  c5 = vec4(0,0,0,0)\n    //  c6 = vec4(1.33333,0,0,0)    c7 = vec4(1.33333,0,0,0)\n    vec4 tc0 = vec4(vUV, 0.0, 1.0);\n\n    vec4 h0=vec4(0.), h1=vec4(0.), h2=vec4(0.), h3=vec4(0.), h4=vec4(0.), h6=vec4(0.);\n    vec4 r0=vec4(0.), r1=vec4(0.), r2=vec4(0.), r3=vec4(0.);\n\n    h2.xy = clamp16(vec4(40.0,40.0,40.0,40.0)).xy;          // (40,40)\n    r0.zw = tc0.xxxy.zw;                                    // r0.z=tc0.x, r0.w=tc0.y\n    h3.x  = (r0.wwww * vec4(0.2)).x;                        // tc0.y*0.2\n    h2.z  = clamp16(r0).z;                                  // tc0.x\n    h1.x  = clamp16(r0.zzzz).x;                             // tc0.x\n    h2.w  = h3.xxxx.w;                                      // tc0.y*0.2\n    h2.zw = clamp16(fma(h2, h2.xxxy, vec4(-0.5))).zw;       // z=tc0.x*40-0.5 ; w=(tc0.y*0.2)*40-0.5\n    h1.y  = h3.xxxx.y;                                      // tc0.y*0.2\n\n    r3 = TEX1(h2.wwww.xy);                                  // LUT @ y-axis frac (h2.w,h2.w)\n    h0.z = clamp16(vec4(0.025)).z;                          // 0.025\n    r2 = TEX1(h2.zzzz.xy);                                  // LUT @ x-axis frac (h2.z,h2.z)\n    h0.xy = clamp16(fma(-r2.xxxx, h0.zwzz, h1)).xy;         // x: tc0.x - r2.x*0.025 ; y: tc0.y*0.2\n    h1.zw = clamp16(fma(r2.yyyy, h0, h1.xxxy)).zw;          // z: tc0.x + r2.y*0.025 ; w: tc0.y*0.2\n    h0.w = clamp16(vec4(0.025)).w;                          // 0.025\n    h0.z = clamp16(vec4(0.0)).z;                            // 0\n    h4.xy = clamp16(fma(r3.yyyy, h0.zwzz, h1.zwzz)).xy;     // x: h1.z ; y: tc0.y*0.2 + r3.y*0.025\n    h4.zw = clamp16(fma(-r3.xxxx, h0, h1)).zw;              // z: h1.z ; w: tc0.y*0.2 - r3.x*0.025\n    h1.xy = clamp16(fma(-r3.xxxx, h0.zwzz, h0)).xy;         // x: h0.x ; y: tc0.y*0.2 - r3.x*0.025\n    h2.zw = clamp16(fma(r3.yyyy, h0, h0.xxxy)).zw;          // z: h0.x ; w: tc0.y*0.2 + r3.y*0.025\n\n    r0 = TEX0(h1.xy);                                       // tap A (-x,-y)\n    h6 = clamp16(r3.zzzz * r0);                             // r3.z * A\n    r0 = TEX0(h2.zwzz.xy);                                  // tap B (-x,+y)\n    h1 = clamp16(fma(r3.wwww, r0, h6));                     // r3.w*B + r3.z*A   (left col, y-blend)\n    r1 = TEX0(h4.zwzz.xy);                                  // tap C (+x,-y)\n    h0 = clamp16(r3.zzzz * r1);                             // r3.z * C\n    r1 = TEX0(h4.xy);                                       // tap D (+x,+y)\n    h4 = clamp16(fma(r1, r3.wwww, h0));                     // r3.w*D + r3.z*C   (right col, y-blend)\n    h0 = clamp16(r2.zzzz * h1);                             // r2.z * leftCol\n    h0 = clamp16(fma(h4, r2.wwww, h0));                     // r2.w*rightCol + r2.z*leftCol  (x-blend)\n\n    r1 = precision_clamp(h0 * vec4(1.33333), 0.0, 1.0);     // clamp(h0*4/3, 0,1)\n    r1 = fma(r1, vec4(1.33333), -r1);                       // r1*(1.33333-1) = r1*0.33333\n    r0 = fma(r1, h0, h0);                                   // h0 * (1 + r1)   soft overshoot/contrast\n\n    ocol0 = r0;\n}",
+  "output_register": "r0",
+  "output_channels": "rgba",
+  "samplers": [
+   {
+    "slot": 0,
+    "rt": "0x07b06400",
+    "meaning": "tex0 - 40x40 layer being resampled. Tap coords (tc0 +/- ~0.025) are in 0..1 UV space, sampled with bilinear. This is the source image the LUT-weighted 4-tap kernel convolves."
+   },
+   {
+    "slot": 1,
+    "rt": "0x07af8800",
+    "meaning": "tex1 - 128x1 coefficient LUT (Catmull-Rom / fractional-bilinear table). Sampled twice: r2 at x-axis fractional texel (tc0.x*40-0.5), r3 at y-axis fractional texel ((tc0.y*0.2)*40-0.5). Returns .x/.y = signed sub-texel OFFSETS (scaled by 0.025), .z/.w = the two interpolation WEIGHTS. Needs sampler scale_x=1/128 to map pixel-space coord to UV."
+   },
+   {
+    "slot": 2,
+    "rt": "0x0232ab00",
+    "meaning": "tex2 512x512 bound by draw but NOT sampled by this FP (microcode only declares tex0/tex1). Ignore for port."
+   },
+   {
+    "slot": 3,
+    "rt": "0x0756b600",
+    "meaning": "tex3 512x512 bound but NOT sampled. Ignore."
+   },
+   {
+    "slot": 4,
+    "rt": "0x06f80000",
+    "meaning": "tex4 256x128 glow-accum bound but NOT sampled. Ignore."
+   },
+   {
+    "slot": 5,
+    "rt": "0x07b0c800",
+    "meaning": "tex5 256x1 ramp bound but NOT sampled. Ignore."
+   },
+   {
+    "slot": 6,
+    "rt": "0x07930000",
+    "meaning": "tex6 64x64 bound but NOT sampled. Ignore."
+   },
+   {
+    "slot": 13,
+    "rt": "0x0791f980",
+    "meaning": "tex13 32x32 dither bound but NOT sampled. Ignore."
+   },
+   {
+    "slot": 14,
+    "rt": "0x02b90000",
+    "meaning": "tex14 128x128 tonemap LUT bound but NOT sampled. Ignore."
+   },
+   {
+    "slot": 15,
+    "rt": "0x02b70000",
+    "meaning": "tex15 128x128 tonemap LUT bound but NOT sampled. Ignore."
+   }
+  ],
+  "blend": "opaque (blend=0; src=770 GL_SRC_ALPHA, dst=771 GL_ONE_MINUS_SRC_ALPHA listed but blending disabled, so straight overwrite of dest)",
+  "constants": [
+   {
+    "idx": 0,
+    "role": "tex0 grid dimensions used to scale tc into texel space (40x40)",
+    "value": [
+     40,
+     40,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 1,
+    "role": ".z=0.2 = vertical tc0.y scale (compresses y into a 0.2-tall band); .x=1.6,.y=0.733038,.w=0.125 unused by this FP path",
+    "value": [
+     1.6,
+     0.733038,
+     0.2,
+     0.125
+    ]
+   },
+   {
+    "idx": 2,
+    "role": "-0.5 texel-center bias added when converting tc->LUT index",
+    "value": [
+     -0.5,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 3,
+    "role": "0.025 = tap offset magnitude (x-axis), multiplied by LUT-supplied signed offset r2.x/r2.y",
+    "value": [
+     0.025,
+     0.025,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 4,
+    "role": "0.025 = tap offset magnitude (y-axis), multiplied by LUT-supplied signed offset r3.x/r3.y",
+    "value": [
+     0.025,
+     0.025,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 5,
+    "role": "0 (used as the zero lane in the h0.zwzz weight-selection swizzles)",
+    "value": [
+     0,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 6,
+    "role": "1.33333 (4/3) = pre-clamp gain for the overshoot curve",
+    "value": [
+     1.33333,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 7,
+    "role": "1.33333 (4/3) = overshoot strength; final r0 = h0*(1 + clamp(h0*4/3,0,1)*(1/3))",
+    "value": [
+     1.33333,
+     0,
+     0,
+     0
+    ]
+   }
+  ],
+  "vp_texcoords": "VP c8bc076eddd90050 is a plain transform: it reads ATTR8 (in_tc0) and passes it straight to tc0 (dst_reg7 -> tc0), with no offset/tap math and no per-vertex tint (diff/spec forced to 0,0,0,1). Position is a 4-dot transform by vc[0..3]. So for the 4-vertex screen quad, tc0.xy is a linear UV across the quad. PORT: feed fs_main tc0.xy as `in vec2 vUV` (UV passthrough screen quad). NOTE the y axis is internally compressed by const1.z=0.2 inside the FP (tc0.y*0.2), and the per-axis tap offsets come from the tex1 LUT (const3/const4 = 0.025 magnitude), NOT from the VP. There is no VP-supplied texel-step constant; the resample step/offsets are entirely LUT- and FP-const-driven.",
+  "notes": "Output RT: writes col0=r0 (RGBA) with blending disabled, so it overwrites its bound color target (this small full-screen quad is a resample/soft-bloom step over the 40x40 tex0 into the work layer). It READS tex0 (40x40, 0x07b06400) as the source layer and tex1 (128x1, 0x07af8800) as a fractional-interpolation coefficient table. The 9 other bound textures (tex2..tex15) are NOT referenced by the microcode (FP only declares uniform sampler2D tex0/tex1) and must be omitted from the port. CAVEATS: (1) tex1 sampler needs scale_x=1/128 (its width) to convert the pixel-space index (tc0*40-0.5) to UV; I inlined that as *(1/128) in TEX1. tex0 taps are already 0..1 UV (tc0 +/- 0.025*LUToffset) and use straight bilinear. (2) const1.z=0.2 means the y coordinate only spans a 0.2-tall band of tc0 before the *40 grid scale, so the kernel footprint is anisotropic (wider in y texel-space). (3) The kernel is a separable 2x2 weighted blend: per-axis the LUT gives 2 weights (r2.z/r2.w for x, r3.z/r3.w for y) and 2 signed sub-texel offsets (r2.x/r2.y, r3.x/r3.y) -> classic firmware bicubic/Catmull-Rom-via-LUT upsample. (4) Final line is a contrast/overshoot: r0 = h0*(1 + clamp(h0*4/3,0,1)*(1/3)), brightening highlights up to ~1.33x while leaving blacks unchanged. (5) primitive=8 is a quad/triangle-strip of 4 verts (full-screen).",
+  "vp": "c8bc076eddd90050",
+  "n": 1,
+  "vc": 4
+ },
+ {
+  "role": "screen-quad 4-tap distortion + bilinear blend of tex0 using two 1D LUTs (tex1) as offset/weight tables, with final contrast/saturation boost (x1.33333). Effectively a refraction/grid-warp resample of the 40x20 layer.",
+  "fp": "48b46d4cd0bc6fe2",
+  "output_register": "r0 (#define col0 r0)",
+  "output_channels": "rgba",
+  "blend": "opaque (blend=0; src=770 GL_SRC_ALPHA, dst=771 GL_ONE_MINUS_SRC_ALPHA listed but blend disabled so the values are inert)",
+  "vp_texcoords": "Plain UV passthrough. The vp does tc0 = dst_reg7 = in_tc0 = read_location(8) (vertex texcoord attribute 8), with no per-tap offset math and no per-vertex tint. So tc0.xy is a screen/quad UV interpolated across the 4-vertex quad. The fp itself computes all tap offsets and the LUT lookup coords from tc0 and the inlined constants; there is NO texel-step constant supplied by the vp (the offsets \u00b10.025/\u00b10.05 are fp const[3]/const[4]).",
+  "samplers": [
+   {
+    "slot": 0,
+    "rt": "0x07b09600",
+    "meaning": "tex0: 40x20 fmt=0xba layer being resampled/blended (the small low-res source image; const[0]={40,20} are its dims). 4 taps sampled with chromatic offsets."
+   },
+   {
+    "slot": 1,
+    "rt": "0x07af8800",
+    "meaning": "tex1: 128x1 fmt=0xba 1D offset/weight LUT. Sampled twice at (tc0.x*40-0.5) and (tc0.y*20-0.5) i.e. per-cell; r2 = tex1(x-cell), r3 = tex1(y-cell). r.x/r.y drive horizontal/vertical offsets (*0.025 / *0.05), r.z/r.w drive the bilinear blend weights."
+   }
+  ],
+  "constants": [
+   {
+    "idx": 0,
+    "role": "tex0 grid dims used to scale UV into LUT cell index (xy=40,20)",
+    "value": [
+     40,
+     20,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 1,
+    "role": "UV passthrough scale on tc0.y (z=1.0 multiplier, unused effect)",
+    "value": [
+     1.6,
+     42,
+     1,
+     1
+    ]
+   },
+   {
+    "idx": 2,
+    "role": "-0.5 half-texel bias added to the LUT cell index (x=-0.5)",
+    "value": [
+     -0.5,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 3,
+    "role": "horizontal offset magnitude 0.025 (x), used for x-axis tap displacement",
+    "value": [
+     0.025,
+     0.05,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 4,
+    "role": "vertical offset magnitude 0.05 (y), used for y-axis tap displacement",
+    "value": [
+     0.025,
+     0.05,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 5,
+    "role": "0.0 (clears the x-offset slot for the y-pass; h0.z=0)",
+    "value": [
+     0,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 6,
+    "role": "contrast/saturation pre-multiply 1.33333",
+    "value": [
+     1.33333,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 7,
+    "role": "contrast/saturation boost factor 1.33333 (final blend: out = mix amount (k-1)=0.33333 of itself)",
+    "value": [
+     1.33333,
+     0,
+     0,
+     0
+    ]
+   }
+  ],
+  "notes": "This pass writes to one of the 512x512 work/glow RTs (it is draw 14 in the per-frame globe pipeline, run once, vertex_count=4 fullscreen quad). It READS from tex0=0x07b09600 (40x20 small layer) and tex1=0x07af8800 (128x1 1D LUT) ONLY -- the other 9 texture bindings in the draw context (tex2..tex15: 512x512 surfaces, glow accum, LUTs, dither) are bound but NEVER sampled by this fp (the GLSL only declares uniform sampler2D tex0/tex1). Mechanism: tex1 is used as a per-cell offset+weight table indexed by the quantized UV (UV*[40,20]-0.5). r2=tex1 at x-cell, r3=tex1 at y-cell. r2.x/r3.x and r2.y/r3.y give signed displacements (scaled by 0.025 horiz, 0.05 vert) to build 4 tap coords into tex0; r3.z/r3.w then r2.z/r2.w are bilinear interpolation weights combining the 4 taps. Final two lines apply a contrast/saturation boost: r1=clamp(h0*1.33333,0,1); r1=r1*0.33333; out=r1*h0+h0 (i.e. out = h0*(1 + 0.33333*clamp(h0*1.33333,0,1))). clamp16(x)=clamp(x,-65504,65504). All channels (rgba) written. CAVEAT: texture_parameters scale/bias were not in dc.txt; port assumes identity texcoord xform (scale=1,bias=0, no clamp) which is the RPCS3 default for these RTs; tex1 (128x1) and tex0 (40x20) wrap modes matter (LUT index can exceed [0,1] before texelxform), assume repeat/clamp per RT setup. The four tex0 taps and their offset signs are: tap A=(tc.x - r2.x*0.025, tc.y - r3.x*0.05) w=r3.z; tap B=(tc.x - r2.x*0.025, tc.y + r3.y*0.05) w=r3.w; tap C=(tc.x + r2.y*0.025, tc.y - r3.x*0.05) w=r3.z; tap D=(tc.x + r2.y*0.025, tc.y + r3.y*0.05) w=r3.w. Then (A*z+B*w) blended by r2.z, (C*z+D*w) blended by r2.w.",
+  "portable_glsl": "// VERBATIM port of fp 48b46d4cd0bc6fe2 fs_main()\n// Inputs:\nuniform sampler2D tex0;   // RT 0x07b09600, 40x20 source layer\nuniform sampler2D tex1;   // RT 0x07af8800, 128x1 1D offset/weight LUT\nin vec2 vUV;              // tc0.xy = vertex texcoord (plain passthrough quad UV)\nout vec4 ocol0;\n\n// RSX helpers (verbatim)\nvec2 clamp16(vec2 v){ return clamp(v, -65504.0, 65504.0); }\nvec4 clamp16(vec4 v){ return clamp(v, -65504.0, 65504.0); }\nvec4 precision_clamp(vec4 x, float lo, float hi){\n    bvec4 nans = isnan(x);\n    x = mix(x, vec4(0.0), nans);\n    return clamp(x, lo, hi);\n}\n#define TEX2D(s, uv) texture(s, uv)\n\nvoid main()\n{\n    vec4 h0 = vec4(0.0);\n    vec4 h1 = vec4(0.0);\n    vec4 h2 = vec4(0.0);\n    vec4 h3 = vec4(0.0);\n    vec4 h4 = vec4(0.0);\n    vec4 h6 = vec4(0.0);\n    vec4 r0 = vec4(0.0);\n    vec4 r1 = vec4(0.0);\n    vec4 r2 = vec4(0.0);\n    vec4 r3 = vec4(0.0);\n\n    vec4 tc0 = vec4(vUV, 0.0, 1.0);\n\n    // const[0] = {40,20,0,0}\n    h2.xy = clamp16(vec4(40.0, 20.0, 40.0, 40.0)).xy;     // (40,20)\n\n    // r0.zw = tc0.xxxy.zw  -> (tc0.x, tc0.y)\n    r0.zw = tc0.xxxy.zw;\n\n    // h3.x = r0.w * const[1].z (=1.0)\n    h3.x = (r0.wwww * vec4(1.0)).x;                        // tc0.y\n\n    h2.z = clamp16(r0).z;                                  // tc0.x\n    h1.x = clamp16(r0.zzzz).x;                             // tc0.x\n    h2.w = h3.xxxx.w;                                      // tc0.y\n\n    // h2.zw = clamp16( h2 * h2.xxxy + const[2].x(-0.5) ).zw\n    h2.zw = clamp16(fma(h2, h2.xxxy, vec4(-0.5))).zw;      // (tc0.x*40-0.5, tc0.y*20-0.5)\n    h1.y = h3.xxxx.y;                                      // tc0.y\n\n    // r3 = tex1 at y-cell (h2.w)\n    r3 = TEX2D(tex1, h2.wwww.xy);\n    // h0.z = const[3].x = 0.025\n    h0.z = clamp16(vec4(0.025)).z;\n    // r2 = tex1 at x-cell (h2.z)\n    r2 = TEX2D(tex1, h2.zzzz.xy);\n\n    // h0.xy = clamp16( -r2.x * h0.zwzz + h1 ).xy\n    h0.xy = clamp16(fma(-r2.xxxx, h0.zwzz, h1)).xy;        // (tc0.x - r2.x*0.025, tc0.y)\n    // h1.zw = clamp16( r2.y * h0 + h1.xxxy ).zw\n    h1.zw = clamp16(fma(r2.yyyy, h0, h1.xxxy)).zw;         // (tc0.x + r2.y*0.025, tc0.y)\n\n    // h0.w = const[4].y = 0.05 ; h0.z = const[5].x = 0.0\n    h0.w = clamp16(vec4(0.05)).w;\n    h0.z = clamp16(vec4(0.0)).z;\n\n    // h4.xy = clamp16( r3.y * h0.zwzz + h1.zwzz ).xy\n    h4.xy = clamp16(fma(r3.yyyy, h0.zwzz, h1.zwzz)).xy;    // (tc0.x+r2.y*0.025, tc0.y+r3.y*0.05)\n    // h4.zw = clamp16( -r3.x * h0 + h1 ).zw\n    h4.zw = clamp16(fma(-r3.xxxx, h0, h1)).zw;             // (tc0.x+r2.y*0.025, tc0.y-r3.x*0.05)\n    // h1.xy = clamp16( -r3.x * h0.zwzz + h0 ).xy\n    h1.xy = clamp16(fma(-r3.xxxx, h0.zwzz, h0)).xy;        // (tc0.x-r2.x*0.025, tc0.y-r3.x*0.05)\n    // h2.zw = clamp16( r3.y * h0 + h0.xxxy ).zw\n    h2.zw = clamp16(fma(r3.yyyy, h0, h0.xxxy)).zw;         // (tc0.x-r2.x*0.025, tc0.y+r3.y*0.05)\n\n    // 4 taps of tex0\n    r0 = TEX2D(tex0, h1.xy);                               // tap A\n    h6 = clamp16(r3.zzzz * r0);\n    r0 = TEX2D(tex0, h2.zwzz.xy);                          // tap B\n    h1 = clamp16(fma(r3.wwww, r0, h6));                    // A*r3.z + B*r3.w\n    r1 = TEX2D(tex0, h4.zwzz.xy);                          // tap C\n    h0 = clamp16(r3.zzzz * r1);\n    r1 = TEX2D(tex0, h4.xy);                               // tap D\n    h4 = clamp16(fma(r1, r3.wwww, h0));                    // C*r3.z + D*r3.w\n\n    // bilinear combine via r2.z / r2.w\n    h0 = clamp16(r2.zzzz * h1);\n    h0 = clamp16(fma(h4, r2.wwww, h0));                    // h1*r2.z + h4*r2.w\n\n    // contrast / saturation boost (const[6]=const[7]=1.33333)\n    r1 = precision_clamp(h0 * 1.33333, 0.0, 1.0);\n    r1 = fma(r1, vec4(1.33333), -r1);                     // r1 * 0.33333\n    r0 = fma(r1, h0, h0);                                  // h0 + r1*h0\n\n    ocol0 = r0;\n}",
+  "vp": "c8bc076eddd90050",
+  "n": 1,
+  "vc": 4
+ },
+ {
+  "fp": "4dd03757fcd740f7",
+  "role": "vertical smoothstep cross-fade between two glow-accumulation layers (band blend over top ~14% of v)",
+  "output_register": "r0",
+  "output_channels": "rgb (alpha = tex0.w passthrough, written but unchanged)",
+  "portable_glsl": "// fp=4dd03757fcd740f7 vp=c8bc076eddd90050 -- VERBATIM port of fs_main()\n// const[] inlined: fc0.x=0.14, fc1.x=1.0, fc2.x=1.0, fc3.x=0.0, fc4.x=3.0\n// tc0.xy = plain screen UV from vp passthrough (no blur taps, no per-vertex tint)\n#version 430\nuniform sampler2D tex0;   // RT 0x06f00000 256x128 glow accumulation layer A\nuniform sampler2D tex1;   // RT 0x06e80000 256x128 glow accumulation layer B\nin vec2 vUV;              // = tc0.xy (interpolated 0..1 over screen quad)\nout vec4 ocol0;\n\n// RSX helper verbatim\nvec4 precision_clamp(vec4 x, float _min, float _max)\n{\n    bvec4 nans = isnan(x);\n    x = mix(x, vec4(0.), nans);\n    return clamp(x, _min, _max);\n}\n\nvoid main()\n{\n    vec4 r0 = vec4(0.), r1 = vec4(0.), r2 = vec4(0.);\n\n    // r1.x = fc0.x\n    r1.x = 0.14;                                   // _fetch_constant(0).xxxx.x\n    // r1.zw = tc0.xxxy.zw  ->  r1.z = tc0.x, r1.w = tc0.y\n    r1.zw = vec4(vUV.x, vUV.x, vUV.x, vUV.y).zw;   // = vec2(vUV.x, vUV.y)\n    // r1.y = (-r1.x + fc1.x)  -> 1.0 - 0.14 = 0.86\n    r1.y = (-r1.xxxx + vec4(1.0)).y;\n    // r1.x = (-r1.y + fc2.x)  -> 1.0 - 0.86 = 0.14\n    r1.x = (-r1.yyyy + vec4(1.0)).x;\n    // r2.x = r1.w - r1.y  -> tc0.y - 0.86\n    r2.x = (r1.wwww + -r1.yyyy).x;\n    // r1.w = fc3.x  -> 0.0\n    r1.w = vec4(0.0).w;\n    // r1.x = clamp( (tc0.y-0.86) / 0.14, 0, 1 )    (div is r2/r1.x broadcast, .x taken)\n    r1.x = precision_clamp(r2 / r1.x, 0., 1.).x;\n    // r2.x = r1.x * r1.x\n    r2.x = (r1 * r1).x;\n    // r2.w = r1.x * 2.0\n    r2.w = (r1.xxxx * 2.).w;\n    // r0 = tex0(tc0.xy)\n    r0 = texture(tex0, vUV);\n    r0.w = r0.w;\n    // r1.xyz = tex1( vec2(r1.z, r1.w) ) = tex1(tc0.xy).xyz\n    r1.xyz = texture(tex1, r1.zwzz.xy).xyz;\n    // r1.xyz = tex1.rgb - tex0.rgb\n    r1.xyz = (r1 + -r0).xyz;\n    // r2.w = -r2.w + fc4.x  -> 3.0 - 2*r1.x\n    r2.w = (-r2 + vec4(3.0)).w;\n    // r1.w = r2.x * r2.w = (r1.x*r1.x) * (3 - 2*r1.x)   == smoothstep weight\n    r1.w = (r2.xxxx * r2).w;\n    // r0.xyz = r1.w * (tex1-tex0) + tex0  == mix(tex0, tex1, weight)\n    r0.xyz = fma(r1.wwww, r1, r0).xyz;\n\n    ocol0 = r0;\n}",
+  "samplers": [
+   {
+    "slot": 0,
+    "rt": "0x06f00000",
+    "meaning": "256x128 glow accumulation layer A (fmt 0xba); base/lower-band color, sampled at screen UV"
+   },
+   {
+    "slot": 1,
+    "rt": "0x06e80000",
+    "meaning": "256x128 glow accumulation layer B (fmt 0xba); upper-band color blended in over top ~14% of v, sampled at same screen UV"
+   }
+  ],
+  "blend": "blend=0 (disabled) src=770(SRC_ALPHA) dst=771(ONE_MINUS_SRC_ALPHA) -- blend flag is OFF so this is an opaque overwrite; src/dst factors are stale/ignored",
+  "constants": [
+   {
+    "idx": 0,
+    "role": "band_width: edge half-range for the v-smoothstep (0.14)",
+    "value": [
+     0.14,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 1,
+    "role": "one (used as 1.0 - band_width -> 0.86 band start)",
+    "value": [
+     1,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 2,
+    "role": "one (used as 1.0 - 0.86 -> 0.14 denominator)",
+    "value": [
+     1,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 3,
+    "role": "zero (written to r1.w scratch, no effect)",
+    "value": [
+     0,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 4,
+    "role": "three (Hermite smoothstep constant: 3 - 2t)",
+    "value": [
+     3,
+     0,
+     0,
+     0
+    ]
+   }
+  ],
+  "vp_texcoords": "vp c8bc076eddd90050: tc0 = dst_reg7 = in_tc0 = read_location(8), a PLAIN PASSTHROUGH of the per-vertex texcoord attribute. No tap offsets, no texel-step constant, no per-vertex tint. With vertex_count=4 + primitive=8 (quad/strip) this is a screen-aligned quad; tc0.xy interpolates as 0..1 screen UV. fp only reads tc0.x and tc0.y (tc0.z/.w unused). So vUV = tc0.xy directly; both tex0 and tex1 are sampled at this same UV (no blur).",
+  "notes": "Single quad pass (4 verts). Computes a Hermite smoothstep weight t*t*(3-2t) where t = clamp((v - 0.86)/0.14, 0, 1), i.e. weight = smoothstep(0.86, 1.0, v) in the v (tc0.y) coordinate. Output = mix(tex0.rgb, tex1.rgb, weight); alpha = tex0.w. Both inputs are 256x128 glow-accumulation RTs in the 0x06e80000.. range (A=0x06f00000, B=0x06e80000). Effect: blends from accumulation layer A into layer B across the top ~14% band of the target (assuming v increases toward top; if firmware v is flipped the band is at the bottom -- preserve the exact constants regardless). Blend is DISABLED (opaque write) so this overwrites the destination. Texture coord xform (texture_parameters scale/bias) treated as identity for these RT samples, matching all sibling RT-to-RT passes. Output target inferred to be another 256x128 glow/blur RT consumed by the subsequent compositor; chain consumers should sample this as the merged glow layer at screen UV. tex2..tex6/tex13/tex14/tex15 are bound by RSX state but NEVER referenced by this fp -- ignore them.",
+  "vp": "c8bc076eddd90050",
+  "n": 1,
+  "vc": 4
+ },
+ {
+  "fp": "65fbde2004bb0d4f",
+  "role": "earth-limb glow/atmosphere band shading + HDR tonemap-LUT encode (per-vertex UV mesh, NOT a blur)",
+  "output_register": "r0 (#define col0 r0)",
+  "output_channels": "rgba (rgb = tonemapped color via LUTs, a = 0 always because r2.x evaluates to 0 with these constants)",
+  "blend": "opaque (blend=0). NOTE: src=773(GL_ONE_MINUS_SRC_ALPHA) dst=772(GL_SRC_ALPHA) factors are present in the draw record but blend ENABLE flag is 0, so the draw writes color directly with no blending.",
+  "vp_texcoords": "tc0 comes straight from the vertex stream: vs sets dst_reg7.xy = in_tc0.xy (per-vertex UV of the glow mesh, 3232/400 verts) and dst_reg7.z = vp_const4.x (a constant, UNUSED by the fp), dst_reg7.w defaults to 1 (UNUSED). There are NO tap offsets and NO texel-step constant; this is a single-tap textured mesh, not a separable blur. The fp internally scales tc0.y by 5.0 (=1/c1.z) before sampling tex0, i.e. it samples tex0 at (tc0.x, 5.0*tc0.y). Use vUV = in_tc0.xy.",
+  "samplers": [
+   {
+    "slot": 0,
+    "rt": "0x06e80000 256x128",
+    "meaning": "glow accumulation layer (the band/limb source HDR color); the ONLY texture actually read for color. Sampled once at (vUV.x, 5.0*vUV.y)."
+   },
+   {
+    "slot": 15,
+    "rt": "0x02b70000 128x128 Y16_X16_FLOAT",
+    "meaning": "tonemap LUT A (2-channel float). Read with r0.xy as 2D coord -> contributes output R,G."
+   },
+   {
+    "slot": 14,
+    "rt": "0x02b90000 128x128 Y16_X16_FLOAT",
+    "meaning": "tonemap LUT B (2-channel float). Read with (h2.z,h2.w) coord -> contributes output B (.z channel)."
+   },
+   {
+    "slot": 1,
+    "rt": "0x06e80000",
+    "meaning": "bound (duplicate of tex0) but UNUSED by fp"
+   },
+   {
+    "slot": 2,
+    "rt": "0x0232ab00 512x512",
+    "meaning": "bound but UNUSED by fp"
+   },
+   {
+    "slot": 3,
+    "rt": "0x0756b600 512x512",
+    "meaning": "bound but UNUSED by fp"
+   },
+   {
+    "slot": 4,
+    "rt": "0x06f80000 256x128 glow accum B",
+    "meaning": "bound but UNUSED by fp"
+   },
+   {
+    "slot": 5,
+    "rt": "0x07b0c800 256x1 1D ramp",
+    "meaning": "bound but UNUSED by fp"
+   },
+   {
+    "slot": 6,
+    "rt": "0x07930000 64x64",
+    "meaning": "bound but UNUSED by fp"
+   },
+   {
+    "slot": 13,
+    "rt": "0x0791f980 32x32 dither",
+    "meaning": "bound but UNUSED by fp"
+   }
+  ],
+  "constants": [
+   {
+    "idx": 0,
+    "role": "r1.x,r1.z seed = c0.x = 1.0 (UV.x scale 1, UV.z scale 1)",
+    "value": [
+     1,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 1,
+    "role": "c1.z=0.2 -> r1.y = 1/0.2 = 5.0 (UV.y vertical scale before tex0 sample); c1.w=0.608 (band edge offset)",
+    "value": [
+     1.6,
+     0.733038,
+     0.2,
+     0.608
+    ]
+   },
+   {
+    "idx": 2,
+    "role": "c2.w=3.5 -> r0.x; c2.z=-4 -> r0.y",
+    "value": [
+     10.4,
+     0.2,
+     -4,
+     3.5
+    ]
+   },
+   {
+    "idx": 3,
+    "role": "c3.x=190.03 -> r0.w = -r0.y + 190.03 = 194.03",
+    "value": [
+     190.03,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 4,
+    "role": "c4.z=-4 -> r3.y = clamp(194.03 / 4, 0,1) = 1.0",
+    "value": [
+     10.4,
+     0.2,
+     -4,
+     3.5
+    ]
+   },
+   {
+    "idx": 5,
+    "role": "c5.w=0.608 -> r0.w",
+    "value": [
+     1.6,
+     0.733038,
+     0.2,
+     0.608
+    ]
+   },
+   {
+    "idx": 6,
+    "role": "c6.x=1.0 -> r3.x = 1 - 0.608 = 0.392 (band width)",
+    "value": [
+     1,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 7,
+    "role": "c7.x=190.03 -> r2.y = clamp(190.03/3.5,0,1) = 1.0",
+    "value": [
+     190.03,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 8,
+    "role": "c8.x=10.4 -> r1.x = -tc0.x*10.4 (exp falloff arg)",
+    "value": [
+     10.4,
+     0.2,
+     -4,
+     3.5
+    ]
+   },
+   {
+    "idx": 9,
+    "role": "c9.w=0.608 -> r1.z = 5*tc0.y - 0.608 (band coordinate numerator)",
+    "value": [
+     1.6,
+     0.733038,
+     0.2,
+     0.608
+    ]
+   },
+   {
+    "idx": 10,
+    "role": "c10.x=3.0 (smoothstep '3' term) -> r3.z = -2+3 = 1",
+    "value": [
+     3,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 11,
+    "role": "c11.x=1.4427 (=1/ln2) -> r0.w = (-tc0.x*10.4)*1.4427 used as exp2 arg (i.e. e^(-10.4*tc0.x))",
+    "value": [
+     1.4427,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 12,
+    "role": "c12.y=0.2 -> r1.x = clamp(5*tc0.y / 0.2,0,1) = clamp(25*tc0.y,0,1) (smoothstep t)",
+    "value": [
+     10.4,
+     0.2,
+     -4,
+     3.5
+    ]
+   },
+   {
+    "idx": 13,
+    "role": "c13.x=3.0 -> r1.w = -2+3 = 1",
+    "value": [
+     3,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 14,
+    "role": "c14.x=3.0 -> smoothstep '3 - 2t' for r1.x band",
+    "value": [
+     3,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 15,
+    "role": "c15.x=3.0 -> smoothstep '3 - 2t' for r1.y band (uses r3.x)",
+    "value": [
+     3,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 16,
+    "role": "c16.x=0.508002 -> overall color intensity scale on tex0 sample",
+    "value": [
+     0.508002,
+     0,
+     0,
+     0
+    ]
+   }
+  ],
+  "portable_glsl": "#version 430\n// Ported VERBATIM from RSX fp 65fbde2004bb0d4f with draw 17/18 constants inlined.\n// tex0 = glow accumulation layer (0x06e80000). tex15/tex14 = float tonemap LUTs.\nuniform sampler2D tex0;\nuniform sampler2D tex15;\nuniform sampler2D tex14;\nin vec2 vUV;            // = in_tc0.xy from the vertex stream (tc0.z/.w are unused by the fp)\nout vec4 ocol0;\n\nfloat clamp16(float v){ return clamp(v, -65504.0, 65504.0); }\nvec4  precision_clamp(vec4 x, float a, float b){\n    bvec4 nans = isnan(x);\n    x = mix(x, vec4(0.0), nans);\n    return clamp(x, a, b);\n}\n\nvoid main()\n{\n    vec4 r0 = vec4(0.0), r1 = vec4(0.0), r2 = vec4(0.0), r3 = vec4(0.0), h2 = vec4(0.0);\n\n    // L646-649: scalar setup\n    r1.x = 1.0;                 // c0.x\n    r1.z = 1.0;                 // c0.x\n    r1.y = 1.0 / 0.2;           // rcp(c1.z) = 5.0\n    r0.x = 3.5;                 // c2.w\n    r0.y = -4.0;                // c2.z\n    r0.w = -r0.y + 190.03;      // c3.x  -> 194.03\n\n    // L650: r1.xyz = tc0.xyz * r1.xyz  (tc0 = vec4(vUV, unused, unused))\n    vec3 tc0 = vec3(vUV, 1.0);  // tc0.z unused; value irrelevant\n    r1.xyz = tc0 * r1.xyz;      // r1 = (vUV.x*1, vUV.y*5, tc0.z*1)\n\n    // L651: r3.y = clamp(r0.w / -c4.z, 0,1) = clamp(194.03/4,0,1) = 1.0\n    r3.y = precision_clamp(vec4(r0.w / -(-4.0)), 0.0, 1.0).y;\n    // L652-653: r0.w = c5.w = 0.608 ; r3.x = -0.608 + c6.x(1.0) = 0.392 (band width)\n    r0.w = 0.608;\n    r3.x = -r0.w + 1.0;\n    // L654-655\n    r3.w = r3.y * r3.y;         // 1\n    r2.w = r3.y * 2.0;          // 2\n    // L656: r2.y = clamp(c7.x / r0.x, 0,1) = clamp(190.03/3.5,0,1) = 1.0\n    r2.y = precision_clamp(vec4(190.03 / r0.x), 0.0, 1.0).y;\n    // L657-658\n    r2.x = r2.y * r2.y;         // 1\n    r1.w = r2.y * 2.0;          // 2\n\n    // L659: sample glow layer at (vUV.x, 5*vUV.y)\n    r0.xyz = texture(tex0, r1.xy).xyz;\n\n    // L660: r1.x = -r1.x * c8.x(10.4)  -> -(vUV.x)*10.4\n    r1.x = -r1.x * 10.4;\n    // L661: r1.z = r1.y - c9.w(0.608) -> 5*vUV.y - 0.608\n    r1.z = r1.y - 0.608;\n    // L662: r3.x = clamp(r1.z / r3.x, 0,1) -> band coordinate, width 0.392\n    r3.x = precision_clamp(vec4(r1.z / r3.x), 0.0, 1.0).x;\n    // L663-664\n    r3.z = -r1.w + 3.0;         // -2+3 = 1\n    r3.y = r2.x * r3.z;         // 1*1 = 1\n    // L665: r0.w = r1.x * c11.x(1.4427) -> (-vUV.x*10.4)*1.4427 = exp2 arg\n    r0.w = r1.x * 1.4427;\n    // L666: r1.x = clamp(r1.y / c12.y(0.2), 0,1) = clamp(25*vUV.y,0,1) (smoothstep t1)\n    r1.x = precision_clamp(vec4(r1.y / 0.2), 0.0, 1.0).x;\n    // L667-668: r1.w = -r2.w + c13.x(3) = 1 ; r2.x = r3.w*r1.w - r3.y = 1*1 - 1 = 0\n    r1.w = -r2.w + 3.0;\n    r2.x = r3.w * r1.w + (-r3.y);   // fma -> 0.0\n    // L669-672: smoothstep on t1 = clamp(25*vUV.y,0,1)\n    r1.w = r1.x * 2.0;\n    r1.w = -r1.w + 3.0;             // c14.x = 3\n    r1.x = r1.x * r1.x;\n    r1.x = r1.x * r1.w;            // r1.x = t1^2 * (3 - 2*t1)\n    // L673-676: smoothstep on t2 = r3.x (band coord)\n    r1.w = r3.x * 2.0;\n    r1.w = -r1.w + 3.0;             // c15.x = 3\n    r1.y = r3.x * r3.x;\n    r1.y = r1.y * r1.w;           // r1.y = t2^2 * (3 - 2*t2)\n    // L677-678: exp falloff gated by r2.x (=0) -> r0.w = 0\n    r0.w = exp2(r0.w);\n    r0.w = r2.x * r0.w;            // r2.x = 0 -> r0.w = 0\n    // L679: color intensity scale\n    r0.xyz = r0.xyz * 0.508002;   // c16.x\n    // L680: r0.xyz *= (1 - r1.y)  (band-2 falloff)\n    r0.xyz = -r1.y * r0.xyz + r0.xyz;\n    // L681: r0.w *= (1 - r1.x)  (=0)\n    r0.w = -r1.x * r0.w + r0.w;\n    // L682: r0.xyz = (r0.w*r0.xyz + r0.xyz) * 8  -> (0 + r0.xyz)*8\n    r0.xyz = (r0.w * r0.xyz + r0.xyz) * 8.0;\n    // L683\n    r0.w = r0.w;                  // 0\n\n    // L684-685: build LUT coord for tex14\n    h2.w = max(r0.x, r0.y);\n    h2.z = clamp16(r0.z);\n    // L686-689: dual tonemap LUT lookups\n    r0.xy = texture(tex15, r0.xy).xy;     // -> output R,G\n    r0.z  = texture(tex14, vec2(h2.z, h2.w)).z;  // -> output B\n\n    // col0 = r0 ; a = 0\n    ocol0 = vec4(r0.x, r0.y, r0.z, r0.w);\n}",
+  "notes": "CHAINING / SEMANTICS:\n- This is a per-vertex textured glow MESH pass (primitive=6 triangle strip, 3232 verts for draw 17, 400 for draw 18), NOT a screen quad and NOT a separable blur. There is no texel-step constant. The only color source is tex0 = the 256x128 glow accumulation layer at RT 0x06e80000; it is sampled ONCE at UV (vUV.x, 5.0*vUV.y) (vertical 5x stretch via 1/c1.z).\n- The fp computes two smoothstep falloff factors from UV.y (t1 = smoothstep over 25*vUV.y; t2 = smoothstep over a band coordinate (5*vUV.y - 0.608)/0.392) but with THESE draw constants the alpha/exp path collapses: r2.x = r3.w*r1.w - r3.y = 1 - 1 = 0, so the exp2(-10.4*vUV.x) horizon-falloff term is multiplied by 0 and never contributes, r0.w (alpha) stays 0, and L681/L682 reduce to color = tex0.rgb * 0.508002 * 8.0 * (1 - r1.y). Net RGB before LUT = tex0.rgb * 4.064016 * (1 - smoothstep(t2)).\n- Final RGB is NOT the raw computed color: it is passed through the float tonemap LUTs. R,G come from tex15 indexed by (computed r0.x, r0.y); B comes from tex14 indexed by (clamp16(r0.z), max(r0.x,r0.y)). tex15=0x02b70000, tex14=0x02b90000, both 128x128 Y16_X16_FLOAT (2 valid channels). For the port these LUTs must be supplied as the real float textures dumped from RPCS3 (Y16_X16_FLOAT) - approximating them defeats the tonemap. Both LUTs are read in CLAMP-to-edge with linear filtering as per the RT sampler params.\n- ALPHA output is exactly 0.0 for every fragment under these constants. Blend ENABLE=0 so output is written directly (the src=773/dst=772 ONE_MINUS_SRC_ALPHA/SRC_ALPHA factors in the record are inactive). If this pass is later composited, note the written alpha is 0.\n- precision_clamp here is just clamp with NaN->0; clamp16 = clamp(x,-65504,65504). fma(a,b,c)=a*b+c preserved. rcp(x)=1/x, div(a,b)=a/b preserved. The r1.x in L660 still holds vUV.x (=tc0.x*1) at that point, so r1.x = -vUV.x*10.4. tc0.z and tc0.w from the vertex shader are never read by the fp.",
+  "vp": "3f6eeb47aca4477d",
+  "n": 2,
+  "vc": 3232
+ },
+ {
+  "fp": "b06b48ece8be4553",
+  "role": "sun-disc / lens-glow HDR sample + tonemap-LUT encode (additively blended, vertex_count=65 = small disc/fan mesh aimed at the sun). Samples the full DISPLAY render target along the per-vertex view ray, builds an HDR glow value from it plus a small sprite texture (tex0), then runs the result through the two FP16 tonemap LUTs (tex15 -> R,G ; tex14 -> B) and outputs with alpha=1, blended additively onto the display.",
+  "portable_glsl": "// ===== Verbatim port of fs_main() for fp=b06b48ece8be4553 (draw 19) =====\n// RSX helpers:\n//   clamp16(x)=clamp(x,-65504.,65504.)  [via packHalf2x16 round-trip; range clamp]\n//   _builtin_rcp(x)=1.0/x ;  _builtin_div(a,b)=a/b\n//   _builtin_sqrt(x)=sqrt(abs(x)) ; _builtin_divsq(a,b)= (abs(a)>0)? a/sqrt(abs(b)) : a  (per-component select)\n//   fma(a,b,c)=a*b+c ; precision_clamp(x,a,b)=clamp(NaN->0(x),a,b)\n//   TEX2D(n,uv)=texture(texN,uv)\n//   wpos = gl_FragCoord-based window pos: get_wpos() = gl_FragCoord*vec4(|wpos_scale|,wpos_scale,1,1)+vec4(wpos_bias,0,0)\n//\n// Inputs:\n//   in vec2 vUV;     // not directly used as raw UV here; screen UV is derived from wpos below\n//   in vec4 tc0;     // dst_reg7 from vp : (in_pos.xy + const7vp.x) * const7vp.y  -> sprite-space UV for tex0\n//   in vec4 tc1;     // dst_reg8 from vp : (mvp-row0..2 * in_pos) - const9vp.xyz  -> view-space ray (pre /w)\n//\n// Samplers (this draw):\nuniform sampler2D tex0;   // 128x128  @0x07942100  small glow/sprite kernel texture\nuniform sampler2D tex1;   // 1920x1080 @0x0dc80000 = DISPLAY render target (the present, HDR work copy)\nuniform sampler2D tex15;  // 128x128 Y16_X16_FLOAT tonemap LUT  @0x02b70000  -> writes R,G\nuniform sampler2D tex14;  // 128x128 Y16_X16_FLOAT tonemap LUT  @0x02b90000  -> writes B\nin vec4 tc0;\nin vec4 tc1;\nout vec4 ocol0;\n\nfloat _sqrt(float x){ return sqrt(abs(x)); }\nvec4  _divsq(vec4 a, float b){\n    vec4 t = a / _sqrt(b);\n    return mix(a, t, greaterThan(abs(a), vec4(0.0)));\n}\nvec4 clamp16(vec4 v){ return clamp(v, -65504.0, 65504.0); }\nvec4 precision_clamp(vec4 x, float lo, float hi){\n    x = mix(x, vec4(0.0), isnan(x));\n    return clamp(x, lo, hi);\n}\n\nvoid main()\n{\n    // wpos: gl_FragCoord with wpos_scale/bias. For an upright (non-flipped) FB,\n    // wpos_scale=+1, wpos_bias=0 -> wpos.xy == gl_FragCoord.xy. Kept verbatim.\n    vec4 wpos = gl_FragCoord; // get_wpos() identity for this RT (scale=1,bias=0)\n\n    vec4 r0 = vec4(0.0), r1 = vec4(0.0), r2 = vec4(0.0);\n    vec4 h2 = vec4(0.0);\n\n    // r0.z = dot(ray, ray) , ray = tc1*w (perspective divide of the view ray)\n    vec3 ray = (tc1 * gl_FragCoord.w).xyz;\n    r0.z = dot(ray, ray);\n\n    r0.x = 1.0 / 1920.0;                 // _rcp(const0.x)\n    r1.w = 1.00918;                      // const1.xxxx.w  (=const1.x broadcast)\n    r1.xyz = _divsq((tc1 * gl_FragCoord.w), r0.z).xyz;   // normalize ray (a/sqrt(|len^2|))\n    r1.w = r1.w + (-1.0);                // (r1 + const2.xxxx).w  = 1.00918 + (-1) = 0.00918\n    r0.z = dot(r1.xyz, -vec3(1.4291, 1.77865, -0.315622));   // -const3.xyz   (ray . -sunDir)\n    r0.y = 1.0 / 1080.0;                 // _rcp(const4.y)\n    r1.xyz = fma(r1.xyz, vec3(r0.z), vec3(1.4291, 1.77865, -0.315622)); // const5.xyz\n\n    r0.xy = (wpos.xy * r0.xy);           // screen UV = gl_FragCoord.xy * (1/1920, 1/1080)\n    r1.w = 1.0 / r1.w;                   // _rcp(r1.w)  (=1/0.00918)\n    r0.w = dot(r1.xyz, r1.xyz);\n\n    // r0.xy = -r0.xy*const6.xy + abs(const6.zx) ; const6={-1,1,0,0}: xy=(-1,1), zx=(0,-1)->abs=(0,1)\n    r0.xy = fma(-r0.xy, vec2(-1.0, 1.0), abs(vec2(0.0, -1.0)));   // -> (r0.x, 1.0 - r0.y)  flip V\n\n    r0.xyz = texture(tex1, r0.xy).xyz;   // sample DISPLAY at screen UV (V flipped)\n\n    r1.xyz = (-r0.xyz + vec3(1.0));      // const7.xxxx = 1\n    r1.xyz = (fma(-r0.xyz, r1.xyz, r1.xyz) / 4.0);\n    r2.w = (fma(r0.y, 1.0, r1.y) * 4.0); // const8.yyyy = 1\n    r1.z = (fma(r0.z, 1.0, r1.z) * 4.0); // const9.yyyy = 1\n    r2.x = _divsq(abs(r0.wwww), r0.w).x;\n    r0.w = (fma(r0.x, 1.0, r1.x) * 4.0); // const10.yyyy = 1\n    r1.x = _divsq(abs(r0.wwww), r0.w).x;\n    r0.w = precision_clamp((fma(r2.xxxx, r1, -r1) * 2.0), 0.0, 1.0).w;\n    r1.y = _divsq(abs(r2.wwww), r2.w).y;\n    r1.w = 1.0;                          // const11.yyyy.w = 1\n    r1.w = (r1.w * 2.0);                 // (r1 * const12).w ; const12.w = 2  -> 2.0\n    r2.xyz = fma(vec3(r0.w), -vec3(0.614486, 0.222712, 0.125234), vec3(r0.w)); // -const13\n    r1.z = _divsq(abs(r1), r1.z).z;\n    r0.xyz = (r0.xyz + r1.xyz);\n    r0.w = 1.0 / r1.w;                   // _rcp(r1.w) = 1/2 = 0.5\n    r0.xyz = fma(r0.xyz, vec3(r0.w), -vec3(r0.w));   // (r0 - 1)*0.5  (re-center)\n    r0.w = 1.0;                          // const14.xxxx.w = 1  (final alpha)\n    r0.xyz = (r0.xyz / 1.0);             // _div(r0, const15.x) ; const15.x = 1\n    r2.xyz = (r2.xyz + vec3(0.614486, 0.222712, 0.125234)); // + const16.xyz\n\n    r1.xyz = texture(tex0, tc0.xy).xyz;  // sprite/glow kernel\n    r0.xyz = (fma(r1.xyz, r2.xyz, r0.xyz) * 8.0);   // composed HDR glow value\n\n    h2.z = clamp16(r0).z;                // HDR Z clamped to fp16 range\n    h2.w = max(r0.x, r0.y);              // max(R,G)  -> LUT index for B channel\n\n    // Tonemap via FP16 LUTs (Y16_X16 2-channel). r0.xy is the HDR (R,G) used as the LUT coord.\n    r0.xy = texture(tex15, r0.xy).xy;    // -> output R,G\n    r0.z  = texture(tex14, h2.zw).z;     // coord (h2.z, h2.w) -> output B (.z channel)\n\n    // r0.w stayed = 1.0 (const14). Output additive (blend src=1 dst=1).\n    ocol0 = r0;\n}",
+  "output_register": "r0 (#define col0 r0)",
+  "output_channels": "rgba (rgb = tonemap-LUT output, a = 1.0). Note alpha is irrelevant under additive blend src=1/dst=1.",
+  "blend": "additive (blend=1, src=1, dst=1) -> ocol0 is ADDED to the destination DISPLAY RT.",
+  "vp_texcoords": "vp=c868fd6aeb6c98fd is NOT a screen-quad blur; it is a small projected disc/fan mesh (65 verts) transformed by an MVP. tc0 (dst_reg7) = (in_pos.xy + vpConst7.x) * vpConst7.y -> a per-vertex sprite-space UV used to sample tex0 (the glow kernel). tc1 (dst_reg8) = (M*in_pos).xyz - vpConst9.xyz -> a view-space ray direction; the fp does tc1*gl_FragCoord.w then normalizes it (perspective-correct ray) and uses it for the sun-direction dot products against -const3=(1.4291,1.77865,-0.315622). The actual DISPLAY sample UV is NOT from a tcN: it is derived in the fp from wpos (gl_FragCoord) * (1/1920,1/1080) with V flipped via const6 -> r0.xy = (px/1920, 1 - py/1080). No texel-step / blur tap offsets. So for the WebGL port: vUV is the fragment's screen UV (gl_FragCoord/resolution); tc0 must still be supplied as the per-vertex sprite UV from the mesh, and tc1 as the per-vertex view ray. There is no fixed full-screen quad assumption: this draws a localized glow mesh, with additive accumulation onto the present.",
+  "samplers": [
+   {
+    "slot": 0,
+    "rt": "0x07942100 128x128",
+    "meaning": "tex0: small glow/sprite KERNEL texture, sampled at per-vertex tc0.xy"
+   },
+   {
+    "slot": 1,
+    "rt": "0x0dc80000 1920x1080",
+    "meaning": "tex1: DISPLAY render target (the present / HDR work copy), sampled at screen UV (gl_FragCoord/res, V flipped)"
+   },
+   {
+    "slot": 15,
+    "rt": "0x02b70000 128x128 Y16_X16_FLOAT",
+    "meaning": "tex15: tonemap LUT, indexed by HDR r0.xy, supplies output R,G"
+   },
+   {
+    "slot": 14,
+    "rt": "0x02b90000 128x128 Y16_X16_FLOAT",
+    "meaning": "tex14: tonemap LUT, indexed by (clamp16(HDR).z, max(R,G)), supplies output B"
+   }
+  ],
+  "constants": [
+   {
+    "idx": 0,
+    "role": "inv screen-x: rcp(.x)=1/1920",
+    "value": [
+     1920,
+     1080,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 1,
+    "role": "r1.w seed (broadcast .x): 1.00918 (so r1.w-1 = 0.00918)",
+    "value": [
+     1.00918,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 2,
+    "role": "added to r1.w (-1)",
+    "value": [
+     -1,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 3,
+    "role": "-sun/view direction (dotted, negated): (1.4291,1.77865,-0.315622)",
+    "value": [
+     1.4291,
+     1.77865,
+     -0.315622,
+     0
+    ]
+   },
+   {
+    "idx": 4,
+    "role": "inv screen-y: rcp(.y)=1/1080",
+    "value": [
+     1920,
+     1080,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 5,
+    "role": "ray fma offset (= same dir as const3)",
+    "value": [
+     1.4291,
+     1.77865,
+     -0.315622,
+     0
+    ]
+   },
+   {
+    "idx": 6,
+    "role": "UV flip: -r0.xy*(-1,1)+abs(0,-1) -> (x, 1-y)",
+    "value": [
+     -1,
+     1,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 7,
+    "role": "1.0 (one-minus-color)",
+    "value": [
+     1,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 8,
+    "role": "1.0 (.y scale)",
+    "value": [
+     1,
+     1,
+     1,
+     1
+    ]
+   },
+   {
+    "idx": 9,
+    "role": "1.0 (.y scale)",
+    "value": [
+     1,
+     1,
+     1,
+     1
+    ]
+   },
+   {
+    "idx": 10,
+    "role": "1.0 (.y scale)",
+    "value": [
+     1,
+     1,
+     1,
+     1
+    ]
+   },
+   {
+    "idx": 11,
+    "role": "1.0 (r1.w seed .y)",
+    "value": [
+     1,
+     1,
+     1,
+     1
+    ]
+   },
+   {
+    "idx": 12,
+    "role": "r1.w scale .w=2 (so rcp -> 0.5)",
+    "value": [
+     0,
+     0,
+     0,
+     2
+    ]
+   },
+   {
+    "idx": 13,
+    "role": "tint subtract: (0.614486,0.222712,0.125234) warm color",
+    "value": [
+     0.614486,
+     0.222712,
+     0.125234,
+     0
+    ]
+   },
+   {
+    "idx": 14,
+    "role": "final alpha .w=1 (r0.w=1)",
+    "value": [
+     1,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 15,
+    "role": "divisor .x=1 (no-op divide)",
+    "value": [
+     1,
+     1,
+     1,
+     1
+    ]
+   },
+   {
+    "idx": 16,
+    "role": "tint add-back: (0.614486,0.222712,0.125234) (same warm color as const13)",
+    "value": [
+     0.614486,
+     0.222712,
+     0.125234,
+     0
+    ]
+   }
+  ],
+  "notes": "This is the SUN-DISC / lens-glow accumulation pass of the globe visualizer. It reads BACK the current DISPLAY render target (tex1 @0x0dc80000) at the fragment's screen UV (gl_FragCoord/(1920,1080), V flipped via const6), reconstructs/normalizes a per-vertex view ray (tc1) and dots it with the warm sun direction -const3=(1.4291,1.77865,-0.315622), modulates with a 128x128 glow kernel (tex0 at per-vertex tc0), forms an HDR value (*8), and finally TONEMAPS it through the two FP16 LUTs (tex15->R,G ; tex14->B). The output is ADDITIVELY blended (src=1,dst=1) back onto the DISPLAY RT, so it brightens the present where the sun/glow mesh covers. CHAINING: it READS the display (0x0dc80000) and WRITES (adds to) the display (0x0dc80000) -- a read-modify-add of the present. const13==const16==(0.614486,0.222712,0.125234) (warm orange) form a (1-t)*c + c style tint: r2.xyz = fma(r0.w,-c,r0.w) + c. CAVEATS: (1) wpos uses wpos_scale/wpos_bias which encode whether the FB is Y-flipped; here assumed scale=+1,bias=0 (upright) so wpos.xy==gl_FragCoord.xy. (2) The tonemap LUTs are 2-channel Y16_X16_FLOAT; the port must bind them as RG float textures (the fp reads .x/.y from tex15 and .z from tex14 -- on a 2-ch texture .z is the LUT's second channel duplicated/garbage in a naive RGBA bind, so replicate the real LUT contents: tex14 lookup uses (.z = its appropriate channel)). (3) tex2..tex6,tex13 are bound by the draw but NOT referenced by fs_main (leftover state). (4) The mesh is 65 verts (a disc/triangle-fan), not a full-screen quad; tc0 and tc1 are genuine per-vertex varyings from the vp, so a faithful port needs the actual glow-mesh geometry, not a screen quad.",
+  "vp": "c868fd6aeb6c98fd",
+  "n": 1,
+  "vc": 65
+ },
+ {
+  "fp": "9466575fcf40fc81",
+  "role": "full-screen HDR brightness/luminance extraction from the display RT (reads composited frame, outputs a brightened RGB plus a luminance-weighted alpha; additively blended)",
+  "output_register": "r0 (#define col0 r0)",
+  "output_channels": "rgba (rgb = r1.xyz*r1.w*8 from L649; a = luminance dot from L657)",
+  "blend": "additive (blend=0 src=1 dst=1) -- NOTE: dc reports blend=0 meaning the blend-enable bit decode here is \"ONE/ONE add\"; treat as additive accumulate (out = dst + src)",
+  "vp_texcoords": "tc0 is a plain UV passthrough. vp vs_main: tc0 = dst_reg7 = in_tc0 = read_location(8) (the per-vertex texcoord attribute), with NO offset/scale computed in the vp. Position is a transformed quad via _fetch_constant(0..3) dot products (full-screen quad, vertex_count=4, primitive=8). There are NO blur tap offsets and NO per-vertex tint; tc0.xy is just screen UV. So fp screen UV maps directly to vUV.",
+  "samplers": [
+   {
+    "slot": 0,
+    "rt": "0x0dc80000",
+    "meaning": "DISPLAY render target 1920x1080 (the composited present / on-screen frame) -- the ONLY sampler referenced by this fp's microcode"
+   }
+  ],
+  "constants": [
+   {
+    "idx": 0,
+    "role": "one (1-x complement base for L642)",
+    "value": [
+     1,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 1,
+    "role": "channel-R scale 1.26479 (exposure-like gain in L644)",
+    "value": [
+     1.26479,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 2,
+    "role": "channel-G scale 1.26479 (L645)",
+    "value": [
+     1.26479,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 3,
+    "role": "channel-B scale 1.26479 (L648)",
+    "value": [
+     1.26479,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 4,
+    "role": "constant 1.26479 loaded into r0.w (L651)",
+    "value": [
+     1.26479,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 5,
+    "role": "multiplier 2 -> r2.w = 1.26479*2 = 2.52958 (L652)",
+    "value": [
+     2,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 6,
+    "role": "divisor 0.4 (L656)",
+    "value": [
+     0.4,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 7,
+    "role": "luminance weights for final dot (Rec.601-ish) (L657)",
+    "value": [
+     0.27,
+     0.67,
+     0.06,
+     0
+    ]
+   }
+  ],
+  "portable_glsl": "// VERBATIM port of fp 9466575fcf40fc81 fs_main(), constants inlined.\n// RSX helpers translated:\n//   clamp16(x)=clamp(x,-65504.,65504.)  (not used here but defined for parity)\n//   TEX2D(0,uv)=texture(tex0,uv)\n//   fma(a,b,c)=a*b+c\n//   _builtin_rcp(x)=1.0/x ; _builtin_div(a,b)=a/b\n//   _builtin_sqrt(x)=sqrt(abs(x))\n//   _builtin_divsq(a,b): per-component a/sqrt(abs(b)) where abs(a)>0 else a\n// Output register col0 == r0. Final r0 = (r0.xyz from line 649, r0.w from line 657).\n\nuniform sampler2D tex0;   // DISPLAY RT 0x0dc80000 (composited frame)\nin  vec2 vUV;             // tc0.xy passthrough screen UV\nout vec4 ocol0;\n\nfloat _sqrt_abs(float x){ return sqrt(abs(x)); }\n\n// _builtin_divsq for a single referenced component: returns (abs(a_i)>0) ? a_i/sqrt(abs(b)) : a_i\nfloat divsq_c(float a, float b){\n    float t = a / _sqrt_abs(b);\n    return (abs(a) > 0.0) ? t : a;\n}\n\nvoid main()\n{\n    vec4 r0 = vec4(0.0);\n    vec4 r1 = vec4(0.0);\n    vec4 r2 = vec4(0.0);\n\n    // r1 = TEX2D(0, tc0.xy)\n    r1 = texture(tex0, vUV);\n\n    // L642: r0.xyz = (-r1 + const0.xxxx).xyz  ; const0.x = 1.0\n    r0.xyz = (-r1.xyz + vec3(1.0));\n\n    // L643: r0.xyz = (fma(-r1, r0, r0) / 4.).xyz  = ((-r1.xyz)*r0.xyz + r0.xyz)/4\n    r0.xyz = ((-r1.xyz) * r0.xyz + r0.xyz) / 4.0;\n\n    // L644: r0.x = (fma(r1, const1.xxxx, r0) * 4.).x  ; const1.x = 1.26479\n    r0.x = (r1.x * 1.26479 + r0.x) * 4.0;\n\n    // L645: r0.w = (fma(r1.yyyy, const2.xxxx, r0.yyyy) * 4.).w  ; const2.x = 1.26479\n    r0.w = (r1.y * 1.26479 + r0.y) * 4.0;\n\n    // L646: r2.x = _builtin_divsq(abs(r0), r0.x).x  -> component .x: a=abs(r0.x), b=r0.x\n    r2.x = divsq_c(abs(r0.x), r0.x);\n\n    // L647: r2.y = _builtin_divsq(abs(r0.wwww), r0.wwww.x).y -> component .y: a=abs(r0.w), b=r0.w\n    r2.y = divsq_c(abs(r0.w), r0.w);\n\n    // L648: r0.w = (fma(r1.zzzz, const3.xxxx, r0.zzzz) * 4.).w  ; const3.x = 1.26479\n    r0.w = (r1.z * 1.26479 + r0.z) * 4.0;\n\n    // L649: r0.xyz = ((r1 * r1.wwww) * 8.).xyz\n    r0.xyz = (r1.xyz * r1.w) * 8.0;\n\n    // L650: r2.z = _builtin_divsq(abs(r0.wwww), r0.wwww.x).z -> component .z: a=abs(r0.w), b=r0.w\n    r2.z = divsq_c(abs(r0.w), r0.w);\n\n    // L651: r0.w = const4.xxxx.w  ; const4.x = 1.26479\n    r0.w = 1.26479;\n\n    // L652: r2.w = (r0 * const5.xxxx).w  = r0.w * 2.0 = 1.26479*2 = 2.52958\n    r2.w = r0.w * 2.0;\n\n    // L653: r1.xyz = (r1 + r2).xyz\n    r1.xyz = r1.xyz + r2.xyz;\n\n    // L654: r0.w = _builtin_rcp(r2.wwww.x).xxxx.w = 1.0 / r2.w\n    r0.w = 1.0 / r2.w;\n\n    // L655: r1.xyz = fma(r1, r0.wwww, -r0.wwww).xyz = r1.xyz * r0.w - r0.w\n    r1.xyz = r1.xyz * r0.w - r0.w;\n\n    // L656: r1.xyw = _builtin_div(r1.xyzz, const6.xxxx.x).xyw  ; const6.x = 0.4\n    //   per component: r1.x = r1.x/0.4 ; r1.y = r1.y/0.4 ; r1.w = r1.z/0.4\n    {\n        vec4 _src = vec4(r1.x, r1.y, r1.z, r1.z); // r1.xyzz\n        r1.x = _src.x / 0.4;\n        r1.y = _src.y / 0.4;\n        r1.w = _src.w / 0.4;\n    }\n\n    // L657: r0.w = dot(r1.xywz.xyz, const7.xyz).w\n    //   r1.xywz.xyz = (r1.x, r1.y, r1.w) ; const7 = (0.27, 0.67, 0.06)\n    r0.w = dot(vec3(r1.x, r1.y, r1.w), vec3(0.27, 0.67, 0.06));\n\n    // col0 == r0 ; final r0.xyz from L649, r0.w from L657\n    ocol0 = r0;\n}",
+  "notes": "Source RT is tex0=0x0dc80000, the 1920x1080 DISPLAY/present (the composited frame), NOT a bloom-pyramid tile. tc0 is plain screen UV (no blur taps, no per-vertex tint) so the vp is a passthrough full-screen quad. The fp's microcode references ONLY tex0; the other tex1..tex15 bindings shown in the draw context are leftover global texture state and are unused by this program. Output register is r0 (#define col0 r0). FINAL output = vec4( r1.xyz*r1.w*8 , dot((r1.x,r1.y,r1.w)*reweighted, (0.27,0.67,0.06)) ): RGB is the source color premultiplied by its own alpha and scaled 8x (an HDR boost of the limb/earth where alpha is high), while ALPHA is a luminance value built from a normalized/exposure-mapped (gain 1.26479, /2.52958, /0.4) version of the frame dotted with Rec.601-like weights (0.27,0.67,0.06). Note the asymmetry: r0.xyz (line 649) is computed from RAW r1, while the r2 terms / normalization feed only r0.w (alpha). Two clarifications for the port: (1) _builtin_divsq's float arg b is r0.x at L646 (the *4 R-channel result) but r0.w at L647/L650; each only uses a single scalar component so divsq_c captures it exactly. (2) sqrt is sqrt(abs()) per _builtin_sqrt. Blend is additive ONE/ONE (src=1 dst=1) so this pass ACCUMULATES onto its target (likely a glow/bloom-input HDR layer = 0x02360000 main HDR work/glow layer, given it brightens the display frame 8x into an additive buffer). Chaining: this is the HDR bright-pass that seeds the bloom pyramid from the present frame. The adjacent DRAW 21 (fp 9efe1b9338f79110, same vp) is the sibling pass that instead reads tex0=0x018c0000 (EARTH SURFACE) -- so DRAW 20 extracts brightness from the whole composited scene while DRAW 21 does the earth-surface variant.",
+  "vp": "c8bc076eddd90050",
+  "n": 1,
+  "vc": 4
+ },
+ {
+  "fp": "9efe1b9338f79110",
+  "role": "layer passthrough copy (full-screen blit of tex0 -> dest, opaque)",
+  "portable_glsl": "// fp 9efe1b9338f79110 -- verbatim port of fs_main()\n// fs_main:  r0 = TEX2D(0, tc0.xy);\n//   col0 is #define'd to r0, so ocol0 = r0 = texture(tex0, tc0.xy)\n// The fp samples ONLY tex0. No fragment constants are referenced (no _fetch_constant calls),\n// so there is nothing to inline. tc0 is the plain passthrough UV from the vp (screen quad).\n// blend disabled (blend=0) -> straight overwrite of the destination, RGBA all written.\n\nuniform sampler2D tex0;   // the source layer (RT). draw21: 0x018c0000 EARTH SURFACE; draws22/23: 0x02360000 main HDR work/glow layer\nin vec2 vUV;              // = tc0.xy, passthrough UV from vertex attribute 8 (no scale/bias, no tap offsets)\nout vec4 ocol0;\n\nvoid main()\n{\n    // _process_texel is a no-op for this shader variant (#define _process_texel(rgba, control) rgba),\n    // and the texcoord xform here is identity (plain screen UV), so TEX2D(0, tc0.xy) == texture(tex0, vUV).\n    vec4 r0 = texture(tex0, vUV);\n    ocol0 = r0;   // #define col0 r0; ocol0 = col0;\n}",
+  "samplers": [
+   {
+    "slot": 0,
+    "rt": "draw21: 0x018c0000 (512x540 EARTH SURFACE: RGB warm lit limb, ALPHA full earth body); draws22/23: 0x02360000 (512x256 main HDR work/glow layer)",
+    "meaning": "the ONLY sampled texture; source layer to copy"
+   },
+   {
+    "slot": 1,
+    "rt": "0x0dc80000 1920x1080 DISPLAY RT",
+    "meaning": "bound but NOT sampled by fp (leftover binding)"
+   },
+   {
+    "slot": 2,
+    "rt": "0x0232ab00 512x512",
+    "meaning": "bound but NOT sampled"
+   },
+   {
+    "slot": 3,
+    "rt": "0x0756b600 512x512",
+    "meaning": "bound but NOT sampled"
+   },
+   {
+    "slot": 4,
+    "rt": "0x06f80000 256x128 glow accumulation",
+    "meaning": "bound but NOT sampled"
+   },
+   {
+    "slot": 5,
+    "rt": "0x07b0c800 256x1 1D ramp",
+    "meaning": "bound but NOT sampled"
+   },
+   {
+    "slot": 6,
+    "rt": "0x07930000 64x64",
+    "meaning": "bound but NOT sampled"
+   },
+   {
+    "slot": 13,
+    "rt": "0x0791f980 32x32 dither",
+    "meaning": "bound but NOT sampled"
+   },
+   {
+    "slot": 14,
+    "rt": "0x02b90000 128x128 tonemap LUT (Y16_X16_FLOAT)",
+    "meaning": "bound but NOT sampled"
+   },
+   {
+    "slot": 15,
+    "rt": "0x02b70000 128x128 tonemap LUT (Y16_X16_FLOAT)",
+    "meaning": "bound but NOT sampled"
+   }
+  ],
+  "blend": "opaque (blend=0; src=1 dst=1 are listed but ignored because blending is disabled). Straight overwrite of destination with the sampled texel.",
+  "constants": [],
+  "output_register": "r0 (#define col0 r0)",
+  "output_channels": "rgba (full vec4 from texture(tex0) written verbatim, no channel masking in the fp)",
+  "vp_texcoords": "vp c8bc076eddd90050: tc0 = dst_reg7 = in_tc0 = read_location(8) -- a plain per-vertex UV attribute passed through verbatim (no scale, no bias, no tap offsets, no per-vertex tint). diff_color/spec_color etc. are all forced to vec4(0,0,0,1) and are unused by this fp. Position dst_reg0 = in_pos (xyz,1) dotted with vc[0..3] (a simple ortho/screen transform). vertex_count=4 -> screen quad. Therefore tc0.xy maps 1:1 to a full-screen UV: feed vUV = standard 0..1 screen UV. NOT a blur; no texel-step constant.",
+  "notes": "This is a trivial full-screen passthrough COPY pass (vertex_count=4 quad, fp = single texture fetch, blend disabled). It blits the source layer bound to tex0 into the destination RT verbatim. Used by 10 draws with different tex0 bindings: draw 21 copies the EARTH SURFACE layer (0x018c0000, 512x540, the warm-lit limb in RGB and full earth body in ALPHA); draws 22/23 copy the main HDR work/glow layer (0x02360000, 512x256). The 9 other bound samplers (tex1..tex15) are stale RSX texture-unit bindings the shader never reads -- ignore them for the port. For chaining: this pass moves a previously-rendered layer into a new render target so a later pass (glow/bloom/composite) can read it; in a WebGL port, implement it as a 1:1 fullscreen blit (gl.blitFramebuffer or a trivial copy shader). No tonemapping, no LUT, no gamma applied here (the _process_texel macro is a no-op in this variant and the texcoord xform is identity). Output destination RT is inferred from the surrounding pass graph (the layer being staged for the next read), not encoded in the draw line.",
+  "vp": "c8bc076eddd90050",
+  "n": 10,
+  "vc": 4
+ },
+ {
+  "fp": "c1f67eef0f444617",
+  "role": "bloom/glow separable Gaussian blur: 15-tap (1 center + 7 symmetric pairs) weighted accumulation of one HDR layer, additive into RT",
+  "output_register": "r0 (#define col0 r0)",
+  "output_channels": "rgba (rgb = weighted blur sum, a = const7.w = 0)",
+  "blend": "additive: blend=1 src=1 dst=1 (ONE,ONE add). NOTE: in this captured draw blend=0 (opaque write) per dc.txt line \"blend=0 src=1 dst=1\" -- the src/dst factors are ONE/ONE but the blend ENABLE flag is 0, so this draw writes opaque. Treat as opaque overwrite of the target.",
+  "samplers": [
+   {
+    "slot": 0,
+    "rt": "0x02360000",
+    "meaning": "tex0 = main HDR work/glow layer (512x256, fmt 0xba). ONLY sampled texture. Source being blurred. All 15 taps read from this."
+   },
+   {
+    "slot": 1,
+    "rt": "0x0dc80000",
+    "meaning": "tex1 bound (1920x1080 display RT) but NOT sampled by fp"
+   },
+   {
+    "slot": 2,
+    "rt": "0x0232ab00",
+    "meaning": "tex2 bound (512x512) but NOT sampled"
+   },
+   {
+    "slot": 3,
+    "rt": "0x0756b600",
+    "meaning": "tex3 bound (512x512) but NOT sampled"
+   },
+   {
+    "slot": 4,
+    "rt": "0x06f80000",
+    "meaning": "tex4 bound (256x128 glow accum) but NOT sampled"
+   },
+   {
+    "slot": 5,
+    "rt": "0x07b0c800",
+    "meaning": "tex5 bound (256x1 1D ramp) but NOT sampled"
+   },
+   {
+    "slot": 6,
+    "rt": "0x07930000",
+    "meaning": "tex6 bound (64x64) but NOT sampled"
+   },
+   {
+    "slot": 13,
+    "rt": "0x0791f980",
+    "meaning": "tex13 bound (32x32 dither) but NOT sampled"
+   },
+   {
+    "slot": 14,
+    "rt": "0x02b90000",
+    "meaning": "tex14 bound (128x128 tonemap LUT) but NOT sampled"
+   },
+   {
+    "slot": 15,
+    "rt": "0x02b70000",
+    "meaning": "tex15 bound (128x128 tonemap LUT) but NOT sampled"
+   }
+  ],
+  "constants": [
+   {
+    "idx": 0,
+    "role": "center-tap weight (tc0.xy), rgb",
+    "value": [
+     0.254703,
+     0.138864,
+     0.184247,
+     0
+    ]
+   },
+   {
+    "idx": 1,
+    "role": "weight for tc1 tap-pair, rgb",
+    "value": [
+     0.21002,
+     0.130849,
+     0.166006,
+     0
+    ]
+   },
+   {
+    "idx": 2,
+    "role": "weight for tc2 tap-pair, rgb",
+    "value": [
+     0.117745,
+     0.109474,
+     0.121422,
+     0
+    ]
+   },
+   {
+    "idx": 3,
+    "role": "weight for tc3 tap-pair, rgb",
+    "value": [
+     0.0448828,
+     0.0813223,
+     0.0720971,
+     0
+    ]
+   },
+   {
+    "idx": 4,
+    "role": "weight for tc4 tap-pair, rgb",
+    "value": [
+     0,
+     0.0536375,
+     0.0347526,
+     0
+    ]
+   },
+   {
+    "idx": 5,
+    "role": "weight for tc5 tap-pair, rgb",
+    "value": [
+     0,
+     0.0314114,
+     0.0135989,
+     0
+    ]
+   },
+   {
+    "idx": 6,
+    "role": "weight for tc6 tap-pair, rgb",
+    "value": [
+     0,
+     0.016333,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 7,
+    "role": "output alpha source (.w only) = 0; not used as a weight",
+    "value": [
+     0,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 8,
+    "role": "weight for tc7 tap-pair, rgb (note: const7 is skipped as a weight)",
+    "value": [
+     0,
+     0.00754058,
+     0,
+     0
+    ]
+   }
+  ],
+  "vp_texcoords": "Separable directional Gaussian blur tap layout. VP reads in_tc0 (the screen quad UV at attr8) into dst_reg7=tc0=in_tc0.xyxy (center, replicated to .zw). Tap step vector r0 = (cx, cy, -cx, -cy) where (cx,cy)=vp_const(4).xy and r0.z=-cx, r0.w=-cy. So r0.xy = +(cx,cy) and r0.zw = -(cx,cy). It then walks an arithmetic chain producing increasing multiples of the step: r1 = in_tc0.xyxy + r0 -> dst_reg8=tc1 (= center +1*step in .xy, center -1*step in .zw); r2 = r0 + r1 -> dst_reg9=tc2 (center +2*step / -2*step); r1 = r0+r2 -> dst_reg10=tc3 (+3/-3); r2=r0+r1 -> dst_reg11=tc4 (+4/-4); r1=r0+r2 -> dst_reg12=tc5 (+5/-5); r2=r0+r1, dst_reg13=tc6=r2 (+6/-6); dst_reg14=tc7=r0+r2 (+7/-7). Hence tcK.xy = centerUV + K*step, tcK.zw = centerUV - K*step, with step=(cx,cy)=vp_const(4).xy. The texel-step source constant is VERTEX constant index 4 (.xy); it is NOT in dc.txt (only fragment consts are logged) -- it encodes the per-pass blur direction and spacing (one axis ~0 for a horizontal/vertical separable pass on the 512x256 layer). Pass these 8 tap-pair UV sets to the fp as varyings; center tap = tc0.xy.",
+  "portable_glsl": "// fp c1f67eef0f444617 -- 15-tap separable Gaussian blur of one HDR layer.\n// Ported VERBATIM from fs_main. Fragment const[] inlined as numeric literals.\n// Tap UVs come from the VP as varyings (centerUV +/- K*step).\n//   uv0c            = tc0.xy  (center)\n//   uvK_p / uvK_m   = tcK.xy / tcK.zw  (= centerUV + K*step / - K*step), K=1..7\n// All taps sample tex0 (the 512x256 HDR work/glow layer at 0x02360000).\n#version 430\nuniform sampler2D tex0;\nin vec2 uv0c;            // tc0.xy  center\nin vec2 uv1_p; in vec2 uv1_m;   // tc1.xy / tc1.zw\nin vec2 uv2_p; in vec2 uv2_m;   // tc2\nin vec2 uv3_p; in vec2 uv3_m;   // tc3\nin vec2 uv4_p; in vec2 uv4_m;   // tc4\nin vec2 uv5_p; in vec2 uv5_m;   // tc5\nin vec2 uv6_p; in vec2 uv6_m;   // tc6\nin vec2 uv7_p; in vec2 uv7_m;   // tc7\nout vec4 ocol0;\n\nvec2 clamp16(vec2 v){ return clamp(v, vec2(-65504.0), vec2(65504.0)); }\nvec3 clamp16(vec3 v){ return clamp(v, vec3(-65504.0), vec3(65504.0)); }\nvec4 clamp16(vec4 v){ return clamp(v, vec4(-65504.0), vec4(65504.0)); }\n\nvoid main()\n{\n    vec4 r0 = vec4(0.0), r1 = vec4(0.0), r2 = vec4(0.0), r3 = vec4(0.0);\n    vec3 h0, h1, h2;\n\n    // tc1 pair\n    r0.xyz = texture(tex0, uv1_p).xyz;\n    r1.xyz = texture(tex0, uv1_m).xyz;\n    h1 = clamp16(r0.xyz + r1.xyz);\n\n    // center tap (tc0) * const0\n    r1.xyz = texture(tex0, uv0c).xyz;\n    h0 = r1.xyz * vec3(0.254703, 0.138864, 0.184247);\n\n    // tc1 pair * const1\n    r1.xyz = texture(tex0, uv2_p).xyz;          // (next pair's + tap, fetched early)\n    h0 = clamp16(h1 * vec3(0.21002, 0.130849, 0.166006) + h0);\n\n    // tc2 pair\n    r2.xyz = texture(tex0, uv2_m).xyz;\n    h1 = clamp16(r1.xyz + r2.xyz);\n\n    r1.xyz = texture(tex0, uv3_p).xyz;\n    h0 = clamp16(h1 * vec3(0.117745, 0.109474, 0.121422) + h0);   // tc2 * const2\n\n    // tc3 pair\n    r2.xyz = texture(tex0, uv3_m).xyz;\n    h1 = clamp16(r1.xyz + r2.xyz);\n\n    r1.xyz = texture(tex0, uv4_p).xyz;\n    h0 = clamp16(h1 * vec3(0.0448828, 0.0813223, 0.0720971) + h0); // tc3 * const3\n\n    // tc4 pair\n    r2.xyz = texture(tex0, uv4_m).xyz;\n    h1 = clamp16(r1.xyz + r2.xyz);\n\n    r1.xyz = texture(tex0, uv5_p).xyz;\n    h0 = clamp16(h1 * vec3(0.0, 0.0536375, 0.0347526) + h0);       // tc4 * const4\n\n    // tc5 pair\n    r2.xyz = texture(tex0, uv5_m).xyz;\n    h1 = clamp16(r1.xyz + r2.xyz);\n\n    r1.xyz = texture(tex0, uv6_p).xyz;\n    h0 = clamp16(h1 * vec3(0.0, 0.0314114, 0.0135989) + h0);       // tc5 * const5\n\n    // tc6 pair\n    r2.xyz = texture(tex0, uv6_m).xyz;\n    h1 = clamp16(r1.xyz + r2.xyz);\n\n    r3.xyz = texture(tex0, uv7_p).xyz;\n    h0 = clamp16(h1 * vec3(0.0, 0.016333, 0.0) + h0);              // tc6 * const6\n\n    r0.w = 0.0;   // const7.w\n\n    // tc7 pair\n    r1.xyz = texture(tex0, uv7_m).xyz;\n    h2 = clamp16(r3.xyz + r1.xyz);\n\n    r0.xyz = h2 * vec3(0.0, 0.00754058, 0.0) + h0;                 // tc7 * const8\n\n    ocol0 = r0;\n}",
+  "notes": "Reads ONLY tex0 = the 512x256 HDR work/glow layer at offset 0x02360000 (despite 10 textures being bound, only slot 0 is sampled). This is one pass of a separable Gaussian blur of the glow/bloom layer. Weights (per RGB channel) form an asymmetric falloff: R: 0.2547,0.21,0.1177,0.0449,0,0,0,(a0),0 -> R blur is the tightest (only ~4 effective taps). G: 0.1389,0.1308,0.1095,0.0813,0.0536,0.0314,0.0163,(a0),0.00754 -> G is the widest (all taps), B intermediate. So each color channel gets a different blur radius (R narrow, G widest, B mid) -- a chromatic glow. Center weight is const0; pairs tc1..tc6 use const1..const6, pair tc7 uses const8 (const7 is NOT a weight; its .w supplies output alpha = 0). Output alpha is 0. Tap spacing/direction = VERTEX const(4).xy (not in dc.txt; capture from vp constants); one axis ~0 selects horizontal-vs-vertical for the separable pass. WRITE TARGET: not explicitly listed; this is a blur/downsample step feeding the bloom ping-pong (likely writes to a glow/blur layer such as 0x02560000/0x02660000 or a bloom-pyramid level). Blend ENABLE in this captured draw = 0 (opaque overwrite) even though src=dst=ONE; if chained as accumulation elsewhere it would be additive. clamp16 = clamp(x,-65504,65504) (fp16 range clamp applied after every fma). col0 = r0 (#define col0 r0).",
+  "vp": "7077ad739e7e525c",
+  "n": 16,
+  "vc": 4
+ },
+ {
+  "fp": "97f4668dac52f5ae",
+  "role": "constant-color writer / no-op pass (additive black screen quad; writes const[0] color, here {0,0,0,0})",
+  "output_register": "r0",
+  "output_channels": "rgba",
+  "portable_glsl": "// fp 97f4668dac52f5ae -- VERBATIM port of fs_main\n// Microcode: r0 = const[0]; r2 = const[1]; output ocol0 = col0 (#define col0 r0)\n// This shader samples NO textures and uses NO varyings. It writes a constant color.\n// const[0] = {0,0,0,0}, const[1] = {0,0,0,0}  (inlined below)\n// No 'in vec2 vUV' / tap varyings are needed: the vp produces only gl_Position; all tcN are\n// constant vec4(0,0,0,1) and are unused by the fp.\nout vec4 ocol0;\n\nvoid main()\n{\n    // _fetch_constant(0) -> const[0]\n    vec4 r0 = vec4(0.0, 0.0, 0.0, 0.0);\n    // _fetch_constant(1) -> const[1]  (computed but never read -> dead, kept for fidelity)\n    vec4 r2 = vec4(0.0, 0.0, 0.0, 0.0);\n\n    // #define col0 r0 ; commit col0 to ocol0\n    ocol0 = r0;\n}",
+  "samplers": [],
+  "blend": "additive (blend=0... NOTE dc.txt reports blend=0 src=1 dst=1; src=1/dst=1 = ONE/ONE additive accumulate. Since the written color is {0,0,0,0}, this draw adds nothing to the destination regardless.)",
+  "constants": [
+   {
+    "idx": 0,
+    "role": "output color (col0/r0). Written verbatim to ocol0. Value {0,0,0,0} for draw 46.",
+    "value": [
+     0,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 1,
+    "role": "loaded into r2 but never read (dead). Value {0,0,0,0} for draw 46.",
+    "value": [
+     0,
+     0,
+     0,
+     0
+    ]
+   }
+  ],
+  "vp_texcoords": "vp e6435e74717245e8 is a position-only passthrough. vs_main reads ATTR0 (in_pos = read_location(0)) into dst_reg0; gl_Position = dst_reg0 * scale_offset_mat with z-clip xform. ALL texcoords tc0..tc9 are hard-set to the constant vec4(0,0,0,1) in main() and are NOT derived from any vertex attribute. There is NO blur tap offset and NO per-vertex tint. The fp does not consume any tcN anyway. The 4 vertices form a screen quad (primitive=8 = QUADS). No texel-step constant involved.",
+  "notes": "No-op / degenerate pass. The fragment microcode contains zero texture fetches and zero varying reads: fs_main only does r0=const[0]; r2=const[1]; and main() commits ocol0=col0=r0. With const[0]={0,0,0,0} and ONE/ONE additive blending, this draw writes black with zero contribution -> it does not modify whatever render target it targets. The texN bindings reported in dc.txt (tex0=0x028a0000 bloom-pyramid 4x2, tex1=0x0dc80000 1920x1080 DISPLAY RT, tex2=0x0232ab00 512x512, tex3=0x0756b600 512x512, tex4=0x06f80000 256x128 glow accum, tex5=0x07b0c800 256x1 1D ramp, tex6=0x07930000 64x64, tex13=0x0791f980 32x32 dither, tex14=0x02b90000 / tex15=0x02b70000 128x128 tonemap LUTs) are ALL bound-but-unused; the shader never samples them. For the WebGL port this pass can be safely skipped (it is a true no-op given the captured constants). If you want bit-exact behavior, render a full-screen quad with additive blending outputting vec4(0). The destination RT is not identifiable from the const data; given the additive black output it is irrelevant. const[] are inlined as literals in portable_glsl.",
+  "vp": "e6435e74717245e8",
+  "n": 1,
+  "vc": 4
+ },
+ {
+  "fp": "c701a5214b2b4fa0",
+  "role": "bloom pyramid additive accumulate (scale smallest mip by constant, add into accumulator)",
+  "output_register": "r0",
+  "output_channels": "rgba",
+  "portable_glsl": "// fp=c701a5214b2b4fa0  vp=c8bc076eddd90050\n// VERBATIM port of fs_main(). Screen-quad copy: tc0 is plain UV passthrough from vp.\n// tex0 = bloom pyramid smallest mip (4x2, RT 0x028b0000). const[0].x = 0.0224015.\n// Blend at draw time is ADDITIVE (src=1 dst=1) -> ocol0 is accumulated onto the target.\nuniform sampler2D tex0;\nin vec2 vUV;\nout vec4 ocol0;\n\n// RSX helpers\nvec2 clamp16(vec2 v){ return clamp(v, vec2(-65504.), vec2(65504.)); }\nvec4 clamp16(vec4 v){ return clamp(v, vec4(-65504.), vec4(65504.)); }\n#define TEX2D(uv) texture(tex0, (uv))\n\nvoid main()\n{\n    vec4 r0 = vec4(0.);\n    // r0 = TEX2D(0, tc0.xy);\n    r0 = TEX2D(vUV.xy);\n    // r0 = (r0 * _fetch_constant(0).xxxx);   _fetch_constant(0) = vec4(0.0224015, 0, 0, 0)\n    r0 = (r0 * vec4(0.0224015).xxxx);\n    ocol0 = r0;\n}",
+  "samplers": [
+   {
+    "slot": 0,
+    "rt": "0x028b0000",
+    "meaning": "bloom pyramid SMALLEST mip (4x2 HDR) -- the source tile being scaled and additively accumulated"
+   },
+   {
+    "slot": 1,
+    "rt": "0x0dc80000",
+    "meaning": "bound but UNUSED by fp (1920x1080 display RT)"
+   },
+   {
+    "slot": 2,
+    "rt": "0x0232ab00",
+    "meaning": "bound but UNUSED by fp (512x512)"
+   },
+   {
+    "slot": 3,
+    "rt": "0x0756b600",
+    "meaning": "bound but UNUSED by fp (512x512)"
+   },
+   {
+    "slot": 4,
+    "rt": "0x06f80000",
+    "meaning": "bound but UNUSED by fp (256x128 glow accum)"
+   },
+   {
+    "slot": 5,
+    "rt": "0x07b0c800",
+    "meaning": "bound but UNUSED by fp (256x1 1D ramp)"
+   },
+   {
+    "slot": 6,
+    "rt": "0x07930000",
+    "meaning": "bound but UNUSED by fp (64x64)"
+   },
+   {
+    "slot": 13,
+    "rt": "0x0791f980",
+    "meaning": "bound but UNUSED by fp (32x32 dither)"
+   },
+   {
+    "slot": 14,
+    "rt": "0x02b90000",
+    "meaning": "bound but UNUSED by fp (128x128 tonemap LUT)"
+   },
+   {
+    "slot": 15,
+    "rt": "0x02b70000",
+    "meaning": "bound but UNUSED by fp (128x128 tonemap LUT)"
+   }
+  ],
+  "blend": "additive (blend=1 src=1 dst=1): ocol0 is ADDED to the destination render target (accumulation)",
+  "constants": [
+   {
+    "idx": 0,
+    "role": "scalar gain applied to all 4 channels of the sampled bloom tile (col *= const0.x)",
+    "value": [
+     0.0224015,
+     0,
+     0,
+     0
+    ]
+   }
+  ],
+  "vp_texcoords": "Plain UV passthrough. vp c8bc076eddd90050: tc0 = dst_reg7 = in_tc0 = read_location(8) (attribute 8, the quad's per-vertex texcoord). No tap offsets, no per-vertex tint, no blur. gl_Position = transform of in_pos by vc[0..3] (a screen-aligned quad of 4 verts, primitive=8 tri-strip). So tc0.xy is the direct screen UV -> use as `in vec2 vUV`. Texture-parameter scale/bias on the sampler are identity for this copy quad.",
+  "notes": "This is one tile of the bloom-pyramid additive composite. The fp itself is a trivial scaled copy: ocol0 = texture(tex0, uv) * 0.0224015, with ADDITIVE blending so the scaled bloom tile is accumulated into the destination RT. Only tex0 is read; tex1..tex15 are bound by the shared globe pipeline state but never sampled by this fp. The sibling draws use the SAME vp/fp shape with different tiles and gains: DRAW 48 fp=92d6ed91a61097da reads 8x4 (0x02890000) with gain 0.0611269; DRAW 49 fp=025af786882c853e reads 16x8 (0x02870000); etc. -> a chain of per-mip additive contributions building the final bloom. The destination RT is the bloom accumulation target (chain into the larger bloom/composite layers, e.g. 0x06f80000 / 0x02360000 region). Each pyramid level gets its own gain constant (smaller/dimmer mips get the small 0.0224 weight here). Output is full RGBA; for an HDR port keep float precision (no 8-bit rounding: _ENABLE_ROP_OUTPUT_ROUNDING is not defined).",
+  "vp": "c8bc076eddd90050",
+  "n": 1,
+  "vc": 4
+ },
+ {
+  "fp": "92d6ed91a61097da",
+  "role": "bloom upsample/scale: sample one small bloom-pyramid mip (8x4), multiply by scalar weight 0.0611269, additively accumulate into larger layer",
+  "portable_glsl": "// fp 92d6ed91a61097da  vp c8bc076eddd90050\n// Screen-quad pass. fs_main: r0 = TEX2D(0, tc0.xy); r0 = r0 * const0.xxxx;\n// const[0] = {0.0611269, 0, 0, 0}  -> scalar weight inlined below.\n// Output col0 = r0. Additive blend (src=1, dst=1) handled by the caller's blend state.\n\nuniform sampler2D tex0;   // bound RT 0x02890000, 8x4, a deep bloom-pyramid mip level\nin vec2 vUV;              // tc0.xy : plain UV passthrough from screen-quad vertex shader\nout vec4 ocol0;\n\nvec4 clamp16(vec4 v){ return clamp(v, -65504.0, 65504.0); } // (unused here, kept for parity)\n\nvoid main()\n{\n    vec4 r0 = texture(tex0, vUV);\n    r0 = r0 * vec4(0.0611269, 0.0611269, 0.0611269, 0.0611269); // const0.xxxx inlined\n    ocol0 = r0;\n}",
+  "samplers": [
+   {
+    "slot": 0,
+    "rt": "0x02890000",
+    "meaning": "bloom pyramid mip (8x4) - the only texture the fp actually samples; scaled by const0.x"
+   },
+   {
+    "slot": 1,
+    "rt": "0x0dc80000",
+    "meaning": "1920x1080 display RT (bound, UNUSED by fp)"
+   },
+   {
+    "slot": 2,
+    "rt": "0x0232ab00",
+    "meaning": "512x512 (bound, UNUSED by fp)"
+   },
+   {
+    "slot": 3,
+    "rt": "0x0756b600",
+    "meaning": "512x512 (bound, UNUSED by fp)"
+   },
+   {
+    "slot": 4,
+    "rt": "0x06f80000",
+    "meaning": "256x128 glow accumulation layer (bound, UNUSED by fp)"
+   },
+   {
+    "slot": 5,
+    "rt": "0x07b0c800",
+    "meaning": "256x1 1D ramp (bound, UNUSED by fp)"
+   },
+   {
+    "slot": 6,
+    "rt": "0x07930000",
+    "meaning": "64x64 (bound, UNUSED by fp)"
+   },
+   {
+    "slot": 13,
+    "rt": "0x0791f980",
+    "meaning": "32x32 dither (bound, UNUSED by fp)"
+   },
+   {
+    "slot": 14,
+    "rt": "0x02b90000",
+    "meaning": "128x128 tonemap LUT Y16_X16_FLOAT (bound, UNUSED by fp)"
+   },
+   {
+    "slot": 15,
+    "rt": "0x02b70000",
+    "meaning": "128x128 tonemap LUT Y16_X16_FLOAT (bound, UNUSED by fp)"
+   }
+  ],
+  "blend": "additive: blend=1 src=1 dst=1 (ONE, ONE) -> dst = dst + src. Accumulates the scaled tex0 into the destination RT.",
+  "constants": [
+   {
+    "idx": 0,
+    "role": "scalar bloom weight (col multiply, .xxxx broadcast)",
+    "value": [
+     0.0611269,
+     0,
+     0,
+     0
+    ]
+   }
+  ],
+  "output_register": "r0 (#define col0 r0)",
+  "output_channels": "rgba (all 4 channels = tex0.rgba * 0.0611269)",
+  "vp_texcoords": "vp c8bc076eddd90050 is a generic transform: dst_reg7 = in_tc0 (vertex attribute location 8), emitted as tc0 unchanged. The fp reads tc0.xy = plain UV passthrough -> simple full-screen quad sample (NO blur tap offsets, NO per-vertex tint used by fp). Position dst_reg0 = in_pos.xyz dotted with vc[0..3] (an MVP), then * scale_offset_mat; standard screen-quad placement, vertex_count=4.",
+  "notes": "This is the simplest bloom-accumulation primitive in the pyramid. It samples a single small bloom mip (tex0 = RT 0x02890000, 8x4) and multiplies every channel by the inlined scalar 0.0611269, then the fixed-function blend (ONE,ONE) adds the result into whatever destination RT this draw targets (the larger bloom/glow layer it is being upsampled into). Only tex0 is fetched; tex1..tex15 are bound but completely unused by the microcode. DRAW 48 of frame 14922, primitive=8 (quad), 4 verts. Sibling draws (49, 50, ...) use the same vp with different fp ids and different small mips (16x8 @0x02870000, etc.) and presumably different per-level scalar weights, forming the staged bloom upsample chain. When chaining: this pass READS the 8x4 mip and ADDS into the next-larger accumulation target; the weight 0.0611269 is this level's contribution. clamp16 included only for RSX-helper parity; the microcode itself applies no clamp.",
+  "vp": "c8bc076eddd90050",
+  "n": 1,
+  "vc": 4
+ },
+ {
+  "fp": "025af786882c853e",
+  "role": "bloom upsample/accumulate: scale smallest bloom-pyramid level (16x8) by 0.166797 and additively blend into target",
+  "portable_glsl": "#version 430\n// Ported VERBATIM from fp 025af786882c853e (fs_main)\n// const[0] = {0.166797, 0, 0, 0}  -> inlined below\n\nuniform sampler2D tex0;   // 16x8 bloom-pyramid level (RT 0x02870000)\nin vec2 vUV;              // tc0.xy, plain screen-quad UV passthrough from vp\nout vec4 ocol0;\n\n// RSX helper verbatim\nvec2 clamp16(vec2 v){ return clamp(v, -65504., 65504.); }\nvec4 clamp16(vec4 v){ return vec4(clamp16(v.xy), clamp16(v.zw)); }\n\n#define TEX2D(n, uv) texture(tex##n, uv)\n\nvoid main()\n{\n    vec4 r0;\n    r0 = TEX2D(0, vUV.xy);\n    r0 = (r0 * vec4(0.166797).xxxx);   // _fetch_constant(0).xxxx, const[0].x = 0.166797\n    ocol0 = r0;\n}",
+  "output_register": "r0",
+  "output_channels": "rgba",
+  "vp_texcoords": "see above",
+  "samplers": [
+   {
+    "slot": 0,
+    "rt": "0x02870000",
+    "meaning": "16x8 bloom-pyramid level (smallest tier, A or B set) - the ONLY texture actually sampled"
+   },
+   {
+    "slot": 1,
+    "rt": "0x0dc80000",
+    "meaning": "1920x1080 DISPLAY RT - bound but NOT sampled by fp"
+   },
+   {
+    "slot": 2,
+    "rt": "0x0232ab00",
+    "meaning": "512x512 - bound but NOT sampled"
+   },
+   {
+    "slot": 3,
+    "rt": "0x0756b600",
+    "meaning": "512x512 - bound but NOT sampled"
+   },
+   {
+    "slot": 4,
+    "rt": "0x06f80000",
+    "meaning": "256x128 glow accumulation - bound but NOT sampled"
+   },
+   {
+    "slot": 5,
+    "rt": "0x07b0c800",
+    "meaning": "256x1 1D ramp - bound but NOT sampled"
+   },
+   {
+    "slot": 6,
+    "rt": "0x07930000",
+    "meaning": "64x64 - bound but NOT sampled"
+   },
+   {
+    "slot": 13,
+    "rt": "0x0791f980",
+    "meaning": "32x32 dither - bound but NOT sampled"
+   },
+   {
+    "slot": 14,
+    "rt": "0x02b90000",
+    "meaning": "128x128 tonemap LUT - bound but NOT sampled"
+   },
+   {
+    "slot": 15,
+    "rt": "0x02b70000",
+    "meaning": "128x128 tonemap LUT - bound but NOT sampled"
+   }
+  ],
+  "blend": "additive (blend=1 src=1 dst=1): ocol0 added to existing target. ocol0 = src*1 + dst*1.",
+  "constants": [
+   {
+    "idx": 0,
+    "role": "bloom-level scale weight (uniform multiplier applied to all rgba channels via .xxxx)",
+    "value": [
+     0.166797,
+     0,
+     0,
+     0
+    ]
+   }
+  ],
+  "notes": "This is ONE tier of a bloom upsample/accumulate chain. It reads the smallest bloom-pyramid level tex0=0x02870000 (16x8), multiplies the whole RGBA texel by the scalar weight 0.166797 (const[0].x broadcast .xxxx), and ADDITIVELY blends (src=1 dst=1) into whatever RT is currently bound as the color target (the accumulation/composite buffer). All other texture slots (tex1..tex15) are bound by the draw state but are NEVER sampled in fs_main, so they are irrelevant to the math; only tex0 matters. The sibling draws 50 (fp 9df777ad, tex0=0x02850000 32x16, weight 0.455139) and 51 (fp cc7466b7, tex0=0x02830000 64x32) are the same shader shape with different bloom levels and weights - i.e. each pyramid tier is added back with its own weight. No tonemap, no LUT, no clamp16 reached (clamp16 helper present but unused). Output writes full rgba. Pass uses vp c8bc076e screen-quad, 4 verts (tri-strip full-screen quad). For the WebGL port: bind the 16x8 bloom level to tex0, draw a fullscreen quad with additive blending, fragment = texture(tex0, vUV) * 0.166797.",
+  "vp": "c8bc076eddd90050",
+  "n": 1,
+  "vc": 4
+ },
+ {
+  "fp": "9df777ad50b66847",
+  "role": "bloom pyramid upsample/accumulate: weighted additive copy of a 32x16 bloom mip into the larger destination",
+  "output_register": "r0 (#define col0 r0)",
+  "output_channels": "rgba",
+  "portable_glsl": "#version 430\n// fp 9df777ad50b66847 vp c8bc076eddd90050  (screen quad, 4 verts)\n// Verbatim port of fs_main(): r0 = TEX2D(0, tc0.xy); r0 = r0 * const0.xxxx;\n// const[0] = {0.455139, 0, 0, 0}  -> scale factor inlined below\n// Blend at draw time is additive: src=1 dst=1 (handled by the host blend state, not in-shader).\n\nuniform sampler2D tex0; // RT 0x02850000, 32x16, a bloom-pyramid mip level (HDR work layer)\nin vec2 vUV;            // tc0.xy : plain UV passthrough from the vertex shader (no tap offsets)\nout vec4 ocol0;\n\nvoid main()\n{\n    vec4 r0 = texture(tex0, vUV);   // TEX2D(0, tc0.xy)\n    r0 = r0 * vec4(0.455139, 0.455139, 0.455139, 0.455139); // r0 * _fetch_constant(0).xxxx\n    ocol0 = r0;\n}",
+  "samplers": [
+   {
+    "slot": 0,
+    "rt": "0x02850000",
+    "meaning": "tex0: 32x16 bloom-pyramid mip level (fmt 0xba), the ONLY texture sampled by the fragment program"
+   },
+   {
+    "slot": 1,
+    "rt": "0x0dc80000",
+    "meaning": "tex1: 1920x1080 display RT - bound but UNUSED by fs (residual pipeline state)"
+   },
+   {
+    "slot": 2,
+    "rt": "0x0232ab00",
+    "meaning": "tex2: 512x512 - bound but UNUSED"
+   },
+   {
+    "slot": 3,
+    "rt": "0x0756b600",
+    "meaning": "tex3: 512x512 - bound but UNUSED"
+   },
+   {
+    "slot": 4,
+    "rt": "0x06f80000",
+    "meaning": "tex4: 256x128 glow accumulation - bound but UNUSED"
+   },
+   {
+    "slot": 5,
+    "rt": "0x07b0c800",
+    "meaning": "tex5: 256x1 1D ramp - bound but UNUSED"
+   },
+   {
+    "slot": 6,
+    "rt": "0x07930000",
+    "meaning": "tex6: 64x64 - bound but UNUSED"
+   },
+   {
+    "slot": 13,
+    "rt": "0x0791f980",
+    "meaning": "tex13: 32x32 dither - bound but UNUSED"
+   },
+   {
+    "slot": 14,
+    "rt": "0x02b90000",
+    "meaning": "tex14: 128x128 tonemap LUT (Y16_X16_FLOAT) - bound but UNUSED"
+   },
+   {
+    "slot": 15,
+    "rt": "0x02b70000",
+    "meaning": "tex15: 128x128 tonemap LUT (Y16_X16_FLOAT) - bound but UNUSED"
+   }
+  ],
+  "blend": "additive: blend=1 src=1 dst=1 (ocol0 ADDED to destination RT; opaque-source semantics: dst += src)",
+  "constants": [
+   {
+    "idx": 0,
+    "role": "uniform RGBA scale factor (per-level bloom weight), used as .xxxx so applies to all 4 channels",
+    "value": [
+     0.455139,
+     0,
+     0,
+     0
+    ]
+   }
+  ],
+  "vp_texcoords": "Plain UV passthrough screen quad. vs_main reads attribute location 8 (in_tc0) into dst_reg7, and main assigns tc0 = dst_reg7. No offsets, no scaling, no per-vertex tint computed in the vertex shader. The fragment shader uses tc0.xy directly as the sample coordinate (the host _texcoord_xform sampler scale/bias for tex0 is identity for this screen-quad copy). NOT a blur: there is no texel-step constant and no tap-offset math. Position is a standard 4x4 transform (vc[0..3]) of in_pos; only x/y matter for the fullscreen quad.",
+  "notes": "Single-draw (vertex_count=4) fullscreen-quad pass. Reads ONLY tex0 = the 32x16 bloom-pyramid mip at RT 0x02850000 (one of the BLOOM PYRAMID levels in the 0x02760000..0x028b0000 range). Output = tex0_rgba * 0.455139, additively blended (src=1,dst=1) into whatever RT is bound for this draw. This is a bloom-pyramid UPSAMPLE/ACCUMULATE step: it takes a smaller/blurred bloom level, scales it by the per-level weight 0.455139, and adds it onto the larger accumulation target. DRAW 51 (fp cc7466b7b8988626, same vp) is the analogous next-level accumulate from a 64x32 source at 0x02830000 - chain these upsample-add passes from coarse to fine to reconstruct the bloom pyramid. To chain: this pass's destination is the next-coarser bloom level being upsampled into; subsequent passes (51, ...) keep adding finer/coarser contributions with their own per-level weights. The 10 bound textures other than tex0 are leftover binding state and are never referenced by the fragment program - only tex0 matters for the port.",
+  "vp": "c8bc076eddd90050",
+  "n": 1,
+  "vc": 4
+ },
+ {
+  "fp": "cc7466b7b8988626",
+  "role": "bloom pyramid level scale + additive accumulate (single-tap, multiply by const, add-blend into target)",
+  "portable_glsl": "#version 430\n// Ported VERBATIM from PS3 RSX fragment program cc7466b7b8988626\n// fs_main:\n//   r0 = TEX2D(0, tc0.xy);\n//   r0 = r0 * _fetch_constant(0).xxxx;\n// const[0] = {1.24194, 0, 0, 0}  -> _fetch_constant(0).xxxx = vec4(1.24194)\n// Output register col0 == r0. Blend = additive (src=1 dst=1).\n\nuniform sampler2D tex0;   // RT 0x02830000, 64x32, bloom pyramid level\nin vec2 vUV;              // tc0.xy : plain UV passthrough from vp (screen quad)\nout vec4 ocol0;\n\nvoid main()\n{\n    vec4 r0 = texture(tex0, vUV);\n    r0 = r0 * vec4(1.24194, 1.24194, 1.24194, 1.24194); // * _fetch_constant(0).xxxx\n    ocol0 = r0;\n}",
+  "samplers": [
+   {
+    "slot": 0,
+    "rt": "0x02830000",
+    "meaning": "bloom pyramid level (64x32), the source mip being scaled & accumulated"
+   }
+  ],
+  "blend": "additive (blend=1 src=1 dst=1): ocol0 is ADDED to existing target contents",
+  "constants": [
+   {
+    "idx": 0,
+    "role": "uniform brightness/scale multiplier applied to all RGBA channels (used as .xxxx)",
+    "value": [
+     1.24194,
+     0,
+     0,
+     0
+    ]
+   }
+  ],
+  "output_register": "r0 (#define col0 r0)",
+  "output_channels": "rgba (all four channels written; const applied via .xxxx so each channel = sampledChannel * 1.24194)",
+  "vp_texcoords": "vp c8bc076eddd90050: tc0 = dst_reg7 = in_tc0 = read_location(8). Plain UV passthrough (no tap offsets, no blur, no per-vertex tint). gl_Position is a transformed screen quad (4 verts, primitive=8/triangle-strip). The fp only uses tc0.xy as the sample UV. No texel-step constant involved. NOTE: texture_parameters[0] scale/bias (COORD_SCALE2) are identity for this screen-quad pass; vUV maps directly to tex0.",
+  "notes": "Bloom-pyramid scale-and-add pass. Reads one bloom mip level (tex0 = RT 0x02830000, 64x32, third level of the 0x02760000..0x028b0000 bloom pyramid), multiplies RGBA by scalar const[0]=1.24194, and outputs with ADDITIVE blend (src=1 dst=1) so it accumulates into whatever render target is bound. This is the classic bloom upsample/combine step: each pyramid level is scaled and added back. Other textures listed in the draw context (tex1=display 0x0dc80000, tex2/tex3=512x512 surfaces, tex4=256x128 glow accum, tex5=256x1 1D ramp, tex6=64x64, tex13=dither 32x32, tex14/tex15=128x128 tonemap LUTs) are bound to the unit but NOT sampled by this fragment program (fs_main only references TEX2D(0,...)); they are leftover bindings and can be ignored for the port. Chaining: this draw (51) is one of a sequence (52, ...) that scale-and-add successive bloom levels into the accumulation target; the only thing that varies per draw is the source mip and the const multiplier.",
+  "vp": "c8bc076eddd90050",
+  "n": 1,
+  "vc": 4
+ },
+ {
+  "fp": "17290dd76a899945",
+  "role": "bloom upsample scale-add (multiply pyramid level by scalar, additive blend into coarser bloom layer)",
+  "portable_glsl": "// fp=17290dd76a899945 vp=c8bc076eddd90050\n// Verbatim port of fs_main(): single-tap fetch * scalar constant, additive blend.\n// const[0] = {3.38887, 0, 0, 0}; col0 = r0; only RGBA all written.\n#version 430\nuniform sampler2D tex0;   // RT 0x02800000, 128x64, bloom pyramid level (fmt 0xba = RGBA16F HDR)\nin vec2 vUV;              // tc0.xy from vp = plain UV passthrough (read_location(8)), screen quad\nout vec4 ocol0;\n\n#define clamp16(x) clamp((x), -65504.0, 65504.0)\n\nvoid main()\n{\n    // r0 = TEX2D(0, tc0.xy);\n    vec4 r0 = texture(tex0, vUV);\n    // r0 = (r0 * _fetch_constant(0).xxxx);   const[0].x = 3.38887\n    r0 = r0 * vec4(3.38887, 3.38887, 3.38887, 3.38887);\n\n    ocol0 = r0;   // #define col0 r0 ; blend additive (src=1 dst=1)\n}",
+  "output_register": "r0",
+  "output_channels": "rgba",
+  "vp_texcoords": "tc0 = dst_reg7 = in_tc0 = read_location(8). Plain per-vertex texcoord passthrough, no tap offsets, no per-vertex tint, no blur. Position uses _fetch_constant(0..3) as a 4x4 transform on in_pos (full-screen/quad transform). So vUV is a straight screen-quad UV. Only tc0.xy is consumed by the fp; tc0.zw unused. No texel-step constant (not a blur).",
+  "samplers": [
+   {
+    "slot": 0,
+    "rt": "0x02800000",
+    "meaning": "bloom pyramid level 128x64 (fmt 0xba RGBA16F HDR). The ONLY texture the fp reads. tex1..tex15 are bound by the engine but never sampled by this fp."
+   }
+  ],
+  "blend": "additive (blend=1 src=1 dst=1): ocol0 added to destination RT",
+  "constants": [
+   {
+    "idx": 0,
+    "role": "scalar multiplier broadcast .xxxx onto sampled RGBA (bloom level gain/intensity)",
+    "value": [
+     3.38887,
+     0,
+     0,
+     0
+    ]
+   }
+  ],
+  "vp_texcoords_note": "screen quad UV passthrough",
+  "notes": "Bloom upsample/scale-add pass. Reads bloom pyramid level tex0=0x02800000 (128x64, RGBA16F HDR), multiplies all 4 channels by const[0].x=3.38887, and additively blends (src=1,dst=1) into the destination RT (a coarser/larger glow-accumulation layer, e.g. the 256x128 0x06f80000 or next-coarser pyramid level; dc.txt does not log the bound color target, inferred from the additive bloom chain). Neighboring draws 51/53/54 use the SAME vp and the SAME 'sample one pyramid level * scalar, additive-add' structure on different levels with different gains (53: const=9.24721 on 256x128 0x027a0000; 54: on 512x256 0x02660000), confirming this is one rung of the bloom upsample accumulation. Math is exact/lossless: no clamp16, no tonemap, no LUT in THIS pass. fmt 0xba => HDR fp16 RT, so values can exceed 1.0; do the multiply in linear HDR space and accumulate additively. The per-level gain (3.38887 here) is a draw-time constant and may vary frame to frame with audio/intensity; treat const[0].x as a uniform when porting if you want it to track the live value, otherwise inline 3.38887 for this captured frame.",
+  "vp": "c8bc076eddd90050",
+  "n": 1,
+  "vc": 4
+ },
+ {
+  "fp": "94841c00f616a42f",
+  "role": "bloom additive accumulate: sample one bloom-pyramid level (256x128) and add it to the HDR target scaled by a brightness gain",
+  "portable_glsl": "// Ported VERBATIM from fs_main of fp 94841c00f616a42f\n// fs_main:\n//   r0 = TEX2D(0, tc0.xy);\n//   r0 = (r0 * _fetch_constant(0).xxxx);\n// _fetch_constant(0) = const[0] = {9.24721, 0, 0, 0}\n// col0 == r0  (output register r0)\n\nuniform sampler2D tex0;   // 256x128 bloom-pyramid level @ RT 0x027a0000\n\nin vec2 vUV;              // tc0.xy = plain passthrough screen/quad UV from vp\nout vec4 ocol0;\n\nvoid main()\n{\n    vec4 r0 = texture(tex0, vUV);\n    r0 = r0 * vec4(9.24721, 9.24721, 9.24721, 9.24721); // _fetch_constant(0).xxxx\n    ocol0 = r0;\n}",
+  "output_register": "r0",
+  "output_channels": "rgba",
+  "blend": "additive (blend=1 src=1 dst=1): ocol0 added to existing render-target contents",
+  "vp_texcoords": "vp c8bc076eddd90050 is a generic textured-quad transform. fs uses only tc0. In the vp, tc0 = dst_reg7 = in_tc0 = read_location(8) (vertex attribute 8), a PLAIN UV PASSTHROUGH (no scale/bias, no tap offsets, no per-vertex tint). This is a full-screen / mesh quad, NOT a blur. So vUV maps directly to the quad's interpolated tc0.xy. No texel-step constant is involved.",
+  "samplers": [
+   {
+    "slot": 0,
+    "rt": "0x027a0000",
+    "meaning": "256x128 bloom pyramid level (only texture actually sampled). fmt=0xba"
+   }
+  ],
+  "constants": [
+   {
+    "idx": 0,
+    "role": "brightness gain multiplier (replicated .xxxx onto rgba of the sampled bloom texel)",
+    "value": [
+     9.24721,
+     0,
+     0,
+     0
+    ]
+   }
+  ],
+  "notes": "Trivial single-tap pass: out = texture(bloomLevel, uv) * 9.24721, blended ADDITIVELY (src=1 dst=1) into the destination RT. This is a bloom upsample/accumulate step: one pyramid level (256x128 @ 0x027a0000) is read, scaled by the per-draw gain const[0].x, and added on top of whatever is already in the bound color target. The gain value (here 9.24721) is per-draw and changes between consecutive accumulate draws (cf. draw 54 uses 25.2329 with the same vp and same shape but a different fp/source level), so the gain must be sourced from the draw's const[0].x at runtime, not hard-coded, when chaining multiple accumulate passes. fs_main samples ONLY tex0/tc0; the other bound textures (tex1 display, tex2/tex3 512x512, tex4 256x128, tex5 256x1 ramp, tex6 64x64, tex13 dither, tex14/tex15 tonemap LUTs) are bound by the pipeline but NEVER read by this fragment program. All channels rgba are written (the multiply replicates const0.x across all 4). Helpers: TEX2D(0,uv)=texture(tex0,uv) (no COORD scale/bias on this pass); _fetch_constant(0).xxxx = vec4(9.24721). No clamp16/fma/rcp used in this shader. Output register is r0 (#define col0 r0).",
+  "vp": "c8bc076eddd90050",
+  "n": 1,
+  "vc": 4
+ },
+ {
+  "fp": "20d5549a1a558c80",
+  "role": "additive bloom/glow accumulate: sample one glow layer, multiply by scalar gain, additively blend",
+  "output_register": "r0",
+  "output_channels": "rgba",
+  "blend": "additive (blend=1 src=1 dst=1): ocol0*1 + dst*1",
+  "vp_texcoords": "vp c8bc076e is a plain fullscreen-quad passthrough. tc0 = dst_reg7 = in_tc0 (vertex attribute location 8), copied verbatim with no offset/scale/tap math. So tc0.xy is a straight screen-quad UV. NOT a blur (no per-vertex tap offsets, no texel-step constant). gl_Position is computed from the 4x4 transform in vc[0..3] applied to in_pos, i.e. a simple positioned quad.",
+  "samplers": [
+   {
+    "slot": 0,
+    "rt": "0x02660000",
+    "meaning": "512x256 glow/blur layer B (the only texture actually sampled by the fp)"
+   },
+   {
+    "slot": 1,
+    "rt": "0x0dc80000",
+    "meaning": "1920x1080 DISPLAY RT (bound but UNUSED by fp)"
+   },
+   {
+    "slot": 2,
+    "rt": "0x0232ab00",
+    "meaning": "512x512 (bound, UNUSED)"
+   },
+   {
+    "slot": 3,
+    "rt": "0x0756b600",
+    "meaning": "512x512 (bound, UNUSED)"
+   },
+   {
+    "slot": 4,
+    "rt": "0x06f80000",
+    "meaning": "256x128 glow accumulation layer (bound, UNUSED)"
+   },
+   {
+    "slot": 5,
+    "rt": "0x07b0c800",
+    "meaning": "256x1 1D ramp (bound, UNUSED)"
+   },
+   {
+    "slot": 6,
+    "rt": "0x07930000",
+    "meaning": "64x64 (bound, UNUSED)"
+   },
+   {
+    "slot": 13,
+    "rt": "0x0791f980",
+    "meaning": "32x32 dither (bound, UNUSED)"
+   },
+   {
+    "slot": 14,
+    "rt": "0x02b90000",
+    "meaning": "128x128 tonemap LUT (bound, UNUSED)"
+   },
+   {
+    "slot": 15,
+    "rt": "0x02b70000",
+    "meaning": "128x128 tonemap LUT (bound, UNUSED)"
+   }
+  ],
+  "constants": [
+   {
+    "idx": 0,
+    "role": "scalar gain applied to all RGBA channels (.xxxx) of the sampled glow layer",
+    "value": [
+     25.2329,
+     0,
+     0,
+     0
+    ]
+   }
+  ],
+  "portable_glsl": "#version 430\n// fp 20d5549a1a558c80 / vp c8bc076eddd90050 (DRAW 54)\n// Additive bloom accumulate: sample glow layer (RT 0x02660000, 512x256),\n// multiply ALL channels by gain const[0].x = 25.2329, output for additive blend.\nuniform sampler2D tex0; // glow/blur layer B @ 0x02660000\nin vec2 vUV;            // tc0.xy, plain fullscreen-quad UV (vp passthrough)\nout vec4 ocol0;\n\nvoid main()\n{\n    // r0 = TEX2D(0, tc0.xy);\n    // _process_texel is a no-op (no format-conversion defines); _texcoord_xform\n    // is identity (RT copy, scale=1 bias=0 no clamp). So just a straight sample.\n    vec4 r0 = texture(tex0, vUV);\n\n    // r0 = (r0 * _fetch_constant(0).xxxx);  const[0] = {25.2329,0,0,0}\n    r0 = r0 * vec4(25.2329, 25.2329, 25.2329, 25.2329);\n\n    // col0 = r0\n    ocol0 = r0;\n    // Result is additively blended into the destination (src=1, dst=1).\n}",
+  "notes": "Fullscreen-quad bloom/glow accumulate pass. Reads ONLY tex0 = the 512x256 glow/blur layer B at RT 0x02660000 (despite 10 textures being bound; tex1-tex15 are leftover bindings the fp never samples). Multiplies the entire RGBA texel by the scalar gain const[0].x = 25.2329 (broadcast via .xxxx to all 4 channels, including alpha) and writes it with ADDITIVE blending (blend=1, src=1, dst=1) into whatever destination RT this draw targets, accumulating a bright bloom contribution. No coordinate transforms, no blur taps, no LUTs, no tonemap, no clamp16 in the math. To chain: this is one of the additive bloom-pyramid upsample/accumulate steps; the destination RT (not given in dc.txt line, infer from pass graph) receives glow-layer-B * 25.2329 added on top. The large gain (~25x) compensates for the small/quantized HDR values stored in the low-res glow layer. Note DRAW 55 immediately after uses the SAME vp and an analogous fp (9efe1b93...) but samples tex0=0x02360000 (the main HDR work/glow layer) instead, i.e. a sibling accumulate of a different source layer with the same additive blend.",
+  "vp": "c8bc076eddd90050",
+  "n": 1,
+  "vc": 4
+ },
+ {
+  "fp": "59b4612294d05d59",
+  "role": "dither/quantization pass: copy glow/blur layer tex1 (scaled by 1.0) and subtract a screen-space dither pattern (tex13 32x32) scaled by 0.125, before the next quantize step. Effectively ocol0 = tex1(uv) - dither(fragcoord)*0.125 (per-channel incl alpha).",
+  "portable_glsl": "// fp 59b4612294d05d59 / vp c8bc076eddd90050  (screen quad, 4 verts)\n// tex1  = glow/blur layer (RT 0x02560000, 512x256), sampled at passthrough UV\n// tex13 = dither texture  (RT 0x0791f980, 32x32),   sampled in SCREEN PIXEL space (gl_FragCoord.xy)\n// const[0].x = 1.0 ; const[1].x = 0.125  (inlined below)\n//\n// RSX helpers: TEX2D(n,uv)=texture(texN,uv); fma(a,b,c)=a*b+c\nuniform sampler2D tex1;\nuniform sampler2D tex13;\nin vec2 vUV;            // tc0.xy passthrough screen-quad UV\nout vec4 ocol0;\n\nvoid main()\n{\n    // wpos = gl_FragCoord scaled/biased; for the dither tap RSX uses raw pixel coords.\n    // (wpos_scale ~ 1.0, wpos_bias ~ 0; tex13 is a 32x32 tile so it wraps in pixel space.)\n    vec4 wpos = gl_FragCoord;\n\n    vec4 r0;\n    vec4 r1 = vec4(0.0);\n\n    // r0.xyz = TEX2D(1, tc0.xy).xyz;\n    r0.xyz = texture(tex1, vUV).xyz;\n\n    // r1.xyz = (r0 * const0.xxxx).xyz;   const0.x = 1.0\n    r1.xyz = (r0 * vec4(1.0)).xyz;        // r1.w stays 0.0\n\n    // r0 = TEX2D(13, wpos.xy);\n    r0 = texture(tex13, wpos.xy);\n\n    // r0 = fma(-r0, const1.xxxx, r1);    const1.x = 0.125\n    r0 = fma(-r0, vec4(0.125), r1);       // = r1 - r0*0.125  (alpha = -dither.a*0.125)\n\n    ocol0 = r0;\n}",
+  "samplers": [
+   {
+    "slot": 1,
+    "rt": "0x02560000",
+    "meaning": "glow/blur layer B (512x256), the main source image, sampled at passthrough screen-quad UV tc0.xy"
+   },
+   {
+    "slot": 13,
+    "rt": "0x0791f980",
+    "meaning": "dither texture (32x32), sampled in screen PIXEL space via gl_FragCoord.xy (tiles/wraps across the screen)"
+   }
+  ],
+  "blend": "additive: blend=1 src=1 dst=1 (ONE/ONE add). ocol0 is ADDED onto the destination render target.",
+  "constants": [
+   {
+    "idx": 0,
+    "role": "source scale (multiplies tex1 rgb)",
+    "value": [
+     1,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 1,
+    "role": "dither scale (multiplies tex13, subtracted)",
+    "value": [
+     0.125,
+     0,
+     0,
+     0
+    ]
+   }
+  ],
+  "output_register": "r0 (#define col0 r0)",
+  "output_channels": "rgba (rgb = tex1.rgb - dither.rgb*0.125 ; a = -dither.a*0.125, since r1.w=0)",
+  "vp_texcoords": "tc0 = dst_reg7 = in_tc0 (read_location(8)), a plain UV passthrough -> fullscreen screen quad, use as in vec2 vUV. No blur tap offsets, no per-vertex tint (diff_color/spec forced to 0). gl_Position = MVP*pos (const[0..3] are the modelview-projection rows) which for vertex_count=4 is the screen-aligned quad. The dither tap does NOT use tc0; it uses wpos = gl_FragCoord (screen pixel coords), so tex13 must be sampled in pixel space, not UV space.",
+  "notes": "Single-draw post step (draw 56). Reads tex1 = glow/blur ping-pong layer at 0x02560000 (512x256) and the 32x32 dither texture (tex13, 0x0791f980). Writes its result with ADDITIVE blend (ONE/ONE) onto its destination RT. Math is exactly: ocol0.rgb = tex1.rgb*1.0 - dither.rgb*0.125 ; ocol0.a = 0.0 - dither.a*0.125. The subtraction of a small tiled dither pattern (amplitude 0.125) is an error-diffusion/quantization-noise step applied just before banding-prone quantization downstream. tex13 is sampled at raw fragment pixel coordinates (gl_FragCoord.xy) and wraps because it is a 32x32 tile (sampler likely REPEAT). NOTE: many other textures are bound on this draw (tex0,tex2..tex6,tex14,tex15 tonemap LUTs) but the compiled fp only references tex1 and tex13 - the rest are unused leftovers from the pipeline binding state and should NOT be ported. wpos_scale/wpos_bias come from fragment state; treat wpos = gl_FragCoord (scale 1, bias 0) for the port.",
+  "vp": "c8bc076eddd90050",
+  "n": 1,
+  "vc": 4
+ },
+ {
+  "fp": "ae34439d4832f7d3",
+  "role": "HDR tonemap/encode of stars-nebula background: per-pixel desaturate + exposure, then exp2-based HDR-channel mapping into two FLOAT tonemap LUTs (tex15 RG, tex14 B) producing an LDR-encoded color (R,G from LUT15, B from LUT14, A = exp2(green)*tinyscale)",
+  "output_register": "r0",
+  "output_channels": "rgba",
+  "blend": "additive (blend=1 src=1 dst=1): ocol0 added to destination RT (one-one add)",
+  "vp_texcoords": "vp c8bc076eddd90050 is a plain fullscreen-quad transform (primitive=8 quad, vertex_count=4). It reads attribute location 8 as in_tc0 and writes it straight to varying tc0 (dst_reg7 = in_tc0; tc0 = dst_reg7) with NO scaling/offset/tap math. Therefore tc0.xy is a plain passthrough UV = screen UV. This is NOT a blur; there is no texel-step constant. Position is the usual gl_Position = dot(in_pos, const0..3) then * scale_offset_mat. Only tc0.xy is consumed by the fp.",
+  "samplers": [
+   {
+    "slot": 0,
+    "rt": "0x07952c00 1024x1024 DXT1",
+    "meaning": "STARS / nebula background HDR-ish color source (sampled at screen UV tc0.xy). Only .xyz used."
+   },
+   {
+    "slot": 15,
+    "rt": "0x02b70000 128x128 Y16_X16_FLOAT (2ch)",
+    "meaning": "tonemap LUT A: indexed by (exp2(R*k)*s8, exp2(G*k)*s8); returns .xy -> output R,G"
+   },
+   {
+    "slot": 14,
+    "rt": "0x02b90000 128x128 Y16_X16_FLOAT (2ch)",
+    "meaning": "tonemap LUT B: indexed by (exp2(B*k)*s8, max(exp2(R*k)*s8, exp2(G*k)*s8)); returns .z -> output B"
+   }
+  ],
+  "constants": [
+   {
+    "idx": 0,
+    "role": "reciprocal-3 mean weight (rgb sum * 1/3 = average)",
+    "value": [
+     0.333333,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 1,
+    "role": "saturation blend factor (push channel toward mean by 0.217)",
+    "value": [
+     0.217,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 2,
+    "role": ".y used = exposure multiplier 2.1493 (.x=0.000194 unused here)",
+    "value": [
+     0.000194,
+     2.1493,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 3,
+    "role": "exp2 input scale for R = 8.64386",
+    "value": [
+     8.64386,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 4,
+    "role": "exp2 input scale for G = 8.64386",
+    "value": [
+     8.64386,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 5,
+    "role": ".x used as scalar 0.000194 (loaded into r0.y, later *0.05 -> 9.7e-6 LUT-coord/alpha scale)",
+    "value": [
+     0.000194,
+     2.1493,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 6,
+    "role": "exp2 input scale for B = 8.64386",
+    "value": [
+     8.64386,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 7,
+    "role": "0.05 multiplier applied to const5.x giving the 9.7e-6 final scale on the exp2 vector",
+    "value": [
+     0.05,
+     0,
+     0,
+     0
+    ]
+   }
+  ],
+  "notes": "PASS GRAPH ROLE: This is the stars/nebula HDR encode pass. It samples the DXT1 stars texture (tex0 @0x07952c00) over the full screen and re-encodes it through the two FLOAT tonemap LUTs (tex15 @0x02b70000 and tex14 @0x02b90000, both Y16_X16_FLOAT 2-channel) into an LDR color, then ADDITIVELY blends (src=1 dst=1) the result into the destination RT (the HDR work/composite layer). tc0.xy is a plain screen-space UV from the fullscreen quad vp. CHAINING: needs the stars texture decoded + the two 2-channel float LUTs uploaded; output is added on top of whatever is already in the bound color target. CAVEATS: (1) The two LUTs are 2-channel FLOAT (Y16_X16) so in WebGL you need RG float textures or a 2-ch decode; only .x/.y of LUT15 and .z(=as authored) of LUT14 are read. (2) The LUT lookup coordinates are extremely small numbers (~9.7e-6 * exp2(...)*8), i.e. nearly 0 in UV; the actual mapping shape lives entirely in the LUT data, so a faithful port REQUIRES the real LUT texels, not a formula. (3) Output A = r1.y = exp2(G*8.64386) * 9.7e-6 (no LUT). (4) clamp16 not used in this shader; no precision_clamp needed. (5) const2.x / const5.x (0.000194) and const2.y (2.1493) recur but only the lanes noted are read. Exact final: ocol0 = vec4(LUT15(uv).x, LUT15(uv).y, LUT14(uv2).z, r1.y).",
+  "portable_glsl": "// Verbatim port of fp ae34439d4832f7d3 fs_main() with const[] inlined.\n// tex0 = stars/nebula (1024x1024), sampled at screen UV.\n// tex15, tex14 = 2-channel FLOAT tonemap LUTs (Y16_X16_FLOAT).\n// Output is ADDITIVELY blended into the destination RT (src=1, dst=1).\n#version 300 es\nprecision highp float;\nuniform sampler2D tex0;\nuniform sampler2D tex15;\nuniform sampler2D tex14;\nin vec2 vUV;            // = tc0.xy passthrough screen UV from fullscreen quad vp\nout vec4 ocol0;\n\n// RSX helpers (verbatim)\n#define fma_(a,b,c) ((a)*(b)+(c))\n\nvoid main()\n{\n    vec4 r0 = vec4(0.0);\n    vec4 r1 = vec4(0.0);\n    vec4 h3 = vec4(0.0);\n\n    // r0.xyz = TEX2D(0, tc0.xy).xyz\n    r0.xyz = texture(tex0, vUV).xyz;\n\n    // r0.w = r0.x + r0.y\n    r0.w = (r0.xxxx + r0.yyyy).w;\n    // r0.w = r0.w + r0.z   (sum of RGB)\n    r0.w = (r0 + r0.zzzz).w;\n\n    // r1.xyz = fma(r0.wwww, const0.xxxx, -r0).xyz   const0.x = 0.333333\n    r1.xyz = fma_(r0.wwww, vec4(0.333333), -r0).xyz;\n    // r0.xyz = fma(r1, const1.xxxx, r0).xyz         const1.x = 0.217\n    r0.xyz = fma_(r1, vec4(0.217), r0).xyz;\n    // r0.xyz = r0 * const2.yyyy                      const2.y = 2.1493\n    r0.xyz = (r0 * vec4(2.1493)).xyz;\n\n    // r0.x = r0.x * const3.xxxx                      const3.x = 8.64386\n    r0.x = (r0 * vec4(8.64386)).x;\n    // r1.x = exp2(r0.xxxx).x\n    r1.x = exp2(r0.xxxx).x;\n\n    // r0.x = r0.y * const4.xxxx                      const4.x = 8.64386\n    r0.x = (r0.yyyy * vec4(8.64386)).x;\n    // r0.y = const5.xxxx.y                            const5.x = 0.000194\n    r0.y = vec4(0.000194).y;\n    // r1.y = exp2(r0.xxxx).y\n    r1.y = exp2(r0.xxxx).y;\n\n    // r0.x = r0.z * const6.xxxx                      const6.x = 8.64386\n    r0.x = (r0.zzzz * vec4(8.64386)).x;\n    // r1.z = exp2(r0.xxxx).z\n    r1.z = exp2(r0.xxxx).z;\n\n    // r0.x = r0.y * const7.xxxx                      const7.x = 0.05\n    r0.x = (r0.yyyy * vec4(0.05)).x;   // = 0.000194 * 0.05 = 9.7e-6\n    // r1.xyz = r0.xxxx * r1\n    r1.xyz = (r0.xxxx * r1).xyz;\n\n    // h3.z = (r1 * 8.).z\n    h3.z = (r1 * 8.0).z;\n    // r0.xy = (r1 * 8.).xy\n    r0.xy = (r1 * 8.0).xy;\n    // h3.w = max(r0.xxxx, r0.yyyy).w\n    h3.w = max(r0.xxxx, r0.yyyy).w;\n    // r0.w = r1.yyyy.w\n    r0.w = r1.yyyy.w;\n\n    // r0.xy = TEX2D(15, r0.xy).xy   (tonemap LUT A)\n    r0.xy = texture(tex15, r0.xy).xy;\n    // r0.xy = r0.xy   (no-op)\n    r0.xy = r0.xy;\n    // r0.z = TEX2D(14, h3.zwzz.xy).z   (tonemap LUT B)\n    r0.z = texture(tex14, h3.zwzz.xy).z;\n    // r0.z = r0.z   (no-op)\n    r0.z = r0.z;\n\n    // col0 = r0\n    ocol0 = r0;\n}",
+  "vp": "c8bc076eddd90050",
+  "n": 1,
+  "vc": 4
+ },
+ {
+  "fp": "316de80ad29f0584",
+  "role": "final composite/copy with dither: samples the main HDR work layer (tex0) and adds a small dither perturbation (tex13 sampled at window-pos * 0.125), forcing alpha base = 1.0; output additively blended into the display",
+  "output_register": "r0",
+  "output_channels": "rgba",
+  "portable_glsl": "#version 430\n// Ported VERBATIM from fp 316de80ad29f0584 / vp e72059675b8f8ceb (globe music visualizer).\n// Pass: final composite/copy of main HDR work layer + dither, additive blend into display.\n//\n// tex0  = main HDR work/glow layer (RT 0x02360000, 512x512), sampled at tc0.xy (screen-quad UV).\n// tex13 = dither texture (RT 0x0791f980, 32x32), sampled at window-pixel coords (gl_FragCoord-based).\n//\n// Inlined draw constants:\n//   const[0] = {1,0,0,0}     -> _fetch_constant(0).xxxx.w = 1.0\n//   const[1] = {0.125,0,0,0} -> _fetch_constant(1).xxxx   = vec4(0.125)\n\nuniform sampler2D tex0;   // main HDR work layer  (RT 0x02360000)\nuniform sampler2D tex13;  // dither texture       (RT 0x0791f980, 32x32, wrap-repeat)\n\nin vec2 vUV;              // tc0.xy : fullscreen-quad UV (screen UV; vp may flip axes per-vertex)\n\nout vec4 ocol0;\n\n// --- RSX helper translations (verbatim semantics) ---\n// clamp16(x)=clamp(x,-65504.,65504.);  fma(a,b,c)=a*b+c;  TEX2D(n,uv)=texture(texN,uv);\n// _fetch_constant(i) inlined as numeric literal below.\n// get_wpos(): RSX window position. wpos.xy = gl_FragCoord.xy scaled by |wpos_scale| (=1) with\n//   sign on y and wpos_bias (=0 here for an upright fullscreen present). The dither tex is 32x32\n//   with WRAP_S/WRAP_T repeat, so it tiles across the screen in 32-pixel cells: tex13 coord =\n//   gl_FragCoord.xy / 32.0 (the sampler scale_x = 1/32, scale_y = 1/32 maps pixel->tile UV).\n\nvoid main()\n{\n    vec4 r0 = vec4(0.0);\n    vec4 r1 = vec4(0.0);\n\n    // r1 = TEX2D(13, wpos.xy);  -- dither sampled at window position (tiled 32x32)\n    vec2 wpos = gl_FragCoord.xy;\n    r1 = texture(tex13, wpos.xy / 32.0);\n\n    // r0.w = _fetch_constant(0).xxxx.w;  -> const[0].x = 1.0\n    r0.w = 1.0;\n\n    // r0.xyz = TEX2D(0, tc0.xy).xyz;  -- main HDR work layer\n    r0.xyz = texture(tex0, vUV).xyz;\n\n    // r0 = fma(r1, _fetch_constant(1).xxxx, r0);  -> r0 = r1 * 0.125 + r0\n    r0 = r1 * vec4(0.125) + r0;\n\n    ocol0 = r0;\n}",
+  "samplers": [
+   {
+    "slot": 0,
+    "rt": "0x02360000",
+    "meaning": "main HDR work/glow layer 512x512 (the composited scene). Sampled at tc0.xy fullscreen-quad UV, RGB copied through; identity scale/bias."
+   },
+   {
+    "slot": 13,
+    "rt": "0x0791f980",
+    "meaning": "dither texture 32x32 (fmt 0xe5). Sampled at window-pixel position with wrap-repeat (tiles every 32px); contributes dither*0.125 to RGBA."
+   },
+   {
+    "slot": 1,
+    "rt": "0x02560000",
+    "meaning": "BOUND but UNUSED by fp (glow/blur layer A, 512x256)."
+   },
+   {
+    "slot": 2,
+    "rt": "0x0232ab00",
+    "meaning": "BOUND but UNUSED by fp (512x512 fmt 0x86)."
+   },
+   {
+    "slot": 3,
+    "rt": "0x0756b600",
+    "meaning": "BOUND but UNUSED by fp (512x512 fmt 0x86)."
+   },
+   {
+    "slot": 4,
+    "rt": "0x06f80000",
+    "meaning": "BOUND but UNUSED by fp (glow accumulation 256x128)."
+   },
+   {
+    "slot": 5,
+    "rt": "0x07b0c800",
+    "meaning": "BOUND but UNUSED by fp (256x1 1D ramp)."
+   },
+   {
+    "slot": 6,
+    "rt": "0x07930000",
+    "meaning": "BOUND but UNUSED by fp (64x64)."
+   },
+   {
+    "slot": 14,
+    "rt": "0x02b90000",
+    "meaning": "BOUND but UNUSED by fp (tonemap LUT 128x128 Y16_X16_FLOAT)."
+   },
+   {
+    "slot": 15,
+    "rt": "0x02b70000",
+    "meaning": "BOUND but UNUSED by fp (tonemap LUT 128x128 Y16_X16_FLOAT)."
+   }
+  ],
+  "blend": "additive (blend=1 src=1 dst=1): ocol0 added to destination (display RT). Source factor ONE, dest factor ONE.",
+  "constants": [
+   {
+    "idx": 0,
+    "role": "alpha base; only .x used as r0.w = 1.0",
+    "value": [
+     1,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 1,
+    "role": "dither weight; broadcast .x as scalar 0.125 multiplying tex13 across all RGBA",
+    "value": [
+     0.125,
+     0,
+     0,
+     0
+    ]
+   }
+  ],
+  "vp_texcoords": "vp e72059675b8f8ceb generates tc0 = dst_reg7 for a 4-vertex fullscreen quad (primitive=8). dst_reg7.x = vc[4].z - r0.x, dst_reg7.y = r1.y, dst_reg7.z = vc[4].w, where r0.x/r1.y are the input position xy passed through per-vertex flip selectors (cc0 conditions comparing |pos| against vc[4].y; flipped form = vc[4].z - coord). Net effect: tc0.xy is a screen-quad UV in [0,1] (with possible per-vertex axis inversion controlled by vc[4], dump of vc not available). For the port treat tc0.xy = vUV (fullscreen UV into the 512x512 tex0). NOT a blur: fp does a single tap of tex0 at tc0.xy, no neighbor offsets. tex13 is NOT sampled via tc0 but via window position (get_wpos), tiled 32x32.",
+  "notes": "FINAL COMPOSITE/COPY pass. Reads main HDR work layer (tex0 @ 0x02360000) and writes additively into the display/present RT (0x0dc80000). It is effectively a 1:1 copy of the HDR scene plus a dither term: ocol0.rgb = tex0.rgb + dither.rgb*0.125; ocol0.a = 1.0 + dither.a*0.125. Because blend is ADDITIVE (ONE/ONE), this layer ACCUMULATES the work layer onto whatever is already in the display (e.g. stars/background drawn earlier). The dither tex13 (32x32, fmt 0xe5) is sampled in screen space (window pos / 32, wrap repeat) to break banding in the HDR->8bit present; weight 0.125 (=1/8 of a unit, i.e. ~32 in 0..255 scaled by the dither's small values). The 0xe5 format is a low-magnitude noise pattern; chain it as a tiled 32x32 ordered/blue-noise texture. CAVEAT: vc[4] (vp screen-quad/flip constants) and the tex0/tex13 sampler scale/bias were not in the const dump; identity UV + 1/32 dither tiling assumed from RT sizes and the fullscreen-quad role. ROP rounding (round_to_8bit) and additive ONE/ONE blend happen after fs_main. No alpha test effect (func from rop_control, alpha_ref not dumped; alpha=~1.0 passes typical >=/always). Many bound samplers (tex1..tex6,tex14,tex15) are NOT referenced by this fp - they are leftover bindings from prior bloom/tonemap passes.",
+  "vp": "e72059675b8f8ceb",
+  "n": 24,
+  "vc": 4
+ },
+ {
+  "fp": "b988e6017d2ea31b",
+  "role": "stars/point-sprite HDR glow billboard: analytic anisotropic radial falloff (exp), gated by a reflection-vector length test, tone-mapped through two FLOAT LUTs (tex15 = RG out, tex14 = B out). Additive blend over the HDR work layer.",
+  "portable_glsl": "// Verbatim port of fs_main() for fp=b988e6017d2ea31b (draws 82/83/84...), const[] inlined.\n// RSX helpers:\n//   clamp16(x)=clamp(x,-65504.,65504.); fma(a,b,c)=a*b+c; exp2 as-is;\n//   _builtin_divsq(a,b): a/sqrt(abs(b)) componentwise, but returns a where |a|<=0\n//   TEX2D(n,uv)=texture(texN,uv). LUTs are 2-channel FLOAT (R,G meaningful).\n// Inputs from vp 48ad6e9761419744:\n//   tc0 = (in_pos.xy + 1.0)*1.0  (per-vertex sprite coord; const7=(1,1,1,1))\n//   tc1 = view-space ray vec3 (r0_view - const8) ; .w from vp = 1.0\n// gl_FragCoord.w == 1/w_clip (perspective). We expose it as uniform fragW or use gl_FragCoord.w.\n\nuniform sampler2D tex15;   // tonemap LUT @0x02b70000 128x128 Y16_X16_FLOAT (2ch)\nuniform sampler2D tex14;   // tonemap LUT @0x02b90000 128x128 Y16_X16_FLOAT (2ch)\n\nin vec4 tc0;               // sprite coord (xy used)\nin vec4 tc1;               // view ray (xyz used)\n\nout vec4 ocol0;\n\nfloat _divsq1(float a, float b){ float t = a / sqrt(abs(b)); return abs(a) > 0.0 ? t : a; }\nvec3  _divsq3(vec3 a, float b){\n    vec3 t = a / sqrt(abs(b));\n    return mix(a, t, greaterThan(abs(a), vec3(0.0)));\n}\n\nvoid main()\n{\n    vec4 r0 = vec4(0.), r1 = vec4(0.);\n    vec4 h0 = vec4(0.), h1 = vec4(0.);\n    float Wf = gl_FragCoord.w;            // 1/w (perspective); from RSX gl_FragCoord.w\n\n    vec4 t1w = tc1 * Wf;                   // (tc1 * gl_FragCoord.w)\n\n    // r0.xy = tc0.xy + const0.x   (const0 = {-0.5,0,0,0})\n    r0.xy = tc0.xy + (-0.5);\n    // r0.w = abs(r0.y) * const1.y  (const1.y = 10.1)\n    r0.w = abs(r0.y) * 10.1;\n    // r0.z = dot(t1w.xyz, t1w.xyz)  ( = |V|^2 )\n    r0.z = dot(t1w.xyz, t1w.xyz);\n    // r0.w = fma(-abs(r0.x), const2.x, -r0.w)  (const2.x = 9.40005)\n    r0.w = (-abs(r0.x)) * 9.40005 + (-r0.w);\n    // r1.xyz = divsq(t1w.xyz, r0.z)  ( = V / |V| )\n    r1.xyz = _divsq3(t1w.xyz, r0.z);\n    // r0.y = dot(r1.xyz, -const3.xyz)  (const3 = {1.4291,1.77865,-0.315622})\n    r0.y = dot(r1.xyz, -vec3(1.4291, 1.77865, -0.315622));\n    // r1.xyz = fma(r1.xyz, r0.y, const4.xyz)  (const4 = const3)\n    r1.xyz = r1.xyz * r0.y + vec3(1.4291, 1.77865, -0.315622);\n    // r0.y = dot(r1.xyz, r1.xyz)\n    r0.y = dot(r1.xyz, r1.xyz);\n    // r1.x = r0.w * const5.x   (const5.x = 1.4427 = 1/ln2)\n    r1.x = r0.w * 1.4427;\n    // r0.w = divsq(abs(r0.y), r0.y)  ( = |r0.y|/sqrt(|r0.y|) = sqrt(|r0.y|) )\n    r0.w = _divsq1(abs(r0.y), r0.y);\n    // h0.x = (r0.w >= const6.x) ? 1:0   (const6.x = 1.0)\n    h0.x = (r0.w >= 1.0) ? 1.0 : 0.0;\n    // r0.y = exp2(r1.x)   ( = exp2( -(abs(rx)*9.40005 + abs(ry)*10.1) * 1.4427 ) )\n    r0.y = exp2(r1.x);\n    // r1 = r0.y * const7   (const7 = {1,1,1,1})  -> vec4(r0.y)\n    r1 = vec4(r0.y);\n    // r0 = r1 * h0.x   -> gated falloff in all channels\n    r0 = r1 * h0.x;\n    // h1.x = r0.z * 8.     (r0.z now == gated falloff)\n    h1.x = r0.z * 8.0;\n    // r1.zw = r0.xxxy.zw * 8.  -> r1.z = r0.x*8, r1.w = r0.y*8\n    r1.z = r0.x * 8.0;\n    r1.w = r0.y * 8.0;\n    // h1.y = max(r1.z, r1.w)\n    h1.y = max(r1.z, r1.w);\n    // r0.xy = TEX2D(15, r1.zw)\n    r0.xy = texture(tex15, r1.zw).xy;\n    // r0.z = TEX2D(14, h1.xy)\n    r0.z = texture(tex14, h1.xy).z;\n\n    // col0 = r0 ; ROP rounding/blend handled by pipeline. Additive blend (src=ONE? actually src=770(SRC_ALPHA) dst=1(ONE)).\n    ocol0 = r0;\n}",
+  "output_register": "r0",
+  "output_channels": "rgb (r0.xyz written from LUTs; r0.w left as gated-falloff value from r0=r1*h0.x). Meaningful color = rgb. Alpha = gated falloff (used by SRC_ALPHA blend factor 770).",
+  "blend": "additive-ish: blend=1 src=770 (GL_SRC_ALPHA) dst=1 (GL_ONE). result = src.rgb*src.a + dst.rgb. Note src.a = r0.w = gated radial falloff.",
+  "vp_texcoords": "NOT a blur. Per-vertex point-sprite/billboard. vp 48ad6e9761419744: in_pos=read_location(0). tc0=dst_reg7=(in_pos.xy + const7.x)*const7.y ; with this draw's vc const7=(1,1,1,1) => tc0.xy = in_pos.xy + 1.0 (sprite-local coord; fp then subtracts 0.5 via fp-const0). tc1=dst_reg8 = r0_view.xyz - const8.xyz, where r0_view = (dot(pos,vc0),dot(pos,vc1),dot(pos,vc2)) i.e. a 3x4 view-matrix transform of the vertex; tc1 is the view-space ray/direction. fp multiplies tc1 by gl_FragCoord.w (perspective-correct interpolation undo) before normalizing. gl_Position uses vc3..vc6 (clip-space rows). No texel-step constant (this is geometry, not a screen-quad blur).",
+  "samplers": [],
+  "constants": [],
+  "notes": "WHAT IT IS: per-point HDR glow/star sprite, NOT a screen-space blur. Reads ONLY the two 128x128 FLOAT tonemap LUTs (tex15=0x02b70000, tex14=0x02b90000). The other 8 bound textures (tex0..tex6,tex13) are bound by RSX state but NEVER sampled by this fp -- ignore them for the port. \n\nMATH SUMMARY: \n - sprite-local coord uv = tc0.xy - 0.5 in [-0.5,0.5].\n - anisotropic L1 radial term D = abs(uv.x)*9.40005 + abs(uv.y)*10.1 ; falloff = exp2(-D*1.4427) = exp(-D)  (Gaussian-like elliptical, slightly taller than wide).\n - V = normalize(tc1*gl_FragCoord.w) (view ray). reflect-ish vec R = V*dot(V,-A)+A with A=(1.4291,1.77865,-0.315622). gate = (length(R) >= 1.0)?1:0. (A is a fixed light/anti-light direction; the gate is a hemisphere/backface-style cull so only points on one side glow.)\n - g = falloff * gate (scalar, replicated to all of r0).\n - OUTPUT: rgb from LUTs at coord (g*8, g*8): r0.rg = tex15(vec2(g*8)).rg ; r0.b = tex14(vec2(g*8)).b(=.z, but 2ch LUT so likely .y mapped; KEEP .z swizzle verbatim). r0.a = g (drives SRC_ALPHA blend). \n - LUT coords (g*8,g*8) with g in [0,1] exceed [0,1] range -> rely on LUT sampler clamp/wrap (CLAMP per texture_parameters). The LUTs convert the linear falloff*8 into the final HDR star color/brightness (tonemap curve). \n\nCHAINING: writes to whatever RT is bound as color0 for these draws (additive HDR accumulation, src_alpha/one). It accumulates star/point glows onto the HDR layer. Inputs (LUTs) are produced by an earlier tonemap-LUT-bake pass. gl_FragCoord.w must be exposed (1/w) for the perspective-correct ray normalization; in a fullscreen WebGL reimplementation of a single point this is supplied by the rasterizer when drawing actual point geometry, NOT a fullscreen quad. To port faithfully you must draw the same point primitives (primitive=8, 4 verts each = quads/billboards), feeding per-vertex in_pos and the view matrix (vc0..2) + clip matrix (vc3..6) + const7/const8 from the vp constants.\n\nCAVEAT/FLAGGED: the exact LUT contents (tex14/tex15 FLOAT 128x128) must be dumped and used as-is (2-channel Y16_X16_FLOAT); do not approximate the tonemap curve. The .z fetch from a 2-channel LUT (tex14) is kept verbatim from the microcode; verify channel mapping against the dumped LUT when wiring up.",
+  "vp": "48ad6e9761419744",
+  "n": 15,
+  "vc": 4
+ },
+ {
+  "fp": "e5a9bd9da492b683",
+  "role": "multi-tap mip-blur textured screen quad with per-vertex tint (degenerates to plain textured quad at this draw's constants: level const[0]=0 < threshold 0.2, so both blur branches are skipped -> output = tex0(tc0.xy) * saturate(diff_color))",
+  "output_register": "r0 (#define col0 r0)",
+  "output_channels": "rgba",
+  "blend": "additive-ish alpha blend: blend=1 src=770(GL_SRC_ALPHA) dst=771(GL_ONE_MINUS_SRC_ALPHA) -> standard src-over alpha blend (out = src.rgb*src.a + dst.rgb*(1-src.a))",
+  "vp_texcoords": "VP is NOT a blur tap generator. tc0 (=dst_reg7) is produced as tc0.xy = in_normal.xy * vc[4].xy + vc[4].zw (the ATTR2 \"normal\" stream is repurposed as the source UV; vc[4] is a UV scale.zw / bias). tc0.zw left at default (0,1). diff_color (the per-vertex tint, location=1) = in_weight(ATTR1) * vc[5]. gl_Position = dot(in_pos, vc[0..3]) i.e. a plain 4x4 transform of a 4-vertex quad. So in the FP, tc0.xy is just the screen/quad UV and diff_color is a uniform-per-draw tint multiplier. There are NO per-vertex tap offsets; all the multi-tap sampling in the FP is computed in-shader from fragment constants (a manual box/bilinear mip-blur), gated by const[0] vs const[1]. The texel step for those internal taps comes from fc[3].y, fc[4].x, fc[6].y, fc[7].x (all 4 / 0.5 here) NOT from the VP.",
+  "samplers": [
+   {
+    "slot": 0,
+    "meaning": "tex0 fmt=0xa5 4x4 offset=0x00001550 -- the ONLY sampler the FP reads (all TEX2D use index 0). At this draw it is a tiny 4x4 source RT/scratch; this pass samples it (with internal mip-blur taps gated off by constants) and tints by diff_color. Other bound textures (tex1..tex15) are NOT referenced by this fragment program."
+   }
+  ],
+  "constants": [
+   {
+    "idx": 0,
+    "role": "blur level / iteration count L (compared to threshold). =0 -> outer branch dead",
+    "value": [
+     0,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 1,
+    "role": "outer threshold (L > 0.2 ?). L=0 fails -> skip blur",
+    "value": [
+     0.2,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 2,
+    "role": "tc0 scale for tap base (tc0 * fc2.xy), =(4,4)",
+    "value": [
+     4,
+     4,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 3,
+    "role": "tap snap factor fc3.y=0.5 used in fma(r2, .5, -.5)",
+    "value": [
+     0,
+     0.5,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 4,
+    "role": "texel-step inv-rcp source fc4.x=4 (rcp -> 0.25)",
+    "value": [
+     4,
+     4,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 5,
+    "role": "tap base offset add, fc5.x=1",
+    "value": [
+     1,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 6,
+    "role": "texel-step inv-rcp source fc6.y=4 (rcp -> 0.25)",
+    "value": [
+     4,
+     4,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 7,
+    "role": "tap scale fc7.x=2",
+    "value": [
+     2,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 8,
+    "role": "inner level r2.z (compared to fc9). =0",
+    "value": [
+     0,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 9,
+    "role": "inner threshold (r2.z > 1.2 ?). 0 fails -> skip 2nd blur",
+    "value": [
+     1.2,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 10,
+    "role": "first-blur lerp weight (saturate(fc10.x)=0). lerp(r0,blur,0)=r0",
+    "value": [
+     0,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 11,
+    "role": "inner tap offset fc11.x=-2",
+    "value": [
+     -2,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 12,
+    "role": "inner tap offset fc12.x=2",
+    "value": [
+     2,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 13,
+    "role": "second-blur weight base fc13.x=0",
+    "value": [
+     0,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "idx": 14,
+    "role": "second-blur weight bias fc14.x=-1 (saturate(0 + -1)=0)",
+    "value": [
+     -1,
+     0,
+     0,
+     0
+    ]
+   }
+  ],
+  "notes": "EFFECTIVE BEHAVIOR AT THIS DRAW: With const[0]=0 and const[1]=0.2, the first comparison `0 > 0.2` is false, so cc0.x=0 and the entire `if(cc0>0){...}` block (all multi-tap mip-blur) is SKIPPED. The shader reduces EXACTLY to: r0 = tex0(tc0.xy); r0 *= saturate(diff_color). This is a plain textured quad modulated by the per-vertex/per-draw tint, then src-over alpha blended. tex0 is only a 4x4 scratch RT here (offset 0x00001550, not in the RT legend -> small temp). primitive=6 (triangle strip) vertex_count=4 = fullscreen-ish quad. The portable_glsl below ports the FULL fs_main verbatim (so the blur math is preserved as ground truth), with all 15 fc[] inlined; given these literals GLSL constant-folds it to the plain-tex path. IMPORTANT for chaining: even though the blur is dead here, this same fp is a generic \"mip-blur sampler\" used elsewhere with nonzero const[0]; this particular instance (draw 97) is just a tinted blit of the 4x4 source. tc0.zw default = (0,1) but FP only uses tc0.xy. diff_color comes from VP (in_weight*vc5); expose as a uniform vec4 uDiffColor for the port (default white). round_to_8bit / alpha-test (func from rop_control) applied post; alpha test here is effectively pass-through (standard).",
+  "portable_glsl": "#version 330 core\n// VERBATIM port of fp e5a9bd9da492b683 fs_main(), all fc[] inlined from draw 97.\n// Only tex0 is referenced. tc0.xy == screen/quad UV (vUV). diff_color == uDiffColor.\nuniform sampler2D tex0;\nin vec2 vUV;            // tc0.xy from VP (in_normal.xy*vc4.xy+vc4.zw)\nuniform vec4 uDiffColor; // diff_color = in_weight*vc5 (per-draw tint; default white)\nout vec4 ocol0;\n\n// RSX helpers\nfloat clamp16(float v){ return clamp(v,-65504.0,65504.0); }\nvec2  clamp16(vec2  v){ return clamp(v,-65504.0,65504.0); }\nvec4  clamp16(vec4  v){ return clamp(v,-65504.0,65504.0); }\nvec4  precision_clamp(vec4 x, float a, float b){\n    bvec4 nans = isnan(x); x = mix(x, vec4(0.0), nans); return clamp(x,a,b);\n}\n#define TEX2D0(uv) texture(tex0, (uv))\n#define _saturate(x) clamp((x),0.0,1.0)\n\nvoid main()\n{\n    vec4 r0 = vec4(0.0), r1 = vec4(0.0), r2 = vec4(0.0), r3 = vec4(0.0),\n         r4 = vec4(0.0), r5 = vec4(0.0), r6 = vec4(0.0), r7 = vec4(0.0), h2 = vec4(0.0);\n    vec4 cc0;\n    vec4 tc0 = vec4(vUV, 0.0, 1.0);\n\n    r0 = TEX2D0(tc0.xy);\n    r1.x = 0.0;                         // fc[0].x\n    cc0.x = float(r1.x > 0.2);          // fc[1].x = 0.2\n    if (cc0.x > 0.0)\n    {\n        r2.xy = (tc0 * vec4(4.0,4.0,0.0,0.0)).xy;            // fc[2]={4,4,0,0}\n        r1.xy = fma(r2.xy, vec2(0.5), vec2(-0.5));           // fc[3].y=0.5\n        r1.z = 1.0 / 4.0;                                    // rcp fc[4].x=4\n        r1.xy = floor(r1.xy) * 2.0;\n        r4.xy = r1.xy + vec2(1.0);                           // fc[5].x=1\n        r1.w = 1.0 / 4.0;                                    // rcp fc[6].y=4\n        r1.xy = vec2(r1.z, r1.w) * vec2(2.0);               // fc[7].x=2 (zwzz*fc7.xxxx)\n        r5.xy = vec2(r1.z, r1.w) * r4.xy;                    // r1.zwzz * r4\n        r5.zw = vec2(r1.x, r1.x) + vec2(r5.x, r5.x);         // r1.xxyx + r5.xxyx -> .zw\n        r4.z = r5.w;\n        r3 = TEX2D0(r5.xy);\n        r4.w = r5.y;\n        r2.zw = (vec2(r2.x, r2.y) - vec2(r4.x, r4.y)) / 2.0; // (r2.xxxy + -r4.xxxy)/2 -> .zw\n        r4 = TEX2D0(r4.zw);\n        r4 = r4 - r3;\n        r3 = fma(vec4(r2.z), r4, r3);\n        r4.w = r5.z;\n        r4.z = r5.x;\n        r5 = TEX2D0(vec2(r5.w, r5.z));                       // r5.wzzz.xy\n        r4 = TEX2D0(r4.zw);\n        r5 = r5 - r4;\n        r4 = fma(vec4(r2.z), r5, r4);\n        r2.z = 0.0;                                          // fc[8].x\n        cc0.x = float(r2.z > 1.2);                           // fc[9].x=1.2\n        r4 = r4 - r3;\n        r3 = fma(vec4(r2.w), r4, r3);\n        r3 = r3 - r0;\n        r0 = fma(precision_clamp(vec4(0.0),0.0,1.0), r3, r0); // fc[10]={0,0,0,0}\n        if (cc0.x > 0.0)\n        {\n            r2.zw = (vec2(r2.x, r2.y) + vec2(-2.0)) / 4.0;   // fc[11].x=-2 (xxxx)\n            r2.zw = floor(r2.zw) * 4.0;\n            r4.xy = r2.zw + vec2(2.0);                       // fc[12].x=2\n            r2.zw = fma(vec2(r4.x, r4.y), r1.zw, -r1.zw);    // r4.xxxy*r1 + -r1 -> .zw ; r1.zw=(r1.z,r1.w)\n            r2.xy = (r2.xy - r4.xy) / 4.0;\n            r3.xy = r2.zw + r1.xy;\n            r5.xy = r3.xy + r1.xy;\n            r5.z = r3.x;\n            r3.zw = vec2(r5.x, r1.x);                        // r5.xxxy + r1.xxxy -> .zw\n            r1 = TEX2D0(r5.xy);\n            r4.w = r5.y;\n            r4.z = r3.z;\n            r5.w = r5.y;\n            r6 = TEX2D0(r4.zw);\n            r6 = r1 + r6;\n            r4.z = r5.x;\n            r4.w = r3.w;\n            r1 = TEX2D0(r3.zw);\n            r1 = r6 + r1;\n            r6 = TEX2D0(r4.zw);\n            r1 = r1 + r6;\n            r4.z = r2.z;\n            r4.w = r5.y;\n            r4 = TEX2D0(r4.zw);\n            r6 = TEX2D0(r5.zw);\n            r4 = r4 + r6;\n            r5.w = r3.w;\n            r5.z = r3.x;\n            r6 = TEX2D0(r5.zw);\n            r4 = r4 + r6;\n            r5.w = r3.w;\n            r3.w = r2.w;\n            r5.z = r2.z;\n            r6 = TEX2D0(r5.zw);\n            r6 = r4 + r6;\n            r4.z = r3.x;\n            r1 = r1 - r6;\n            r1 = fma(vec4(r2.x), r1, r6);\n            r6 = TEX2D0(r2.zw);\n            r4.w = r2.w;\n            r4 = TEX2D0(r4.zw);\n            r6 = r6 + r4;\n            r4 = TEX2D0(r3.xy);\n            r4 = r6 + r4;\n            r5.w = r2.w;\n            r5.z = r5.x;\n            r3.x = r3.z;\n            r6 = TEX2D0(r5.zw);\n            r2.w = r3.y;\n            r7 = TEX2D0(vec2(r3.x, r3.w));                   // r3.xwzw.xy\n            r6 = r6 + r7;\n            r7.x = r5.x;\n            r3.w = r3.y;\n            r7.y = r3.y;\n            r5 = TEX2D0(r3.zw);\n            r5 = r6 + r5;\n            r3 = TEX2D0(r2.zw);\n            r3 = r4 + r3;\n            r4 = TEX2D0(r7.xy);\n            r5 = r5 + r4;\n            r4 = r5 - r3;\n            r3 = fma(vec4(r2.x), r4, r3);\n            r2.x = 0.0;                                       // fc[13].x\n            r2.x = precision_clamp(r2 + vec4(-1.0),0.0,1.0).x; // fc[14].x=-1\n            r1 = r1 - r3;\n            r1 = fma(vec4(r2.y), r1, r3) / 4.0;\n            r1 = r1 - r0;\n            r0 = fma(vec4(r2.x), r1, r0);\n        }\n    }\n    h2 = clamp16(_saturate(uDiffColor));\n    r0 = r0 * h2;\n    ocol0 = r0;\n}",
+  "vp": "7a221455cdfa150c",
+  "n": 1,
+  "vc": 4
+ }
+]
