@@ -10,6 +10,15 @@
 (function(global){
 'use strict';
 let BASE = 'globe_assets/';   // asset root; MPGlobe.assetBase overrides (validation: point at a rebuilt set without swapping the ship)
+// The per-scene LUT bins under gaia_lut/captured2 are stored in Git LFS. GitHub Pages serves the LFS
+// POINTER text (not the binary), so on *.github.io we fetch the real bytes from GitHub's LFS media
+// endpoint (sends CORS *). Local/other hosts have the real bins on disk -> use BASE-relative. Repo/user
+// are derived from the Pages URL (works for forks); branch assumed main.
+function lfsURL(p){ const rel=BASE+p;
+  try{ const m=location.hostname.match(/^([^.]+)\.github\.io$/);
+    if(m){ const repo=location.pathname.split('/').filter(Boolean)[0]||(m[1]+'.github.io');
+      return 'https://media.githubusercontent.com/media/'+m[1]+'/'+repo+'/main/'+rel; } }catch(e){}
+  return rel; }
 // main scenes in numeric order. Per-scene camera motion is EXACT (firmware camera.path +
 // Catmull-Rom); only the cross-scene ORDER is a documented approximation (the real top-level
 // sequencer lives in the un-dumped vsh music module). Each preset plays once then advances.
@@ -1371,14 +1380,14 @@ async function load(){
        CAP_SCENE_LUTS=await fetch(BASE+'cap_scene_luts2.json').then(r=>r.ok?r.json():null).catch(()=>null);
        if(CAP_SCENE_LUTS){ CAP_LUT_CACHE={};
          for(const k in CAP_SCENE_LUTS) for(const e of CAP_SCENE_LUTS[k]){
-           if(!CAP_LUT_CACHE[e.fr]) CAP_LUT_CACHE[e.fr]={surf:texF32(BASE+e.surf,256,128), limb:texF32(BASE+e.limb,256,128)}; } }
+           if(!CAP_LUT_CACHE[e.fr]) CAP_LUT_CACHE[e.fr]={surf:texF32(lfsURL(e.surf),256,128), limb:texF32(lfsURL(e.limb),256,128)}; } }
      }catch(e){ CAP_SCENE_LUTS=null; }
      // per-scene surface-fp tonemap LUTs (brightness fix); loaded if present, gated by TONELUT_PS. 128x128 rgba32f (ch0/ch1).
      try{
        CAP_SCENE_TONE=await fetch(BASE+'cap_scene_tonelut.json').then(r=>r.ok?r.json():null).catch(()=>null);
        if(CAP_SCENE_TONE){ CAP_TONE_CACHE={};
          for(const k in CAP_SCENE_TONE) for(const e of CAP_SCENE_TONE[k]){
-           if(!CAP_TONE_CACHE[e.fr]) CAP_TONE_CACHE[e.fr]={t14:texF16(BASE+e.t14,128,128), t15:texF16(BASE+e.t15,128,128)}; } }
+           if(!CAP_TONE_CACHE[e.fr]) CAP_TONE_CACHE[e.fr]={t14:texF16(lfsURL(e.t14),128,128), t15:texF16(lfsURL(e.t15),128,128)}; } }
      }catch(e){ CAP_SCENE_TONE=null; }
      ATMO_SCENES=await Promise.all(idx.map(s=>fetch(BASE+'atmo_scene_'+String(s.scene).padStart(2,'0')+'_cap2.json').then(r=>r.ok?r.json():null).catch(()=>null)));
      ATMO=0;   // per-scene gated in tick() (1 only when the scene has both a limb LUT and atmo consts)
