@@ -343,9 +343,9 @@ void main(){
   vec3 sd = normalize(vSph);   // seamless cube-map sample direction (replaces per-patch tile UVs)
   vec4 r0=vec4(0.),r1=vec4(0.),r2=vec4(0.),r3=vec4(0.),r4=vec4(0.);
   vec4 h0=vec4(0.),h1=vec4(0.),h2=vec4(0.),h3=vec4(0.),h4=vec4(0.),h5=vec4(0.),h6=vec4(0.),h7=vec4(0.);
-  r2.xyz = uTiles>0.5 ? texture(tex0, tc0.xy).xyz : texture(earthCube, sd).xyz;   // fp: TEX2D(0, tc0.xy)
+  r2.xyz = uTiles>0.5 ? texture(tex0, tc0.xy, -8.0).xyz : texture(earthCube, sd).xyz;   // fp: TEX2D(0, tc0.xy); REAL RSX sampler: LOD bias -8.0 (mip0 pinned, live DRAWCALLS)
   h2.xyz = nrm(tc7.xyz);
-  r3.xyz = uTiles>0.5 ? texture(tex1, tc0.zw).xyz : texture(earthCube, sd).xyz;   // fp: TEX2D(1, tc0.zw)
+  r3.xyz = uTiles>0.5 ? texture(tex1, tc0.zw, -8.0).xyz : texture(earthCube, sd).xyz;   // fp: TEX2D(1, tc0.zw); REAL RSX bias -8.0
   r3.xyz = (r3.xyz + -r2.xyz);
   r4.xyz = fma3(tc4.xxx, r3.xyz, r2.xyz);
   h0.xyz = nrm(tc1.xyz);
@@ -355,7 +355,7 @@ void main(){
   r0.xyz = fma3(-h0.xyz, r0.zzz, -h2.xyz);
   h1.zw = tc8.zw;
   r3.xyz = (-r4.xyz + fc[1].xyz);
-  r2.x = ((uTiles>0.5 && uT2bad<0.5) ? texture(tex2, tc8.zw).x : texture(cloudsCube, sd).x);   // fp: TEX2D(2, tc8.zw)
+  r2.x = ((uTiles>0.5 && uT2bad<0.5) ? texture(tex2, tc8.zw, -0.1562).x : texture(cloudsCube, sd).x);   // fp: TEX2D(2, tc8.zw); REAL RSX bias -0.1562
   h7.w = fma1(r2.x, fc[2].x, fc[2].y);
   r2.x = (uTiles>0.5 ? texture(tex3, tc8.xy).x : texture(maskCube, sd).x);     // fp: TEX2D(3, tc8.xy)
   r1.xyz = fma3(r2.xxx, r3.xyz, r4.xyz);
@@ -365,14 +365,14 @@ void main(){
   r3.xy = tc6.xy;
   r4.x = fc[5].y;
   r1.xy = fma2(r3.xy, h7.ww, h1.zw);
-  r1.xyz = ((uTiles>0.5 && uT2bad<0.5) ? texture(tex2, r1.xy).xyz : texture(cloudsCube, sd).xyz);   // fp: TEX2D(2, r1.xy)
+  r1.xyz = ((uTiles>0.5 && uT2bad<0.5) ? texture(tex2, r1.xy, -0.1562).xyz : texture(cloudsCube, sd).xyz);   // fp: TEX2D(2, r1.xy); REAL RSX bias -0.1562
   h7.xyz = (r1.xyz * fc[6].z);
   h7.w = r2.x;
   h6.xyz = (-h5.xyz + fc[7].w);
   h5.xyz = fma3(h7.xyz, h6.xyz, h5.xyz);
   h7.z = dot(r0.xyz, fc[8].xyz);
   r0.xy = fma2(r4.zw, fc[9].xx, h1.zw);
-  r0.xyz = ((uTiles>0.5 && uT2bad<0.5) ? texture(tex2, r0.xy).xyz : texture(cloudsCube, sd).xyz);   // fp: TEX2D(2, r0.xy)
+  r0.xyz = ((uTiles>0.5 && uT2bad<0.5) ? texture(tex2, r0.xy, -0.1562).xyz : texture(cloudsCube, sd).xyz);   // fp: TEX2D(2, r0.xy); REAL RSX bias -0.1562
   h0.xyz = pc3(fma3(-r1.xyz, fc[10].xxx, r0.xyz), 0.,1.);
   h0.w = fc[11].y;
   r0.zw = fc[12].xy;
@@ -718,8 +718,12 @@ function texPNG(src){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texIma
  const im=new Image();im.onload=function(){if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,6408,5121,im);gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;};im.onerror=function(){got++;};im.src=src;return t;}
 // mipmapped variant for the per-patch earth tiles: trilinear min filter kills the minification
 // shimmer/aliasing at patch boundaries (the firmware tiles are mipmapped). 512x512 = power of two.
-function texPNGmip(src){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));want++;
- const im=new Image();im.onload=function(){if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,6408,5121,im);gl.generateMipmap(3553);gl.texParameteri(3553,10241,9987);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);got++;};im.onerror=function(){got++;};im.src=src;return t;}
+function texPNGmip(src,aniso){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));want++;
+ const im=new Image();im.onload=function(){if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,6408,5121,im);gl.generateMipmap(3553);gl.texParameteri(3553,10241,9987);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);
+  // REAL RSX per-slot max-anisotropy (live DRAWCALLS, timezone+music globe both): t00/t01=8x, t02=2x, t03=1x
+  if(aniso&&aniso>1){const ext=gl.getExtension('EXT_texture_filter_anisotropic');
+   if(ext){const mx=gl.getParameter(ext.MAX_TEXTURE_MAX_ANISOTROPY_EXT);gl.texParameterf(3553,ext.TEXTURE_MAX_ANISOTROPY_EXT,Math.min(aniso,mx));}}
+  got++;};im.onerror=function(){got++;};im.src=src;return t;}
 function texF32(src,w,h,opt){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,1,1,0,6408,5126,new Float32Array([0,0,0,1]));if(!opt)want++;
  fetch(src).then(r=>{if(!r.ok)throw 0;return r.arrayBuffer();}).then(ab=>{if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,34836,w,h,0,6408,5126,new Float32Array(ab));gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);t.loaded=true;if(!opt)got++;}).catch(()=>{if(!opt)got++;});return t;}
 // fp16 float texture (RGBA16F internalformat=34842, filterable in WebGL2) for the real HDR tonemap LUTs
@@ -1668,8 +1672,8 @@ async function load(){
  // This is what the real surface fp samples (TEX2D(0,tc0.xy) etc); replaces the lossy single cube map.
  patchTex={};
  for(const p of D.patches){ const s3=String(p.idx).padStart(3,'0');
-   patchTex[p.idx]=[texPNGmip(BASE+'full_tex/p'+s3+'_t00.png'),texPNGmip(BASE+'full_tex/p'+s3+'_t01.png'),
-                    texPNGmip(BASE+'full_tex/p'+s3+'_t02.png'),texPNGmip(BASE+'full_tex/p'+s3+'_t03.png')]; }
+   patchTex[p.idx]=[texPNGmip(BASE+'full_tex/p'+s3+'_t00.png',8),texPNGmip(BASE+'full_tex/p'+s3+'_t01.png',8),
+                    texPNGmip(BASE+'full_tex/p'+s3+'_t02.png',2),texPNGmip(BASE+'full_tex/p'+s3+'_t03.png',1)]; }
  const pos=new Float32Array(await fetch(BASE+'mesh/live_surf0_pos.bin').then(r=>r.arrayBuffer()));
  const xyz=[];for(let i=0;i<289;i++)xyz.push(pos[i*4],pos[i*4+1],pos[i*4+2],pos[i*4+3]);
  // star catalog (real-derived celestial directions); build a POINTS vertex buffer
