@@ -1584,7 +1584,7 @@ function drawAtmo(){
  gl.activeTexture(33985);gl.bindTexture(3553,_t14);gl.uniform1i(U('aTex14'),1);
  gl.activeTexture(33986);gl.bindTexture(3553,_t15);gl.uniform1i(U('aTex15'),2);
  gl.uniform1f(U('uALut'),(_t14&&_t15)?1.0:0.0);   // verbatim fp 63d3246d display tail when the per-scene LUTs exist
- gl.disable(2884); gl.depthMask(false); gl.enable(3042); gl.blendFuncSeparate(1,1,1,0);   // ONE,ONE additive color; alpha REPLACED by the atmo scatter term (measured: real limb ring α≈0.2 < sky α, so not additive)
+ gl.disable(2884); gl.depthMask(false); gl.enable(3042); gl.blendFuncSeparate(1,1,1,0);   // ONE,ONE additive color; alpha REPLACED by the atmo scatter term (measured: real limb ring α≈0.2 < sky α, so not additive). NOTE: the live music-globe atmo (fp 7fcca1e2 variant) runs blend=0 REPLACE - tested 2026-06-10: full REPLACE regresses the daytime limb (sc24 45->101); that variant's fp likely composites the under-content itself. Keep additive until ITS decompile is ported.
  let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
  let tl=gl.getAttribLocation(aprog,'in_tc0');gl.bindBuffer(34962,aMesh.tbuf);gl.enableVertexAttribArray(tl);gl.vertexAttribPointer(tl,4,5126,false,0,0);
  gl.bindBuffer(34963,aMesh.ibuf);gl.drawElements(5,aMesh.n,5125,0);
