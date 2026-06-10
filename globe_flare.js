@@ -54,7 +54,14 @@ void main(){
   float qd = dot(q,q);
   float ex = fall*FC(5).x;                           // *1.4427 (1/ln2)
   float vis = (sqrt(abs(qd)) < FC(6).x) ? 1.0 : 0.0;   // gate: pass INSIDE the sun-axis cone (empirical test vs the real blobs; the >= variant came from a dormant-era decompile)
-  if(uDbg>0.5){ ocol0=vec4(1.0,0.0,0.0,1.0); return; }   // debug: solid red where the quad rasterizes
+  if(uDbg>0.5&&uDbg<1.5){ ocol0=vec4(1.0,0.0,0.0,1.0); return; }   // 1: solid red where the quad rasterizes
+  if(uDbg>1.5&&uDbg<2.5){ ocol0=vec4(vec3(exp2(ex)),1.0); return; }  // 2: falloff intensity only
+  if(uDbg>2.5&&uDbg<3.5){ ocol0=vec4(0.0,vis,0.0,1.0); return; }     // 3: gate only
+  if(uDbg>3.5&&uDbg<4.5){ vec4 c4=exp2(ex)*FC(7)*vis; ocol0=vec4(c4.xyz,1.0); return; }  // 4: pre-LUT color
+  if(uDbg>4.5){ vec4 c5=exp2(ex)*FC(7)*vis; vec3 r85=c5.xyz*8.0;
+    vec2 a15=texture(tex15, r85.xy*(1.0/128.0)).xy;
+    vec2 a14=texture(tex14, vec2(r85.z,max(r85.x,r85.y))*(1.0/128.0)).xy;
+    ocol0=vec4(a15.y,a15.x,a14.y,1.0); return; }   // 5: LUT output (opaque)
   vec4 col = exp2(ex) * FC(7) * vis;
   vec3 r8 = col.xyz*8.0;
   vec2 s15 = texture(tex15, r8.xy*(1.0/128.0)).xy;
@@ -82,7 +89,7 @@ void main(){
     const flat=(a,n)=>{ const f=new Float32Array(n*4); for(let i=0;i<n&&i<a.length;i++) for(let j=0;j<4;j++) f[i*4+j]=a[i][j]; return f; };
     gl.uniform4fv(U('uVc'),flat(o.vc,17)); gl.uniform4fv(U('uFc'),flat(o.fc,8));
     gl.uniform1f(U('uFlipY'),o.flipY!==undefined?o.flipY:1.0);
-    gl.uniform1f(U('uDbg'),(typeof window!=='undefined'&&window.__flareDbg)?1.0:0.0);
+    gl.uniform1f(U('uDbg'),(typeof window!=='undefined'&&window.__flareDbg)?+window.__flareDbg:0.0);
     const bind=(u,n,t)=>{ gl.activeTexture(gl.TEXTURE0+u); gl.bindTexture(gl.TEXTURE_2D,t); gl.uniform1i(U(n),u); };
     bind(0,'tex14',o.lut14); bind(1,'tex15',o.lut15);
     gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.SRC_ALPHA,gl.ONE,gl.ZERO,gl.ONE);   // the captured blend: src=770(SRC_ALPHA) dst=1(ONE)

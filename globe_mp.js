@@ -68,7 +68,7 @@ let texBicubic=null, texSeedA=null, texSeedB=null;
 let INSCAT_GEN=0;               // MPGlobe.inscatgen: use the generated bufA/bufC instead of the streamed captured LUT bins
 let SEED_MANIFEST=null, SEED_CACHE={}, _seedCur=null;   // cap3-aligned per-keyframe recovered seeds (seeds_cap3/)
 let _ipValid=false;             // the generated buffers correspond to the CURRENT scene's seeds
-let FLARE_ROWS=null, FLARES=0;   // per-frame sun-flare billboard rows (vp 48ad6e97 windows + fp consts); MPGlobe.flares gate
+let FLARE_ROWS=null, FLARES=0, FLARESPRE=0;   // per-frame sun-flare billboard rows (vp 48ad6e97 windows + fp consts); MPGlobe.flares gate
 let BIAS0=-8.0, BIAS2=-0.1562;   // REAL RSX LOD biases (DRAWCALLS); MPGlobe.bias0/bias2 for sampling A/B
 let STARS2=0;                    // MPGlobe.stars2: verbatim per-frame star brightness (the harvested enc2 consts) instead of the .mnu curve
 let GLARE_ROWS=null;             // per-scene REAL sun-glare consts (vp c868fd6a, 17 fc rows in the GLOW_FC layout; [13]/[16]=color, denormal-zero when dormant)
@@ -1331,6 +1331,7 @@ function drawGlowFaith(){
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex&&!STARSONLY) drawAtmo();   // tonemapped limb (uLinear=0, LDR) into F_disp
+ if(FLARESPRE) drawFlares();   // flares INTO the display pre-encode: the real eclipse LOBES = the bloom of this light (test gate)
  // ---- 2) composite F_disp (+BURST) -> canvas. With BURST active the composite goes through a POST
  // texture RT first (the firmware encodes the DISPLAY - earth+limb+burst - into the bloom source, so
  // the corona emerges from blooming the post-burst scene, not the limb-only buffer).
@@ -1940,6 +1941,7 @@ set cull(v){ CULL=v?1:0; },
  set burst(v){ BURST=v?1:0; }, get burst(){ return BURST; },   // verbatim sun-disc burst pass (needs flare_scene data)
  set bloomdisp(v){ BLOOMDISP=v?1:0; }, get bloomdisp(){ return BLOOMDISP; },
  set flares(v){ FLARES=v?1:0; }, get flares(){ return FLARES; },
+ set flarespre(v){ FLARESPRE=v?1:0; }, get flarespre(){ return FLARESPRE; },
  set inscatgen(v){ INSCAT_GEN=v?1:0; }, get inscatgen(){ return INSCAT_GEN; },
  set stars2(v){ STARS2=v?1:0; }, get stars2(){ return STARS2; },
  set bias0(v){ BIAS0=+v; }, get bias0(){ return BIAS0; },
