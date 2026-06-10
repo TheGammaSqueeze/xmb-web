@@ -55,6 +55,18 @@ let GLOW_GAIN=[0.012,0.012,0.012];
 let GLOW2=0;  // sun-glare pass (verbatim fp 727d0242); gated default off until validated
 let BURST=0;                           // verbatim sun-disc BURST pass (globe_burst.js, vp c868fd6a + fp ac07b20f); gated until the c[254..263] window recapture validates
 let FLARE_SCENES=null, BURST_FAN=null; // per-scene burst consts rows + the captured 65-vert fan
+let encProg=null;               // verbatim encode fp bd9c5fac/bc48008a: decode display (rgb*a*8) + sqrt-curve brightpass key -> bloom source
+let _encRef={cur:null};         // 512x512 bloom-source RT (firmware encode size, f82800 d017 viewport)
+let BLOOM_SCENES=null;          // per-scene rows {t,fr,enc[8],blur[8x3],up[8],comp[2]} harvested per frame (harvest_bloom.py)
+let BLOOMDISP=0;                // MPGlobe.bloomdisp: FAITHFUL bloom-of-display (encode bd9c5fac -> pyramid -> display+bloom*0.125, the burst corona). Gated until measured vs presents.
+let BLOOMPREMUL=1;              // encode output rgb premultiplied by the brightpass key (wiring of out.w into the pyramid; measurement-decided)
+let BLOOMALPHA=0;               // decode term: 0 = a*8=1 (display alpha 1/8 steady-state), 1 = sample the display texture alpha
+// REAL pyramid constants for the bloom-of-display chain, captured at globecap3 frame 82800 (burst):
+// blur (d027+ const[0..6].x, normalized 15-tap) + combine scalars (d044-d051 const[0].x, small->large).
+// NOTE these combine scalars are PER-FRAME animated by the firmware (the known ~6.6x bloom swing);
+// this set is the burst-frame ground truth. TODO: per-(scene,t) harvest like the camera rows.
+const ENC_BLUR_W=[0.161606,0.149085,0.117048,0.0782073,0.0444719,0.0215217,0.00886383,0].map(w=>[w,w,w]);
+const ENC_UP_W=[5.30487,3.22005,1.95457,1.18642,0.720155,0.437133,0.265339,0.161061];
 let glowSprite=null;
 let GLOW_FC=[[1920,1080,0,0],[1.00918,0,0,0],[-1,0,0,0],[0.249846,-0.956276,-5.25935,0],[1920,1080,0,0],[0.249846,-0.956276,-5.25935,0],[-1,1,0,0],[1,0,0,0],[1,1,1,1],[1,1,1,1],[1,1,1,1],[1,1,1,1],[0,0,0,2],[0.433875,0.0737772,0.0257549,0],[1,0,0,0],[1,1,1,1],[0.433875,0.0737772,0.0257549,0]];  // bloom gain = 1/450 (web bloom accumulator ~450x firmware) -> adds the firmware bloom at FULL weight per the verbatim composite fp 316de80a (scene*0.125 + bloom*1). NOT a tiny limb-halo: the bloom is the dominant haze.
 let GLOW_WARM=[1.0,1.0,1.0];   // retained for the MPGlobe.glowWarm setter API; no longer used by C_FS
@@ -383,7 +395,8 @@ void main(){
   // remap 0x0000aae4 -> channel_map (2,1,2,1) with native (ch0=Y,ch1=X): fp reads tex15.xy=(R,G)=(ch1,ch0),
   // tex14.zw=(B,A)=(ch1,ch0). So R=tex15.ch1(.y), G=tex15.ch0(.x), B=tex14.ch1(.y). Validated R<G<B vs presents.
   vec2 e15 = texture(tex15, r2.xy*uLutScale).xy;                 // (.x=ch0, .y=ch1)
-  float X14 = texture(tex14, vec2(r2.z, maxlum)*uLutScale).y;    // ch1 -> B
+  vec2 e14 = texture(tex14, vec2(r2.z, maxlum)*uLutScale).xy;    // (.x=ch0 -> A, .y=ch1 -> B)
+  float X14 = e14.y;                                             // ch1 -> B
   // firmware: col0 = backbuffer(tex13)*fc21 + LUT. The web has no prev-frame feedback (tex13~0), so apply the
   // STEADY-STATE fixed point col0 = LUT/(1-fc21) (exact for a static frame; fc21=fc22=0.125 real). uFeedback toggles it.
   vec4 col0 = vec4(0.);
@@ -392,6 +405,7 @@ void main(){
   col0.x = fma1(r0d.x, fc[21].x, e15.y) * fb21;   // R = tex15.ch1
   col0.y = fma1(r0d.y, fc[21].x, e15.x) * fb21;   // G = tex15.ch0
   col0.z = fma1(r0d.z, fc[22].x, X14) * fb22;     // B = tex14.ch1
+  col0.w = fma1(r0d.w, fc[22].x, e14.x) * fb22;   // A = tex14.ch0 (the display HDR-exponent channel: ~1 dark -> ~0 bright; feeds the encode's rgb*a*8)
   if(uDbg>5.5){ ocol0=vec4(gGlint, clamp(h7.z*0.5+0.5,0.,1.), clamp(h7.w,0.,1.), 1.0); return; }  // DBG: glint BRDF sample (R), sun-reflect dot h7.z (G), land mask h7.w (B)
   if(uDbg>4.5){ ocol0=vec4(length(vSph), vClip.w/16.0, vClip.y/16.0+0.5, 1.0); return; }  // DBG: |vSph| (R, should be 1.0), d0.w (G), d0.y (B)
   if(uDbg>3.5){ float ny=vClip.y/vClip.w; ocol0=vec4((ny+8.0)/16.0, vClip.w/16.0, 0.0, 1.0); return; }  // DBG: raw d0 ndc.y (encoded) + w
@@ -417,7 +431,7 @@ void main(){
     ocol0 = vec4(clamp(disp,0.0,1.0),1.0); return;
   }
   if(uMode>1.5){ ocol0 = vec4(clamp(log2(max(r2.xyz,0.0)+1.0)/6.0,0.0,1.0), 1.0); return; }  // raw HDR r2 (log-encoded for readback): r2=2^(v*6)-1
-  if(uMode>0.5){ ocol0 = vec4(col0.xyz, 1.0); return; }         // verbatim ramp-encoded output
+  if(uMode>0.5){ ocol0 = vec4(col0.xyz, col0.w); return; }      // verbatim ramp-encoded output incl. the A exponent channel
   ocol0 = vec4(clamp(tc,0.0,1.0), 1.0);
 }`;
 // ---- VERBATIM ATMOSPHERE SHELL (vp 3f6eeb47 + fp 63d3246d), ported 1:1 from globe_atmo_real.html ----
@@ -476,6 +490,7 @@ uniform sampler2D uSprite; uniform float uGlow2; uniform vec2 uDims;
 uniform vec4 c260,c261,c262,c263; uniform vec4 gfc[17];
 uniform sampler2D uLut15,uLut14; uniform float uLutOn,uLutExpo,uLutFb;   // real surface-fp LUT tonemap (the gold warmth); uLutFb = backbuffer feedback 1/(1-fc21)
 uniform float uPassthru;   // faithful path: uEarth is ALREADY the LDR display scene (col0 earth + tonemapped limb) -> just add the limb/sun bloom, NO re-tonemap
+uniform float uEarthGain;  // display weight in the faithful composite: out = display*(1-FC1) + bloom*FC0 (fp 59b46122: fma(-disp,FC1,bloom*FC0) additive). 1.0 everywhere else.
 float gdivsq(float a,float b){return a/sqrt(abs(b)+1e-12);}
 vec3 computeGlare(){
   vec2 ndc=vUV*2.0-1.0;
@@ -515,7 +530,8 @@ vec3 computeGlare(){
   return max((spr*r2.xyz+r0.xyz)*8.0, 0.0);
 }
 void main(){
-  vec3 e = texture(uEarth, vUV).xyz;
+  vec4 e4 = texture(uEarth, vUV);
+  vec3 e = e4.xyz;
   vec3 g = texture(uGlow,  vUV).xyz;
   // Additive bloom in LINEAR HDR, then the firmware globe HDR.mnu tonemap applied PER CHANNEL
   // (extended Reinhard, EXPOSURE 0.789, WHITE 3.40918 -- the same real .mnu params as the surface fp's
@@ -526,7 +542,7 @@ void main(){
   // then *0.789 decode exposure (HDR.mnu). scene*0.125*0.789 = scene*0.0986 -> surface stays at
   // the validated 0.65/255; bloom restored to FULL weight (the dominant haze the firmware adds).
   if(uGlow2>0.5) e = e + computeGlare();   // verbatim firmware sun-glare (fp 727d0242), gated
-  if(uPassthru>0.5){ ocol0 = vec4(clamp(e + g * uGlowGain, 0.0, 1.0), 1.0); return; }   // faithful: LDR scene + limb/sun bloom
+  if(uPassthru>0.5){ float eg=(abs(uEarthGain)<1e-6)?1.0:uEarthGain; ocol0 = vec4(clamp(e*eg + g * uGlowGain, 0.0, 1.0), e4.w); return; }   // faithful: LDR scene + limb/sun bloom; α carries the display exponent through to the encode. Unset (0) uEarthGain behaves as 1 so legacy sites need no change.
   if(uLutOn>0.5){
     // VERBATIM firmware surface-fp LUT tonemap = THE GOLD WARMTH (measured: LUT(real r2)=gold 1:0.90:0.17).
     // R,G = tex15(hc.xy); B = tex14(hc.z, max(hc.x,hc.y)).x. hc = earth exposed to the firmware r2 range
@@ -572,6 +588,37 @@ void main(){
   vec3 toned = (L*(1.0 + L/(W*W)))/(1.0 + L);          // extended Reinhard (same as the display tonemap)
   vec3 glare = max(toned - uThresh, 0.0);             // GlareSource: subtract GLARE THRESH, clamp >=0
   ocol0 = vec4(glare, 1.0);                            // over-range energy only -> feeds the bloom pyramid
+}`;
+// ---- VERBATIM display-encode bright-pass (RSX fp 0xbd9c5fac654464cb = 0xbc48008a, frame 82800 d017:
+//      the FIRST post pass each frame; reads THE DISPLAY (earth+limb+burst, LDR+exponent-alpha) and
+//      emits the bloom-pyramid source: rgb = display.rgb*display.a*8 (HDR decode), w = the sqrt-curve
+//      bright-pass key. Real consts (d017 const[0..7]): FC0=1 FC1..4=0.13828 FC5=2 FC6=0.881311
+//      FC7=(0.27,0.67,0.06). Derived closed form per channel c:
+//        key = dot( (c + sqrt(0.55312*c + (1-c)^2) - 1) / (FC4*FC5) / FC6 , FC7.rgb )
+//      key(0)=0, key(1)~3.05 -- a soft knee that replaces the legacy threshold form for the
+//      bloom-of-display path (this is what builds the eclipse BURST corona: the white wash =
+//      pyramid(encode(display)) * 0.125 added back, d053 const[1]=0.125).
+const ENC_FS=`#version 300 es
+precision highp float; precision highp sampler2D;
+uniform sampler2D uDisp;            // the DISPLAY (post-burst composite RT)
+uniform float uAlphaMode;           // 0: a*8 = 1 (steady-state display alpha 1/8); 1: use texture alpha*8
+uniform float uPremul;              // 1: rgb *= max(key,0) (pyramid consumes premultiplied); 0: plain rgb, key in .w
+uniform vec4 uEFC[8];               // the encode draw's REAL per-frame const[0..7] (FC1/FC4..6 animate per frame)
+in vec2 vUV; out vec4 ocol0;
+void main(){
+  vec4 r1 = texture(uDisp, vUV);
+  vec3 c  = r1.rgb;
+  vec3 q  = (vec3(uEFC[0].x) - c);                      // FC0 - r1
+  q = (q - c*q) / 4.0;                                  // (FC0-c)*(1-c)/4
+  vec3 t = vec3(c.r*uEFC[1].x, c.g*uEFC[2].x, c.b*uEFC[3].x) + q;
+  vec3 r2v = sqrt(max(t*4.0, 0.0));                     // divsq(|x|,x) = sqrt
+  vec3 dec = c * ((uAlphaMode>0.5) ? (r1.a*8.0) : 1.0); // decode rgb*a*8 (a=1/8 steady-state -> identity)
+  float rcp45 = 1.0/(uEFC[4].x*uEFC[5].x);
+  vec3 u = (c + r2v) * rcp45 - rcp45;                   // fma(r1+r2, rcp(FC4*FC5), -rcp)
+  u /= uEFC[6].x;                                       // FC6
+  float key = dot(u, uEFC[7].xyz);                      // FC7 luma (0.27,0.67,0.06, frame-stable)
+  vec3 outc = (uPremul>0.5) ? dec*max(key,0.0) : dec;
+  ocol0 = vec4(outc, key);
 }`;
 
 // ---- STAR FIELD (real-derived) : 1122 stars triangulated from the camera-sweep presents (back-projected
@@ -1052,7 +1099,8 @@ function drawGlowFaith(){
  const Fd=ensureHDR(W,H), Fb=ensureHDR2(W,H);
  // ---- 1) F_disp = col0 earth (LDR) + tonemapped limb ----
  gl.bindFramebuffer(36160,Fd.fbo);
- gl.viewport(0,0,W,H);gl.clearColor(0,0,0,0);gl.clear(16640);gl.enable(2929);gl.depthFunc(515);
+ // clear alpha = 1.0: the display A channel is the HDR-exponent (present dark sky alpha = 255 = 1.0)
+ gl.viewport(0,0,W,H);gl.clearColor(0,0,0,1);gl.clear(16640);gl.enable(2929);gl.depthFunc(515);
  if(CULL){gl.enable(2884);gl.cullFace(1029);}else{gl.disable(2884);}
  gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
  const fcsrc=curFC||D.fc; const fc=new Float32Array(23*4);for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
@@ -1085,8 +1133,9 @@ function drawGlowFaith(){
  const C=n=>gl.getUniformLocation(cprog,n);
  const burstRows=(BURST && BURST_FAN && FLARE_SCENES && typeof GlobeBurst!=='undefined' && SCENES_IDX && SCENES_IDX[sceneIdx]) ? (FLARE_SCENES[String(SCENES_IDX[sceneIdx].scene)]||null) : null;
  const useBurst=!!(burstRows && burstRows.length);
+ const useFP=useBurst||(BLOOMDISP&&encProg);   // route the composite through the post RT whenever the firmware bloom-of-display path needs to sample it
  let FP=null;
- if(useBurst){ FP=ensureColorRT(_postRef,W,H); gl.bindFramebuffer(36160,FP.fbo); }
+ if(useFP){ FP=ensureColorRT(_postRef,W,H); gl.bindFramebuffer(36160,FP.fbo); }
  else gl.bindFramebuffer(36160,null);
  gl.viewport(0,0,W,H);gl.disable(2929);gl.disable(3042);gl.disable(2884);
  gl.useProgram(cprog);
@@ -1106,16 +1155,55 @@ function drawGlowFaith(){
    if(GlobeBurst._inited){
      const verts=new Float32Array(BURST_FAN.length*4);
      for(let i=0;i<BURST_FAN.length;i++) for(let j=0;j<4;j++) verts[i*4+j]=BURST_FAN[i][j];
-     GlobeBurst.draw(gl,{verts,vc,fc,flipY:1.0,w:W,h:H,lutScale:1/128,
+     GlobeBurst.draw(gl,{verts,vc,fc,flipY:1.0,w:W,h:H,lutScale:1/128,dbg:(window.BURSTDBG||0),
        shapeTex:sharedTex.sundisc||black, sceneTex:Fd.tex, lut14:(CAP_T14||sharedTex.tex14), lut15:(CAP_T15||sharedTex.tex15)});
    }
-   // post RT -> canvas passthrough
+ }
+ if(useFP && !(BLOOMDISP&&encProg)){
+   // post RT -> canvas passthrough (burst-only mode; the faithful bloom path does its own final composite)
    gl.bindFramebuffer(36160,null);gl.viewport(0,0,W,H);gl.disable(2929);gl.disable(3042);gl.disable(2884);
    gl.useProgram(cprog);
    gl.activeTexture(33984+0);gl.bindTexture(3553,FP.tex);gl.uniform1i(C('uEarth'),0);
    gl.activeTexture(33984+1);gl.bindTexture(3553,black);gl.uniform1i(C('uGlow'),1);
    gl.uniform1f(C('uPassthru'),1.0);
    gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
+ }
+ if(BLOOMDISP&&encProg&&FP){
+   // ---- FAITHFUL bloom-of-display (fp bd9c5fac -> pyramid -> +comp[1], fp 59b46122) ----
+   // ALL chain constants are PER-FRAME firmware data (harvest_bloom.py rows); f82800 set = fallback.
+   let row=null;
+   if(BLOOM_SCENES && SCENES_IDX && SCENES_IDX[sceneIdx]){
+     const rows=BLOOM_SCENES[String(SCENES_IDX[sceneIdx].scene)];
+     if(rows&&rows.length){ const s=SCENES_IDX[sceneIdx]; const fr=s.frame0+animT*((s.frame1-s.frame0)||1);
+       row=rows[0]; for(const e of rows){ if(Math.abs(e.fr-fr)<Math.abs(row.fr-fr)) row=e; } }
+   }
+   const encFC=new Float32Array(8*4);
+   const encsrc=row?row.enc:[[1,0,0,0],[0.13828,0,0,0],[0.13828,0,0,0],[0.13828,0,0,0],[0.13828,0,0,0],[2,0,0,0],[0.881311,0,0,0],[0.27,0.67,0.06,0]];
+   for(let i=0;i<8;i++) for(let j=0;j<4;j++) encFC[i*4+j]=encsrc[i][j];
+   const ENC=ensureColorRT(_encRef,512,512);
+   gl.bindFramebuffer(36160,ENC.fbo);gl.viewport(0,0,512,512);gl.disable(2929);gl.disable(3042);gl.disable(2884);
+   gl.useProgram(encProg);
+   gl.activeTexture(33984+0);gl.bindTexture(3553,FP.tex);gl.uniform1i(gl.getUniformLocation(encProg,'uDisp'),0);
+   gl.uniform1f(gl.getUniformLocation(encProg,'uAlphaMode'),BLOOMALPHA);
+   gl.uniform1f(gl.getUniformLocation(encProg,'uPremul'),BLOOMPREMUL);
+   gl.uniform4fv(gl.getUniformLocation(encProg,'uEFC'),encFC);
+   gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
+   gl.bindFramebuffer(36160,null);
+   const blurW=row?row.blur:ENC_BLUR_W, upW=row?row.up:ENC_UP_W;
+   const glow=GlobeGlow.buildGlow(gl,ENC.tex,512,512,{blurWeights:blurW,upWeights:upW});_lastGlow=glow;
+   // final composite (fp 59b46122 VERBATIM, additive into the display): out = display*(1-FC1) + bloom*FC0
+   const c0=row&&row.comp?row.comp[0]:1.0, c1=row&&row.comp?row.comp[1]:0.125;
+   gl.bindFramebuffer(36160,null);gl.viewport(0,0,W,H);gl.disable(2929);gl.disable(2884);gl.disable(3042);
+   gl.useProgram(cprog);
+   gl.activeTexture(33984+0);gl.bindTexture(3553,FP.tex);gl.uniform1i(C('uEarth'),0);
+   gl.activeTexture(33984+1);gl.bindTexture(3553,glow.tex);gl.uniform1i(C('uGlow'),1);
+   gl.uniform3fv(C('uGlowGain'),new Float32Array([c0,c0,c0]));
+   gl.uniform1f(C('uEarthGain'),1.0-c1);
+   gl.uniform1f(C('uPassthru'),1.0);
+   gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
+   gl.uniform1f(C('uEarthGain'),1.0);   // restore for every other cprog use
+   if(STARTEX)drawStarsTex();
+   return;   // the legacy limb-HDR bloom (steps 3-5) is REPLACED by the real display-encode chain
  }
  // ---- 3) blit F_disp depth -> F_bloom; render HDR limb+sun (bloom source) ----
  gl.bindFramebuffer(36008,Fd.fbo);gl.bindFramebuffer(36009,Fb.fbo);
@@ -1131,7 +1219,7 @@ function drawGlowFaith(){
  const GR=ensureColorRT(_gsRef,W,H);
  gl.bindFramebuffer(36160,GR.fbo);gl.viewport(0,0,W,H);
  gl.useProgram(gsProg);
- gl.activeTexture(33984+0);gl.bindTexture(3553,(useBurst&&FP)?FP.tex:Fb.tex);gl.uniform1i(gl.getUniformLocation(gsProg,'uTone'),0);   // burst-active: bloom the POST-BURST scene (firmware encodes the display); else legacy HDR limb buffer
+ gl.activeTexture(33984+0);gl.bindTexture(3553,Fb.tex);gl.uniform1i(gl.getUniformLocation(gsProg,'uTone'),0);   // legacy HDR limb bloom (validated); the burst corona needs the real encode fp bd9c5fac (decode-then-brightpass of the display) - next port
  gl.uniform1f(gl.getUniformLocation(gsProg,'uSlum'),GLOW_SLUM*0.125);
  gl.uniform1f(gl.getUniformLocation(gsProg,'uThresh'),GLARE_THRESH);
  gl.drawArrays(4,0,3);gl.bindVertexArray(null);
@@ -1241,11 +1329,11 @@ function drawAtmo(){
  // _AtmSpaceIv (TEXUNIT0): per-scene -> picked scene's LIMB lut; eclipse -> atmo draw's own tex0 RT (tex0atmEcl).
  const aScat=CAP_LIMB || ((INSCAT_PS&&_psScat) ? _psScat : (INSCAT_ECL ? ((ATMO_SOLID&&sharedTex.tex0atmEclSolid)?sharedTex.tex0atmEclSolid:((ATMO_VFLIP&&sharedTex.tex0atmEclFlip)?sharedTex.tex0atmEclFlip:(sharedTex.tex0atmEcl||sharedTex.tex4ecl||scatterTex))) : scatterTex));
  gl.activeTexture(33984);gl.bindTexture(3553,aScat);gl.uniform1i(U('tex0'),0);
- gl.disable(2884); gl.depthMask(false); gl.enable(3042); gl.blendFunc(1,1);   // ONE,ONE additive
+ gl.disable(2884); gl.depthMask(false); gl.enable(3042); gl.blendFuncSeparate(1,1,0,1);   // ONE,ONE additive color; alpha keeps the display exponent channel (dst)
  let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
  let tl=gl.getAttribLocation(aprog,'in_tc0');gl.bindBuffer(34962,aMesh.tbuf);gl.enableVertexAttribArray(tl);gl.vertexAttribPointer(tl,4,5126,false,0,0);
  gl.bindBuffer(34963,aMesh.ibuf);gl.drawElements(5,aMesh.n,5125,0);
- gl.disable(3042); gl.depthMask(true);
+ gl.disable(3042); gl.depthMask(true); gl.blendFunc(1,1);
 }
 function atmoAt(t){ const F=ATMO_SCENE; if(!F||!F.length)return null; if(t<=F[0].t)return F[0]; if(t>=F[F.length-1].t)return F[F.length-1];
   for(let i=0;i<F.length-1;i++){const a=F[i],b=F[i+1]; if(t>=a.t&&t<=b.t){const w=(t-a.t)/((b.t-a.t)||1);
@@ -1483,6 +1571,10 @@ async function load(){
        if(BURST_FAN&&SCENES_IDX){ FLARE_SCENES={};
          await Promise.all(SCENES_IDX.map(s=>fetch(BASE+'flare_scene_'+String(s.scene).padStart(2,'0')+'_cap2.json')
            .then(r=>r.ok?r.json():null).then(j=>{ if(j) FLARE_SCENES[String(s.scene)]=j; }).catch(()=>null))); }
+       // per-frame bloom-of-display chain rows (encode FC + blur kernel + combine scalars, all animated per frame)
+       if(SCENES_IDX){ BLOOM_SCENES={};
+         await Promise.all(SCENES_IDX.map(s=>fetch(BASE+'bloom_scene_'+String(s.scene).padStart(2,'0')+'_cap2.json')
+           .then(r=>r.ok?r.json():null).then(j=>{ if(j) BLOOM_SCENES[String(s.scene)]=j; }).catch(()=>null))); }
        CAP_SCENE_TONE=await fetch(BASE+'cap_scene_tonelut.json').then(r=>r.ok?r.json():null).catch(()=>null);
        if(CAP_SCENE_TONE) CAP_TONE_CACHE={};   // lazy: capSceneTone() loads on demand (non-blocking)
      }catch(e){ CAP_SCENE_TONE=null; }
@@ -1509,9 +1601,12 @@ const MPGlobe={
    // GLOW composite program + fullscreen VAO (gated path; harmless if GLOW stays off)
    cprog=gl.createProgram();gl.attachShader(cprog,sh(35633,C_VS));gl.attachShader(cprog,sh(35632,C_FS));gl.linkProgram(cprog);
    if(!gl.getProgramParameter(cprog,gl.LINK_STATUS)){errlog+=' composite link: '+gl.getProgramInfoLog(cprog);}
+   else { gl.useProgram(cprog); gl.uniform1f(gl.getUniformLocation(cprog,'uEarthGain'),1.0); }   // display weight default; only the faithful bloom composite changes it (and restores)
    // verbatim GlareSource bright-pass that feeds the bloom (only over-display-range energy blooms)
    gsProg=gl.createProgram();gl.attachShader(gsProg,sh(35633,C_VS));gl.attachShader(gsProg,sh(35632,GS_FS));gl.linkProgram(gsProg);
    if(!gl.getProgramParameter(gsProg,gl.LINK_STATUS)){errlog+=' glaresrc link: '+gl.getProgramInfoLog(gsProg);}
+   encProg=gl.createProgram();gl.attachShader(encProg,sh(35633,C_VS));gl.attachShader(encProg,sh(35632,ENC_FS));gl.linkProgram(encProg);
+   if(!gl.getProgramParameter(encProg,gl.LINK_STATUS)){errlog+=' encode link: '+gl.getProgramInfoLog(encProg);encProg=null;}
    starProg=gl.createProgram();gl.attachShader(starProg,sh(35633,STAR_VS));gl.attachShader(starProg,sh(35632,STAR_FS));gl.linkProgram(starProg);
    starTexProg=gl.createProgram();gl.attachShader(starTexProg,sh(35633,STARTEX_VS));gl.attachShader(starTexProg,sh(35632,STARTEX_FS));gl.linkProgram(starTexProg);
    // star skybox cube: 6 faces, each a quad (texcoord 0..1, tiled in the VS); inside-out, no cull
@@ -1571,6 +1666,10 @@ set cull(v){ CULL=v?1:0; },
  set starBri(v){ STAR_BRI=v; },
  set glow2(v){ GLOW2=v?1:0; }, get glow2(){ return GLOW2; },
  set burst(v){ BURST=v?1:0; }, get burst(){ return BURST; },   // verbatim sun-disc burst pass (needs flare_scene data)
+ set bloomdisp(v){ BLOOMDISP=v?1:0; }, get bloomdisp(){ return BLOOMDISP; },     // faithful bloom-of-display (encode bd9c5fac -> pyramid -> +0.125)
+ set bloompremul(v){ BLOOMPREMUL=v?1:0; }, get bloompremul(){ return BLOOMPREMUL; },
+ set bloomalpha(v){ BLOOMALPHA=v?1:0; }, get bloomalpha(){ return BLOOMALPHA; },
+ get _burstDiag(){ return {flag:BURST, fan:!!BURST_FAN, fanLen:BURST_FAN?BURST_FAN.length:0, scenes:FLARE_SCENES?Object.keys(FLARE_SCENES).length:0, curScene:SCENES_IDX&&SCENES_IDX[sceneIdx]?SCENES_IDX[sceneIdx].scene:null, rowsForCur:(FLARE_SCENES&&SCENES_IDX&&SCENES_IDX[sceneIdx])?((FLARE_SCENES[String(SCENES_IDX[sceneIdx].scene)]||[]).length):0, inited:!!(typeof GlobeBurst!=='undefined'&&GlobeBurst._inited)}; },
  setGlowFC(v){ if(Array.isArray(v)&&v.length>=17) GLOW_FC=v; },
  get starBri(){ return STAR_BRI; },
  get starCount(){ return starN; },
@@ -1638,6 +1737,8 @@ set cull(v){ CULL=v?1:0; },
  get _info(){ return {scene:sceneIdx, nScenes:SCENES?SCENES.length:0, animT:animT.toFixed(3)}; },
  get _diag(){ return {scene:sceneIdx, t:+animT.toFixed(4), capT14:!!CAP_T14, capLut:!!CAP_LUT, capLimb:!!CAP_LIMB, atmo:ATMO,
    lutCache:Object.keys(CAP_LUT_CACHE||{}).length, toneCache:Object.keys(CAP_TONE_CACHE||{}).length,
+   err:errlog, nScenes:SCENES?SCENES.length:0, c260:D&&D.shared?D.shared['260']:null,
+   bloomScenes:BLOOM_SCENES?Object.keys(BLOOM_SCENES).length:0,
    faithPath:!!(GLOWFAITH&&hdrExt&&cprog&&(!TONELUT_PS||CAP_T14))}; },
  // DEBUG: capture the EXACT gl_Position the surface VS produces for patch `pi` via transform feedback.
  // flip = the uFlipY to apply (default -1 = the shipped firmware-viewport value). Returns Float32Array[289*4]

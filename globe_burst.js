@@ -76,17 +76,17 @@ vec4 clamp16(vec4 v){ return vec4(clamp16v2(v.xy), clamp16v2(v.zw)); }
 #define _builtin_div(x, y) (x / y)
 vec4 _builtin_divsq(vec4 a, float b){ vec4 t=a/_builtin_sqrt(b); return _select(a,t,greaterThan(abs(a),vec4(0.))); }
 vec4 precision_clamp(vec4 x, float mn, float mx){ x=_select(x,vec4(0.),isnan(x)); return clamp(x,mn,mx); }
-vec4 get_wpos(){ return vec4(gl_FragCoord.x, uWH.y - gl_FragCoord.y, gl_FragCoord.zw); }
+vec4 get_wpos(){ return vec4(gl_FragCoord.x, gl_FragCoord.y, gl_FragCoord.zw); }   // VERIFIED vs the real present (numpy reference, corr 0.892): wpos is y-up = WebGL gl_FragCoord directly
 vec4 r0=vec4(0.), r2=vec4(0.);
 void fs_main(){
 
 	vec4 r1 = vec4(0.);
 	vec4 h2 = vec4(0.);
 	vec4 wpos = get_wpos();
-	r0.z = vec4(dot(vec4(tc1 * gl_FragCoord.w).xyz, vec4(tc1 * gl_FragCoord.w).xyz)).z;
+	r0.z = vec4(dot(vec4(tc1).xyz, vec4(tc1).xyz)).z;
 	r0.x = (1.0/(FC(0).x));
 	r1.w = FC(1).x;
-	r1.xyz = _builtin_divsq((tc1 * gl_FragCoord.w), r0.z).xyz;
+	r1.xyz = _builtin_divsq((tc1), r0.z).xyz;
 	r1.w = vec4(r1 + FC(2).xxxx).w;
 	r0.z = vec4(dot(r1.xyz, -FC(3).xyz)).z;
 	r0.y = (1.0/(FC(4).y));
@@ -125,7 +125,15 @@ void fs_main(){
 	r0.z = r0.z;
 
 }
-void main(){ fs_main(); ocol0 = vec4(r0.xyz, 1.0); }`;
+uniform float uDbg;
+  void main(){
+    if(uDbg>0.5 && uDbg<1.5){ ocol0=vec4(texture(tex0, tc0.xy).xyz, 1.0); return; }          // 1: shape sample
+    if(uDbg>1.5 && uDbg<2.5){ vec4 wp=get_wpos(); vec2 uv=vec2(wp.x/uWH.x, wp.y/uWH.y); ocol0=vec4(texture(tex1, uv).xyz,1.0); return; }  // 2: occlusion sample
+    fs_main();
+    if(uDbg>2.5 && uDbg<3.5){ ocol0=vec4(abs(r2.xyz),1.0); return; }                          // 3: color factor
+    if(uDbg>3.5){ ocol0=vec4(clamp(abs(r0.xyz)/8.0,0.,1.),1.0); return; }                     // 4: pre/post-LUT magnitude
+    ocol0 = vec4(r0.xyz, 1.0);
+  }`;
   let prog=null, vbo=null;
   function init(gl){
     function sh(t,s){ const o=gl.createShader(t); gl.shaderSource(o,s); gl.compileShader(o);
@@ -146,11 +154,12 @@ void main(){ fs_main(); ocol0 = vec4(r0.xyz, 1.0); }`;
     gl.uniform1f(U('uFlipY'),o.flipY!==undefined?o.flipY:1.0);
     gl.uniform2f(U('uWH'),o.w||1920,o.h||1080);
     gl.uniform1f(U('uLutScale'),o.lutScale||0.0078125);
+    gl.uniform1f(U('uDbg'),o.dbg||0.0);
     const bind=(u,n,t)=>{ gl.activeTexture(gl.TEXTURE0+u); gl.bindTexture(gl.TEXTURE_2D,t); gl.uniform1i(U(n),u); };
     bind(0,'tex0',o.shapeTex); bind(1,'tex1',o.sceneTex); bind(2,'tex14',o.lut14); bind(3,'tex15',o.lut15);
-    gl.enable(gl.BLEND); gl.blendFunc(gl.ONE,gl.ONE);
+    gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.ONE,gl.ONE,gl.ZERO,gl.ONE);   // additive color; alpha keeps the display exponent channel
     gl.drawArrays(gl.TRIANGLE_FAN,0,o.verts.length/4);
-    gl.disable(gl.BLEND);
+    gl.disable(gl.BLEND); gl.blendFunc(gl.ONE,gl.ONE);
   }
-  global.GlobeBurst = { init, draw };
+  global.GlobeBurst = { init, draw, VER: 5 };
 })(typeof window!=='undefined'?window:globalThis);
