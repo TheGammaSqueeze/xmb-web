@@ -92,7 +92,7 @@ let GLOW_WARM=[1.0,1.0,1.0];   // retained for the MPGlobe.glowWarm setter API; 
 let GLOW_SLUM=0.789;  // decode exposure (HDR.mnu EXPOSURE) applied to the verbatim composite (scene*0.125 + bloom); scene*0.125*0.789=0.0986 keeps the surface match
 let GLARE_THRESH=0.552855;  // HDR.mnu GLARE THRESH (default scene) -> the GlareSource bright-pass threshold (only > this blooms)
 let GLOW_CHROMA=0;             // retained for the MPGlobe.glowChroma setter API; no longer used by C_FS
-let D=null, eMesh=null, want=0, got=0, sharedTex={}, patchTex=[], black=null;
+let D=null, eMesh=null, want=0, got=0, sharedTex={}, patchTex=[], black=null, black0=null;
 let aMesh=null, scatterTex=null, fcAtmo=null;        // verbatim atmosphere shell pass
 let ATMO_SCENES=null, ATMO_SCENE=null, ATMO=0;       // per-scene aligned atmosphere (coherent capture); MPGlobe.atmo toggles
 const ATMO_KEYS=['256','257','258','259','460','461','462'];
@@ -723,6 +723,7 @@ function texF32(src,w,h,opt){const t=gl.createTexture();gl.bindTexture(3553,t);g
 function texF16(src,w,h,opt){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,34842,1,1,0,6408,5126,new Float32Array([0,0,0,1]));if(!opt)want++;
  fetch(src).then(r=>{if(!r.ok)throw 0;return r.arrayBuffer();}).then(ab=>{if(!gl)return;gl.bindTexture(3553,t);gl.texImage2D(3553,0,34842,w,h,0,6408,5126,new Float32Array(ab));gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071);t.loaded=true;if(!opt)got++;}).catch(()=>{if(!opt)got++;});return t;}
 function blackTex(){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));return t;}
+function black0Tex(){const t=gl.createTexture();gl.bindTexture(3553,t);gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,0]));return t;}
 // Build a WebGL cube-map from the firmware's 6 assembled cube faces (earth.qrc CUBEEARTH/clouds/mask).
 // Calibrated arrangement (slots/flip) verified vs geography: continents seamless, poles centered.
 const CUBE_SLOTS=[1,3,5,4,0,2];               // earth_faceN for WebGL [+X,-X,+Y,-Y,+Z,-Z]
@@ -1115,7 +1116,7 @@ function drawGlow(){
  gl.uniform4fv(U('fc'),fc);
  const surfTex4 = ((INSCAT_GEN&&_ipValid&&_ipC.cur)?_ipC.cur.tex:null) || CAP_LUT || ((INSCAT_PS&&_psSurfTex) ? _psSurfTex : ((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
  bindT(4,'tex4',surfTex4);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
- bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black);
+ bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black0||black);
  gl.uniform1f(U('uTiles'),TILES);
  const bindCube=(unit,name,tex)=>{gl.activeTexture(33984+unit);gl.bindTexture(34067,tex);gl.uniform1i(U(name),unit);};
  bindCube(10,'earthCube',sharedTex.earthCube);bindCube(11,'cloudsCube',sharedTex.cloudsCube);bindCube(12,'maskCube',sharedTex.maskCube);
@@ -1257,7 +1258,7 @@ function drawGlowFaith(){
  gl.uniform4fv(U('fc'),fc);
  const surfTex4 = ((INSCAT_GEN&&_ipValid&&_ipC.cur)?_ipC.cur.tex:null) || CAP_LUT || ((INSCAT_PS&&_psSurfTex)?_psSurfTex:((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
  bindT(4,'tex4',surfTex4);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
- bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black);
+ bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black0||black);
  gl.uniform1f(U('uTiles'),TILES);
  const bindCube=(unit,name,tex)=>{gl.activeTexture(33984+unit);gl.bindTexture(34067,tex);gl.uniform1i(U(name),unit);};
  bindCube(10,'earthCube',sharedTex.earthCube);bindCube(11,'cloudsCube',sharedTex.cloudsCube);bindCube(12,'maskCube',sharedTex.maskCube);
@@ -1436,7 +1437,7 @@ function draw(){
  gl.uniform4fv(U('fc'),fc);
  const surfTex4 = ((INSCAT_GEN&&_ipValid&&_ipC.cur)?_ipC.cur.tex:null) || CAP_LUT || ((INSCAT_PS&&_psSurfTex) ? _psSurfTex : ((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
  bindT(4,'tex4',surfTex4);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
- bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black);
+ bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black0||black);
  gl.uniform1f(U('uTiles'),TILES);
  const bindCube=(unit,name,tex)=>{gl.activeTexture(33984+unit);gl.bindTexture(34067,tex);gl.uniform1i(U(name),unit);};
  bindCube(10,'earthCube',sharedTex.earthCube);bindCube(11,'cloudsCube',sharedTex.cloudsCube);bindCube(12,'maskCube',sharedTex.maskCube);
@@ -1618,7 +1619,7 @@ function tick(){
 
 async function load(){
  D=await fetch(BASE+'full_surface.json').then(r=>r.json());
- black=blackTex();
+ black=blackTex(); black0=black0Tex();
  sharedTex.tex4=texF32(BASE+'full_tex/t04_f32.bin',256,128);
  sharedTex.tex5=texF32(BASE+'full_tex/t05_f32.bin',256,1);
  sharedTex.tex6=texF32(BASE+'full_tex/t06_f32.bin',64,64);
@@ -1838,6 +1839,14 @@ set cull(v){ CULL=v?1:0; },
      let s=0,mx=0; for(let i=0;i<256*128;i++){ const v=Math.max(px[i*4],px[i*4+1],px[i*4+2]); s+=v; if(v>mx)mx=v; }
      return {mean:+(s/(256*128)).toFixed(5), max:+mx.toFixed(4)}; };
    return {A:rd(_ipA.cur), C:rd(_ipC.cur), seeds:!!(texSeedA&&texSeedA.loaded&&texSeedB&&texSeedB.loaded&&texBicubic&&texBicubic.loaded)}; },
+ _dispSample(stride){ if(!_postRef.cur) return null;   // the pre-bloom display: [maxRGB, alpha] grid
+   stride=stride||8; const W=_postRef.cur.w,H=_postRef.cur.h;
+   const px=new Float32Array(W*H*4); const out=[];
+   gl.bindFramebuffer(36160,_postRef.cur.fbo); gl.readPixels(0,0,W,H,6408,5126,px); gl.bindFramebuffer(36160,null);
+   const sx=Math.max(1,Math.floor(W/160)), sy=Math.max(1,Math.floor(H/90));
+   for(let y=0;y<H;y+=sy) for(let x=0;x<W;x+=sx){ const i=(y*W+x)*4;
+     out.push(+Math.max(px[i],px[i+1],px[i+2]).toFixed(4),+px[i+3].toFixed(4)); }
+   return {w:Math.ceil(W/sx),h:Math.ceil(H/sy),data:out}; },
  _encSample(stride){ if(!_encRef.cur) return null;
    stride=stride||8; const px=new Float32Array(512*512*4); const out=[];
    gl.bindFramebuffer(36160,_encRef.cur.fbo); gl.readPixels(0,0,512,512,6408,5126,px); gl.bindFramebuffer(36160,null);
