@@ -964,14 +964,14 @@ function drawStars(){
 const STARTEX_VS=`#version 300 es
 in vec3 inPos; in vec2 inTC;
 uniform vec4 c260,c261,c263; uniform float uTile;
-out vec2 vTC;
+out vec2 vTC; out vec3 vDir;
 void main(){ vec3 d=normalize(inPos); float w=dot(c263.xyz,d);
  gl_Position=vec4(dot(c260.xyz,d), -dot(c261.xyz,d), w*0.999999, w);   // far depth; w<0 (behind) -> clipped
- vTC=inTC*uTile; }`;
+ vDir=d; vTC=inTC*uTile; }`;
 const STARTEX_FS=`#version 300 es
-precision highp float; in vec2 vTC; out vec4 ocol0;
+precision highp float; in vec2 vTC; in vec3 vDir; out vec4 ocol0;
 uniform sampler2D starTex; uniform float uWhite; uniform float uPow;
-uniform sampler2D uEarthTex;   // earth HDR FBO; .a = earth/atmo/sun coverage (earth writes alpha=1; sky cleared to 0)
+uniform vec3 uEye;             // camera eye in scene space (the c460 row) for the earth occlusion
 uniform vec4 uE2[8]; uniform float uE2On;   // the VERBATIM star-brightness fp (775efaf5/ae34439d family) per-frame consts
 void main(){
  vec3 tx=texture(starTex, vTC).rgb;   // REPEAT + mipmaps; smooth per-face UV -> hardware LOD, no streaks
@@ -988,8 +988,15 @@ void main(){
    // EARTH.mnu star curve fallback: pow(tex, STARS POWSCALE) * STARS WHITENESS.
    st=pow(max(tx,0.0), vec3(uPow))*uWhite;
  }
- // OCCLUDE by the earth (firmware renders stars BEHIND it); display-space pass has no depth, so mask by HDR-FBO coverage .a at this pixel.
- float ea=texelFetch(uEarthTex, ivec2(gl_FragCoord.xy), 0).a; st*=clamp(1.0-ea,0.0,1.0);
+ // OCCLUDE by the earth GEOMETRICALLY: the star ray eye + t*dir hits the unit earth sphere at the
+ // origin iff b<0 and b^2-c>=0 (b=dot(E,d), c=|E|^2-1). Exact (the globe IS the unit sphere in this
+ // space). Replaces the display-alpha mask, broken since the surface writes the REAL firmware display
+ // alpha (~0.14 bright-pass key, not coverage). Bright-limb drowning stays via the additive blend.
+ // (empirically the skybox direction is NEGATED relative to the eye row's space: the un-negated
+ //  test occluded exactly the anti-earth hemisphere - stars drew only over the earth disc)
+ vec3 d=-normalize(vDir);
+ float b=dot(uEye,d), cc=dot(uEye,uEye)-1.0;
+ if(b<0.0 && b*b-cc>=0.0) st=vec3(0.0);
  ocol0=vec4(st, 1.0);
 }`;
 function starCubeTex(src){ const t=gl.createTexture(); gl.bindTexture(34067,t);
@@ -1028,7 +1035,7 @@ function drawStarsTex(){
    if(e2on){ const f=new Float32Array(32); for(let i=0;i<8;i++) for(let j=0;j<4;j++) f[i*4+j]=row.enc2[i][j];
      gl.uniform4fv(U('uE2'),f); } }
  gl.activeTexture(33984+0); gl.bindTexture(3553,star2D); gl.uniform1i(U('starTex'),0);
- gl.activeTexture(33984+1); gl.bindTexture(3553, hdrFBO?hdrFBO.tex:black); gl.uniform1i(U('uEarthTex'),1);
+ { const e=s['460']||[0,0,3,0]; gl.uniform3f(U('uEye'),e[0],e[1],e[2]); }   // camera eye (c460) for the exact earth occlusion
  gl.bindBuffer(34962,starBoxBuf);
  const pl=gl.getAttribLocation(starTexProg,'inPos'); const tl=gl.getAttribLocation(starTexProg,'inTC');
  gl.enableVertexAttribArray(pl); gl.vertexAttribPointer(pl,3,5126,false,20,0);
@@ -1396,9 +1403,19 @@ function drawGlowFaith(){
  if(STARTEX)drawStarsTex();
 }
 // atmosphere shell with LINEAR-HDR output (uLinear=1), additive into the HDR FBO so it feeds the bloom.
+// The atmo shell must share the SURFACE's camera: rows captured at a DIFFERENT camera (scenes 0/1/2/23,
+// atmo eye 2-5x off the surface eye) render the limb as a wrong-scale RING across the frame. Until those
+// scenes' atmo rows are re-harvested from the live cycle, skip the shell when the eyes disagree.
+function atmoCamBad(a,s){
+ const ae=a&&a['460'], se=s&&s['460']; if(!ae||!se) return false;
+ const d=Math.abs(ae[0]-se[0])+Math.abs(ae[1]-se[1])+Math.abs(ae[2]-se[2]);
+ const n=Math.abs(se[0])+Math.abs(se[1])+Math.abs(se[2]);
+ return d>0.4*Math.max(n,1e-6);
+}
 function drawAtmoLinear(){
  if(!aMesh||!scatterTex||got<want)return; const s=D.shared; if(!s['460']||!s['461']||!s['462'])return;
  const a=(ATMO_SCENE?atmoAt(animT):null)||{};
+ if(atmoCamBad(a,s))return;
  const e460=a['460']||s['460'], e461=a['461']||s['461'], e462=a['462']||s['462'];
  const c5=e461.slice(0,3), c7=e462.slice(0,3), c6=_cross(c5,c7), c8=e460.slice(0,3);
  const m0=a['256']||s['256']||s['260'],m1=a['257']||s['257']||s['261'],m2=a['258']||s['258']||s['262'],m3=a['259']||s['259']||s['263'];
@@ -1468,6 +1485,7 @@ function draw(){
 function drawAtmo(){
  if(!aMesh||!scatterTex||got<want)return; const s=D.shared; if(!s['460']||!s['461']||!s['462'])return;
  const a=(ATMO_SCENE?atmoAt(animT):null)||{};
+ if(atmoCamBad(a,s))return;   // mis-captured atmo camera (scenes 0/1/2/23): shell would render as a wrong-scale ring
  const e460=a['460']||s['460'], e461=a['461']||s['461'], e462=a['462']||s['462'];
  const c5=e461.slice(0,3), c7=e462.slice(0,3), c6=_cross(c5,c7), c8=e460.slice(0,3);
  const m0=a['256']||s['256']||s['260'],m1=a['257']||s['257']||s['261'],m2=a['258']||s['258']||s['262'],m3=a['259']||s['259']||s['263'];
