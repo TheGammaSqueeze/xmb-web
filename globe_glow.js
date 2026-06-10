@@ -199,6 +199,11 @@
     if (st.glowRT){ gl.deleteFramebuffer(st.glowRT.fbo); gl.deleteTexture(st.glowRT.tex); }
     // Pyramid level sizes: level0 = (srcW, srcH/2) then halve each dim.
     // (firmware: 512x512 src -> 512x256, 256x128, 128x64, 64x32, 32x16, 16x8, 8x4, 4x2)
+    // NOTE (2026-06-11): the REAL chain size is PER-SCENE - globecap3 fr82800 (sc24) runs a
+    // 256x128..2x1 blur chain while the B0-visit family ran 512-base. A blanket one-octave
+    // shift was tested and measured WORSE at sc24/sc23 (bloom-on pd 92/131 vs 56/59 baseline)
+    // -> reverted. A faithful per-scene pyramid size needs the blur viewports harvested per
+    // scene (the d027-class draws' VIEWPORT lines) before changing this schedule.
     const dims = [];
     let w = srcW, h = srcH >> 1;
     for (let i = 0; i < N_LEVELS; i++){
