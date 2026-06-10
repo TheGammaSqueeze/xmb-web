@@ -568,8 +568,17 @@ void main(){
   // VERBATIM firmware composite (RSX fp 316de80a): out = scene*0.125 + bloom(full weight),
   // then *0.789 decode exposure (HDR.mnu). scene*0.125*0.789 = scene*0.0986 -> surface stays at
   // the validated 0.65/255; bloom restored to FULL weight (the dominant haze the firmware adds).
-  if(uGlow2>0.5) e = e + computeGlare();   // verbatim firmware sun-glare (fp 727d0242), gated
-  if(uPassthru>0.5){ float eg=(abs(uEarthGain)<1e-6)?1.0:uEarthGain; ocol0 = vec4(clamp(e*eg + g * uGlowGain, 0.0, 1.0), clamp(e4.w,0.0,1.0)); return; }   // faithful: LDR scene + limb/sun bloom; α carries the display exponent through to the encode. Unset (0) uEarthGain behaves as 1 so legacy sites need no change.
+  if(uPassthru>0.5){ float eg=(abs(uEarthGain)<1e-6)?1.0:uEarthGain; vec3 base=e*eg + g*uGlowGain;
+    if(uGlow2>0.5){
+      // verbatim sun-glare ADD (the real c868fd6a draw blends ONE,ONE into the display): the fp's
+      // linear output goes through the same dual tone-LUT display encode as every display writer.
+      vec3 r8=computeGlare();
+      vec2 s15=texture(uLut15, r8.xy*(1.0/128.0)).xy;
+      vec2 s14=texture(uLut14, vec2(r8.z,max(r8.x,r8.y))*(1.0/128.0)).xy;
+      base += vec3(s15.y,s15.x,s14.y);
+    }
+    ocol0 = vec4(clamp(base, 0.0, 1.0), clamp(e4.w,0.0,1.0)); return; }   // faithful: LDR scene + limb/sun bloom; α carries the display exponent through to the encode. Unset (0) uEarthGain behaves as 1 so legacy sites need no change.
+  if(uGlow2>0.5) e = e + computeGlare();   // legacy path: linear add pre-tonemap (fp 727d0242), gated
   if(uLutOn>0.5){
     // VERBATIM firmware surface-fp LUT tonemap = THE GOLD WARMTH (measured: LUT(real r2)=gold 1:0.90:0.17).
     // R,G = tex15(hc.xy); B = tex14(hc.z, max(hc.x,hc.y)).x. hc = earth exposed to the firmware r2 range
@@ -1218,13 +1227,7 @@ function drawGlow(){
  gl.uniform1f(C('uLutFb'), psTone?(1.0/(1.0-0.125)):1.0);
  {const sh=D.shared||{};const gv=k=>{const v=sh[k]||[0,0,0,0];return [v[0],v[1],v[2],v[3]];};
   gl.uniform4f(C('c260'),...gv('260'));gl.uniform4f(C('c261'),...gv('261'));gl.uniform4f(C('c262'),...gv('262'));gl.uniform4f(C('c263'),...gv('263'));
-  let grow=null;   // per-scene REAL glare consts (nearest-t harvested row) - the firmware's own dormant/active animation
-  if(GLARE_ROWS && SCENES_IDX && SCENES_IDX[sceneIdx]){
-    const rows=GLARE_ROWS[String(SCENES_IDX[sceneIdx].scene)];
-    if(rows&&rows.length){ grow=rows[0]; for(const e of rows){ if(Math.abs(e.t-animT)<Math.abs(grow.t-animT)) grow=e; } } }
-  const gsrc=grow?grow.gfc:GLOW_FC;
-  const gf=new Float32Array(17*4);for(let i=0;i<17;i++){const v=gsrc[i]||[0,0,0,0];gf[i*4]=v[0];gf[i*4+1]=v[1];gf[i*4+2]=v[2];gf[i*4+3]=v[3];}
-  gl.uniform4fv(C('gfc'),gf);}
+  gl.uniform4fv(C('gfc'),glareGfc());}
  gl.bindVertexArray(glowVAO);
  gl.drawArrays(4,0,3);
  gl.bindVertexArray(null);
@@ -1284,6 +1287,15 @@ function drawFlares(){
 //   F_disp (LDR): col0 earth (uMode=1, per-scene tex14/15, 1/128 scale, feedback) + drawAtmo (tonemapped limb)
 //   F_bloom (HDR): the earth DEPTH (blitted) occludes drawAtmoLinear (HDR limb) + drawSunDisc -> bright-pass -> bloom
 // composite (uPassthru): canvas = F_disp + bloom (NO re-tonemap; F_disp is already LDR).
+function glareGfc(){   // nearest-t REAL per-scene glare consts (vp c868fd6a rows); GLOW_FC fallback
+ let grow=null;
+ if(GLARE_ROWS && SCENES_IDX && SCENES_IDX[sceneIdx]){
+   const rows=GLARE_ROWS[String(SCENES_IDX[sceneIdx].scene)];
+   if(rows&&rows.length){ grow=rows[0]; for(const e of rows){ if(Math.abs(e.t-animT)<Math.abs(grow.t-animT)) grow=e; } } }
+ const gsrc=grow?grow.gfc:GLOW_FC;
+ const gf=new Float32Array(17*4);for(let i=0;i<17;i++){const v=gsrc[i]||[0,0,0,0];gf[i*4]=v[0];gf[i*4+1]=v[1];gf[i*4+2]=v[2];gf[i*4+3]=v[3];}
+ return gf;
+}
 function drawGlowFaith(){
  const W=canvas.width,H=canvas.height;
  const Fd=ensureHDR(W,H), Fb=ensureHDR2(W,H);
@@ -1336,9 +1348,16 @@ function drawGlowFaith(){
  gl.useProgram(cprog);
  gl.activeTexture(33984+0);gl.bindTexture(3553,Fd.tex);gl.uniform1i(C('uEarth'),0);
  gl.activeTexture(33984+1);gl.bindTexture(3553,black);gl.uniform1i(C('uGlow'),1);
- gl.activeTexture(33984+2);gl.bindTexture(3553,black);gl.uniform1i(C('uSprite'),2);
+ gl.activeTexture(33984+2);gl.bindTexture(3553,glowSprite||black);gl.uniform1i(C('uSprite'),2);
+ gl.activeTexture(33984+3);gl.bindTexture(3553,CAP_T15||sharedTex.tex15);gl.uniform1i(C('uLut15'),3);
+ gl.activeTexture(33984+4);gl.bindTexture(3553,CAP_T14||sharedTex.tex14);gl.uniform1i(C('uLut14'),4);
  gl.uniform3fv(C('uGlowGain'),new Float32Array([0,0,0]));
- gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uLutOn'),0.0);gl.uniform1f(C('uGlow2'),0.0);gl.uniform2f(C('uDims'),W,H);
+ gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uLutOn'),0.0);gl.uniform2f(C('uDims'),W,H);
+ // verbatim sun-glare INTO the display (the real d023 runs pre-encode, so the bloom chain blooms it)
+ gl.uniform1f(C('uGlow2'),GLOW2);
+ {const sh=D.shared||{};const gv=k=>{const v=sh[k]||[0,0,0,0];return [v[0],v[1],v[2],v[3]];};
+  gl.uniform4f(C('c260'),...gv('260'));gl.uniform4f(C('c261'),...gv('261'));gl.uniform4f(C('c262'),...gv('262'));gl.uniform4f(C('c263'),...gv('263'));
+  gl.uniform4fv(C('gfc'),glareGfc());}
  gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
  if(useBurst){
    // verbatim SUN-DISC BURST into the post RT (occlusion sampled from F_disp - no feedback)
@@ -1895,6 +1914,7 @@ set cull(v){ CULL=v?1:0; },
  get t2all(){ return T2ALL; },
  set starBri(v){ STAR_BRI=v; },
  set glow2(v){ GLOW2=v?1:0; }, get glow2(){ return GLOW2; },
+ get glareinfo(){ try{ const s=GLARE_ROWS?Object.keys(GLARE_ROWS).length:0; const cur=(GLARE_ROWS&&SCENES_IDX&&SCENES_IDX[sceneIdx])?(GLARE_ROWS[String(SCENES_IDX[sceneIdx].scene)]||[]).length:-1; return JSON.stringify({scenes:s,curRows:cur,glow2:GLOW2}); }catch(e){ return ''+e; } },
  set burst(v){ BURST=v?1:0; }, get burst(){ return BURST; },   // verbatim sun-disc burst pass (needs flare_scene data)
  set bloomdisp(v){ BLOOMDISP=v?1:0; }, get bloomdisp(){ return BLOOMDISP; },
  set flares(v){ FLARES=v?1:0; }, get flares(){ return FLARES; },
