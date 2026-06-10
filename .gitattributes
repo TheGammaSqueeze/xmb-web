@@ -1,3 +1,4 @@
 globe_assets/gaia_lut/captured2/** filter=lfs diff=lfs merge=lfs -text
 globe_assets/gaia_lut/seeds_cap3/*.bin filter=lfs diff=lfs merge=lfs -text
 globe_assets/flares_cap3.json filter=lfs diff=lfs merge=lfs -text
+globe_assets/flares_gcap3.json filter=lfs diff=lfs merge=lfs -text
