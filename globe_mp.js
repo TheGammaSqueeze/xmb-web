@@ -972,6 +972,8 @@ const STARTEX_FS=`#version 300 es
 precision highp float; in vec2 vTC; in vec3 vDir; out vec4 ocol0;
 uniform sampler2D starTex; uniform float uWhite; uniform float uPow;
 uniform vec3 uEye;             // camera eye in scene space (the c460 row) for the earth occlusion
+uniform vec4 c260,c261,c263;   // the SURFACE camera rows (shared with the VS): per-pixel ray reconstruction
+uniform vec2 uVP; uniform float uDbg;
 uniform vec4 uE2[8]; uniform float uE2On;   // the VERBATIM star-brightness fp (775efaf5/ae34439d family) per-frame consts
 void main(){
  vec3 tx=texture(starTex, vTC).rgb;   // REPEAT + mipmaps; smooth per-face UV -> hardware LOD, no streaks
@@ -988,14 +990,21 @@ void main(){
    // EARTH.mnu star curve fallback: pow(tex, STARS POWSCALE) * STARS WHITENESS.
    st=pow(max(tx,0.0), vec3(uPow))*uWhite;
  }
- // OCCLUDE by the earth GEOMETRICALLY: the star ray eye + t*dir hits the unit earth sphere at the
- // origin iff b<0 and b^2-c>=0 (b=dot(E,d), c=|E|^2-1). Exact (the globe IS the unit sphere in this
- // space). Replaces the display-alpha mask, broken since the surface writes the REAL firmware display
- // alpha (~0.14 bright-pass key, not coverage). Bright-limb drowning stays via the additive blend.
- // (empirically the skybox direction is NEGATED relative to the eye row's space: the un-negated
- //  test occluded exactly the anti-earth hemisphere - stars drew only over the earth disc)
- vec3 d=-normalize(vDir);
+ // OCCLUDE by the earth GEOMETRICALLY, in the SURFACE camera's own space (the skybox vertex
+ // direction lives in a flipped basis - unusable for this test). The pixel's world ray direction
+ // = the intersection line of its two camera planes: ndc.x=(c260.P)/(c263.P) and
+ // ndc.y=-(c261.P)/(c263.P) (the surface renders with uFlipY=-1), so
+ // d = cross(c260.xyz - ndc.x*c263.xyz, -c261.xyz - ndc.y*c263.xyz), sign-fixed to point in
+ // front of the camera (dot(c263.xyz,d)>0). Occluded iff the ray from the eye (c460) hits the
+ // unit earth sphere: b=dot(E,d)<0 and b^2-(|E|^2-1)>=0. Exact; replaces the display-alpha mask
+ // (the surface writes the REAL firmware display alpha, not coverage - and night-side earth
+ // alpha clamps to 0, so thresholding cannot work either).
+ vec2 ndc=vec2(2.0*gl_FragCoord.x/uVP.x-1.0, 1.0-2.0*gl_FragCoord.y/uVP.y);   // y mirrored: the earth reaches the canvas through the FBO+composite flip; stars draw direct
+ vec3 d=cross(c260.xyz-ndc.x*c263.xyz, -c261.xyz-ndc.y*c263.xyz);
+ if(dot(c263.xyz,d)<0.0) d=-d;
+ d=normalize(d);
  float b=dot(uEye,d), cc=dot(uEye,uEye)-1.0;
+ if(uDbg>0.5){ ocol0=vec4((b<0.0&&b*b-cc>=0.0)?vec3(1.0,0.0,0.0):vec3(0.0,0.3,0.0),1.0); return; }
  if(b<0.0 && b*b-cc>=0.0) st=vec3(0.0);
  ocol0=vec4(st, 1.0);
 }`;
@@ -1035,7 +1044,20 @@ function drawStarsTex(){
    if(e2on){ const f=new Float32Array(32); for(let i=0;i<8;i++) for(let j=0;j<4;j++) f[i*4+j]=row.enc2[i][j];
      gl.uniform4fv(U('uE2'),f); } }
  gl.activeTexture(33984+0); gl.bindTexture(3553,star2D); gl.uniform1i(U('starTex'),0);
- { const e=s['460']||[0,0,3,0]; gl.uniform3f(U('uEye'),e[0],e[1],e[2]); }   // camera eye (c460) for the exact earth occlusion
+ { // EXACT camera eye from the surface rows: the center C solves c260.(C,1)=c261.(C,1)=c263.(C,1)=0
+   // (the projective null point), guaranteeing the occlusion disc matches the drawn earth to subpixel.
+   const r0=s['260'],r1=s['261'],r3=s['263']; let e=s['460']||[0,0,3,0];
+   if(r0&&r1&&r3){
+     const a=r0[0],b=r0[1],c=r0[2], d=r1[0],f=r1[1],g=r1[2], h=r3[0],i=r3[1],j=r3[2];
+     const det=a*(f*j-g*i)-b*(d*j-g*h)+c*(d*i-f*h);
+     if(Math.abs(det)>1e-12){
+       const x=-r0[3],y=-r1[3],z=-r3[3];
+       e=[ (x*(f*j-g*i)-b*(y*j-g*z)+c*(y*i-f*z))/det,
+           (a*(y*j-g*z)-x*(d*j-g*h)+c*(d*z-y*h))/det,
+           (a*(f*z-y*i)-b*(d*z-y*h)+x*(d*i-f*h))/det ];
+     } }
+   gl.uniform3f(U('uEye'),e[0],e[1],e[2]); gl.uniform1f(U('uDbg'),(typeof window!=='undefined'&&window.__starDbg)?1:0);
+   gl.uniform2f(U('uVP'),canvas.width,canvas.height); }   // exact eye + viewport for the per-pixel earth occlusion
  gl.bindBuffer(34962,starBoxBuf);
  const pl=gl.getAttribLocation(starTexProg,'inPos'); const tl=gl.getAttribLocation(starTexProg,'inTC');
  gl.enableVertexAttribArray(pl); gl.vertexAttribPointer(pl,3,5126,false,20,0);
