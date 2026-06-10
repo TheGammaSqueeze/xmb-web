@@ -1814,6 +1814,11 @@ set cull(v){ CULL=v?1:0; },
      let s=0,mx=0; for(let i=0;i<256*128;i++){ const v=Math.max(px[i*4],px[i*4+1],px[i*4+2]); s+=v; if(v>mx)mx=v; }
      return {mean:+(s/(256*128)).toFixed(5), max:+mx.toFixed(4)}; };
    return {A:rd(_ipA.cur), C:rd(_ipC.cur), seeds:!!(texSeedA&&texSeedA.loaded&&texSeedB&&texSeedB.loaded&&texBicubic&&texBicubic.loaded)}; },
+ _encSample(stride){ if(!_encRef.cur) return null;
+   stride=stride||8; const px=new Float32Array(512*512*4); const out=[];
+   gl.bindFramebuffer(36160,_encRef.cur.fbo); gl.readPixels(0,0,512,512,6408,5126,px); gl.bindFramebuffer(36160,null);
+   for(let y=0;y<512;y+=stride) for(let x=0;x<512;x+=stride){ const i=(y*512+x)*4; out.push(+Math.max(px[i],px[i+1],px[i+2]).toFixed(5)); }
+   return out; },
  _inscatSample(which,stride){ const rt=(which==='A'?_ipA:which==='B'?_ipB:_ipC).cur; if(!rt) return null;
    stride=stride||8; const px=new Float32Array(256*128*4); const out=[];
    gl.bindFramebuffer(36160,rt.fbo); gl.readPixels(0,0,256,128,6408,5126,px); gl.bindFramebuffer(36160,null);
