@@ -1433,10 +1433,14 @@ function drawGlowFaith(){
 // atmo eye 2-5x off the surface eye) render the limb as a wrong-scale RING across the frame. Until those
 // scenes' atmo rows are re-harvested from the live cycle, skip the shell when the eyes disagree.
 function atmoCamBad(a,s){
- const ae=a&&a['460'], se=s&&s['460']; if(!ae||!se) return false;
- const d=Math.abs(ae[0]-se[0])+Math.abs(ae[1]-se[1])+Math.abs(ae[2]-se[2]);
- const n=Math.abs(se[0])+Math.abs(se[1])+Math.abs(se[2]);
- return d>0.4*Math.max(n,1e-6);
+ const rel=(av,sv)=>{ if(!av||!sv) return 0;
+   let d=0,n=0; for(let i=0;i<3;i++){ d+=Math.abs(av[i]-sv[i]); n+=Math.abs(sv[i]); }
+   return d/Math.max(n,1e-6); };
+ // eye row AND the projection w-row must both agree with the surface camera: sparse/mis-captured
+ // atmo rows can interpolate a plausible eye while the rotation rows are wrong (the sc1 ring).
+ if(rel(a&&a['460'], s&&s['460'])>0.4) return true;
+ if(rel(a&&a['259'], s&&s['263'])>0.25) return true;
+ return false;
 }
 function drawAtmoLinear(){
  if(!aMesh||!scatterTex||got<want)return; const s=D.shared; if(!s['460']||!s['461']||!s['462'])return;
