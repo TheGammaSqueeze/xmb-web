@@ -459,6 +459,7 @@ void main(){
 const A_FS=`#version 300 es
 precision highp float;
 in vec2 vTC; out vec4 ocol0; uniform sampler2D tex0; uniform vec4 fc[17]; uniform float uLinear; uniform float uAtmoHdr;
+uniform sampler2D aTex14; uniform sampler2D aTex15; uniform float uALut;   // the per-scene tone LUTs for the VERBATIM display tail (fp 63d3246d)
 float pc(float x,float a,float b){return (x!=x)?0.:clamp(x,a,b);} float fma1(float a,float b,float c){return a*b+c;}
 void main(){
  vec4 tc0=vec4(vTC,0.,1.);vec4 r0=vec4(0.),r1=vec4(0.),r2=vec4(0.),r3=vec4(0.);
@@ -470,8 +471,17 @@ void main(){
  r1.w=r3.x*2.;r1.w=(-r1.w+fc[15].x);r1.y=r3.x*r3.x;r1.y=r1.y*r1.w;r0.w=exp2(r0.w);r0.w=r2.x*r0.w;
  r0.xyz=r0.xyz*fc[16].x;r0.xyz=(-r1.y*r0.xyz+r0.xyz);r0.w=(-r1.x*r0.w+r0.w);r0.xyz=((r0.w*r0.xyz+r0.xyz)*uAtmoHdr);
  if(uLinear>0.5){ ocol0=vec4(r0.xyz,1.0); return; }   // GLOW path: emit linear HDR atmo so it feeds the bloom
+ if(uALut>0.5){
+   // VERBATIM display tail (fp 63d3246d): rgb = HDR*8 -> dual tone-LUT encode (R=t15.ch1(8R,8G),
+   // G=t15.ch0, B=t14.ch1(8B,max(8R,8G))); alpha = the raw scatter factor r0.w. No feedback term.
+   vec3 r8 = r0.xyz*8.0;
+   vec2 s15 = texture(aTex15, r8.xy*(1.0/128.0)).xy;
+   vec2 s14 = texture(aTex14, vec2(r8.z, max(r8.x,r8.y))*(1.0/128.0)).xy;
+   ocol0 = vec4(s15.y, s15.x, s14.y, clamp(r0.w,0.0,1.0));
+   return;
+ }
  vec3 tcol=r0.xyz*0.789; float Wl=3.40918; tcol=(tcol*(1.0+tcol/(Wl*Wl)))/(1.0+tcol);
- ocol0=vec4(clamp(tcol,0.0,1.0),clamp(r0.w,0.0,1.0));   // α = the fp's final scatter term r0.w = the display exponent at the limb (measured real ring α≈0.2 vs earth 0.024 / sky ~0.7)
+ ocol0=vec4(clamp(tcol,0.0,1.0),clamp(r0.w,0.0,1.0));   // fallback tonemap when no per-scene LUTs
 }`;
 
 // ---- GLOW COMPOSITE (fullscreen) : combines linear-HDR earth + bloom glow, then the
@@ -1425,6 +1435,10 @@ function drawAtmo(){
  // _AtmSpaceIv (TEXUNIT0): per-scene -> picked scene's LIMB lut; eclipse -> atmo draw's own tex0 RT (tex0atmEcl).
  const aScat=((INSCAT_GEN&&_ipA.cur)?_ipA.cur.tex:null) || CAP_LIMB || ((INSCAT_PS&&_psScat) ? _psScat : (INSCAT_ECL ? ((ATMO_SOLID&&sharedTex.tex0atmEclSolid)?sharedTex.tex0atmEclSolid:((ATMO_VFLIP&&sharedTex.tex0atmEclFlip)?sharedTex.tex0atmEclFlip:(sharedTex.tex0atmEcl||sharedTex.tex4ecl||scatterTex))) : scatterTex));
  gl.activeTexture(33984);gl.bindTexture(3553,aScat);gl.uniform1i(U('tex0'),0);
+ const _t14=CAP_T14||sharedTex.tex14, _t15=CAP_T15||sharedTex.tex15;
+ gl.activeTexture(33985);gl.bindTexture(3553,_t14);gl.uniform1i(U('aTex14'),1);
+ gl.activeTexture(33986);gl.bindTexture(3553,_t15);gl.uniform1i(U('aTex15'),2);
+ gl.uniform1f(U('uALut'),(_t14&&_t15)?1.0:0.0);   // verbatim fp 63d3246d display tail when the per-scene LUTs exist
  gl.disable(2884); gl.depthMask(false); gl.enable(3042); gl.blendFuncSeparate(1,1,1,0);   // ONE,ONE additive color; alpha REPLACED by the atmo scatter term (measured: real limb ring α≈0.2 < sky α, so not additive)
  let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
  let tl=gl.getAttribLocation(aprog,'in_tc0');gl.bindBuffer(34962,aMesh.tbuf);gl.enableVertexAttribArray(tl);gl.vertexAttribPointer(tl,4,5126,false,0,0);
@@ -1867,7 +1881,7 @@ set cull(v){ CULL=v?1:0; },
  get _info(){ return {scene:sceneIdx, nScenes:SCENES?SCENES.length:0, animT:animT.toFixed(3)}; },
  get _diag(){ return {scene:sceneIdx, t:+animT.toFixed(4), capT14:!!CAP_T14, capLut:!!CAP_LUT, capLimb:!!CAP_LIMB, atmo:ATMO,
    lutCache:Object.keys(CAP_LUT_CACHE||{}).length, toneCache:Object.keys(CAP_TONE_CACHE||{}).length,
-   err:errlog, nScenes:SCENES?SCENES.length:0, c260:D&&D.shared?D.shared['260']:null,
+   err:errlog, nScenes:SCENES?SCENES.length:0, c260:D&&D.shared?D.shared['260']:null, c262:D&&D.shared?D.shared['262']:null, c460:D&&D.shared?D.shared['460']:null,
    bloomScenes:BLOOM_SCENES?Object.keys(BLOOM_SCENES).length:0,
    faithPath:!!(GLOWFAITH&&hdrExt&&cprog&&(!TONELUT_PS||CAP_T14))}; },
  // DEBUG: capture the EXACT gl_Position the surface VS produces for patch `pi` via transform feedback.
