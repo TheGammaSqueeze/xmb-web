@@ -71,7 +71,8 @@ let _ipValid=false;             // the generated buffers correspond to the CURRE
 let FLARE_ROWS=null, FLARES=0, FLARESPRE=0, DISPRETAIN=0;   // per-frame sun-flare billboard rows (vp 48ad6e97 windows + fp consts); MPGlobe.flares gate
 let BIAS0=-8.0, BIAS2=-0.1562;   // REAL RSX LOD biases (DRAWCALLS); MPGlobe.bias0/bias2 for sampling A/B
 let STARS2=0;                    // MPGlobe.stars2: verbatim per-frame star brightness (the harvested enc2 consts) instead of the .mnu curve
-let GLARE_ROWS=null;             // per-scene REAL sun-glare consts (vp c868fd6a, 17 fc rows in the GLOW_FC layout; [13]/[16]=color, denormal-zero when dormant)
+let GLARE_ROWS=null;
+let TRANS_TABLE=null;             // measured per-boundary transition envelope (present-derived dips; transition_table.json)             // per-scene REAL sun-glare consts (vp c868fd6a, 17 fc rows in the GLOW_FC layout; [13]/[16]=color, denormal-zero when dormant)
 let FAITH_POLICY=null;           // faithful_policy.json: per-scene winners from the all-scene fbf sweep (measured vs presents)
 let FAITH_AUTO=0;                // MPGlobe.faithauto: auto-gate BLOOMDISP per scene from FAITH_POLICY
 let BLOOMDISP=0;                // MPGlobe.bloomdisp: FAITHFUL bloom-of-display (encode bd9c5fac -> pyramid -> display+bloom*0.125, the burst corona). Gated until measured vs presents.
@@ -1131,11 +1132,23 @@ function drawFade(fade){
  gl.enable(3042); gl.blendFunc(770,771);   // SRC_ALPHA, ONE_MINUS_SRC_ALPHA -> black over scene
  gl.drawArrays(4,0,3); gl.disable(3042);
 }
-function fadeFactor(t,durSecs){   // 1.0 = full scene; 0.0 = black. dip-to-black at each scene end/start.
+function boundaryDip(prevScene){   // the MEASURED dip depth after scene N (present-derived; 1=black, 0=continuous)
+ if(!TRANS_TABLE) return 1.0;
+ const e=TRANS_TABLE[String(prevScene)];
+ return e?Math.min(1,Math.max(0,e.dip)):1.0;
+}
+function fadeFactor(t,durSecs){   // 1.0 = full scene; 0.0 = black-dip floor per the MEASURED boundary envelope.
  const f=FADE_SECS/Math.max(1,durSecs||SCENE_SECS);   // fade fraction of THIS scene (real duration) at each end
- if(t<f) return t/f;                          // fade IN
- if(t>1.0-f) return (1.0-t)/f;                // fade OUT
- return 1.0;
+ let raw=1.0;
+ let dip=1.0;
+ if(t<f){ raw=t/f;
+   const prev=SCENES_IDX?((sceneIdx-1+SCENES_IDX.length)%SCENES_IDX.length):null;   // fading IN from the PREVIOUS scene's boundary
+   if(prev!==null&&SCENES_IDX[prev]) dip=boundaryDip(SCENES_IDX[prev].scene); }
+ else if(t>1.0-f){ raw=(1.0-t)/f;
+   if(SCENES_IDX&&SCENES_IDX[sceneIdx]) dip=boundaryDip(SCENES_IDX[sceneIdx].scene); }   // fading OUT toward THIS scene's boundary
+ else return 1.0;
+ // measured-depth dip: full dip (1.0) = the old behavior; continuous (0) = no fade at all.
+ return 1.0-dip*(1.0-Math.min(1,Math.max(0,raw)));
 }
 // GLOW render path: earth+atmo -> linear-HDR FBO -> buildGlow -> composite CURVE((earthHDR+glow*g)*slum*warmbias) -> canvas.
 function drawGlow(){
@@ -1844,6 +1857,7 @@ async function load(){
        FAITH_POLICY=await fetch(BASE+'faithful_policy.json').then(r=>r.ok?r.json():null).catch(()=>null);
        if(typeof window!=='undefined')window.__ld.push('glare');
        GLARE_ROWS=await fetch(BASE+'glare_gcap3_rows.json').then(r=>r.ok?r.json():null).catch(()=>null);   // globecap3-aligned (same capture as the presents + the proven fan-window layout)
+       TRANS_TABLE=await fetch(BASE+'transition_table.json').then(r=>r.ok?r.json():null).catch(()=>null);
        // per-frame bloom-of-display chain rows (encode FC + blur kernel + combine scalars, all animated per frame)
        if(SCENES_IDX){ BLOOM_SCENES={};
          await Promise.all(SCENES_IDX.map(s=>fetch(BASE+'bloom_scene_'+String(s.scene).padStart(2,'0')+'_cap2.json')
