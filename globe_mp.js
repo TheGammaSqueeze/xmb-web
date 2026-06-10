@@ -1335,9 +1335,11 @@ function drawGlowFaith(){
  // texture RT first (the firmware encodes the DISPLAY - earth+limb+burst - into the bloom source, so
  // the corona emerges from blooming the post-burst scene, not the limb-only buffer).
  const C=n=>gl.getUniformLocation(cprog,n);
- if(FAITH_AUTO&&FAITH_POLICY&&SCENES_IDX&&SCENES_IDX[sceneIdx]){   // measurement-driven per-scene gating (the fbf-sweep winners)
-   const fa=FAITH_POLICY.bloomScenes&&FAITH_POLICY.bloomScenes.indexOf(SCENES_IDX[sceneIdx].scene)>=0;
-   BLOOMDISP=fa?1:0; }
+ if(FAITH_AUTO&&FAITH_POLICY&&SCENES_IDX&&SCENES_IDX[sceneIdx]){   // measurement-driven gating (the fbf-sweep winners)
+   const scid=SCENES_IDX[sceneIdx].scene;
+   const tw=FAITH_POLICY.bloomTertiles&&FAITH_POLICY.bloomTertiles[String(scid)];
+   if(tw){ BLOOMDISP=tw[Math.min(2,Math.floor(animT*3))]?1:0; }   // per-(scene,t-tertile): restores the sc24 burst corona while keeping early-scene legacy
+   else { BLOOMDISP=(FAITH_POLICY.bloomScenes&&FAITH_POLICY.bloomScenes.indexOf(scid)>=0)?1:0; } }
  const burstRows=(BURST && BURST_FAN && FLARE_SCENES && typeof GlobeBurst!=='undefined' && SCENES_IDX && SCENES_IDX[sceneIdx]) ? (FLARE_SCENES[String(SCENES_IDX[sceneIdx].scene)]||null) : null;
  const useBurst=!!(burstRows && burstRows.length);
  const useFP=useBurst||(BLOOMDISP&&encProg);   // route the composite through the post RT whenever the firmware bloom-of-display path needs to sample it
