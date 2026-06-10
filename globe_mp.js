@@ -1303,11 +1303,14 @@ function drawFlares(){
 //   F_disp (LDR): col0 earth (uMode=1, per-scene tex14/15, 1/128 scale, feedback) + drawAtmo (tonemapped limb)
 //   F_bloom (HDR): the earth DEPTH (blitted) occludes drawAtmoLinear (HDR limb) + drawSunDisc -> bright-pass -> bloom
 // composite (uPassthru): canvas = F_disp + bloom (NO re-tonemap; F_disp is already LDR).
-function glareGfc(){   // nearest-t REAL per-scene glare consts (vp c868fd6a rows); GLOW_FC fallback
- let grow=null;
+function glareRow(){   // nearest-t REAL per-scene glare row (vp c868fd6a captures)
  if(GLARE_ROWS && SCENES_IDX && SCENES_IDX[sceneIdx]){
    const rows=GLARE_ROWS[String(SCENES_IDX[sceneIdx].scene)];
-   if(rows&&rows.length){ grow=rows[0]; for(const e of rows){ if(Math.abs(e.t-animT)<Math.abs(grow.t-animT)) grow=e; } } }
+   if(rows&&rows.length){ let g=rows[0]; for(const e of rows){ if(Math.abs(e.t-animT)<Math.abs(g.t-animT)) g=e; } return g; } }
+ return null;
+}
+function glareGfc(){   // nearest-t REAL per-scene glare consts (vp c868fd6a rows); GLOW_FC fallback
+ const grow=glareRow();
  const gsrc=grow?grow.gfc:GLOW_FC;
  const gf=new Float32Array(17*4);for(let i=0;i<17;i++){const v=gsrc[i]||[0,0,0,0];gf[i*4]=v[0];gf[i*4+1]=v[1];gf[i*4+2]=v[2];gf[i*4+3]=v[3];}
  return gf;
@@ -1357,8 +1360,10 @@ function drawGlowFaith(){
  const C=n=>gl.getUniformLocation(cprog,n);
  if(FAITH_AUTO&&FAITH_POLICY&&SCENES_IDX&&SCENES_IDX[sceneIdx]){   // measurement-driven gating (the fbf-sweep winners)
    const scid=SCENES_IDX[sceneIdx].scene;
+   const ww=FAITH_POLICY.bloomWindows&&FAITH_POLICY.bloomWindows[String(scid)];
    const tw=FAITH_POLICY.bloomTertiles&&FAITH_POLICY.bloomTertiles[String(scid)];
-   if(tw){ BLOOMDISP=tw[Math.min(2,Math.floor(animT*3))]?1:0; }   // per-(scene,t-tertile): restores the sc24 burst corona while keeping early-scene legacy
+   if(ww){ BLOOMDISP=ww.some(w=>animT>=w[0]&&animT<=w[1])?1:0; }  // per-(scene,t-window) winners (clean warmed 12-pt protocol; tertiles damaged scene tails - sc24 t=0.94 was 53 vs 17)
+   else if(tw){ BLOOMDISP=tw[Math.min(2,Math.floor(animT*3))]?1:0; }   // per-(scene,t-tertile): restores the sc24 burst corona while keeping early-scene legacy
    else { BLOOMDISP=(FAITH_POLICY.bloomScenes&&FAITH_POLICY.bloomScenes.indexOf(scid)>=0)?1:0; } }
  const burstRows=(BURST && BURST_FAN && FLARE_SCENES && typeof GlobeBurst!=='undefined' && SCENES_IDX && SCENES_IDX[sceneIdx]) ? (FLARE_SCENES[String(SCENES_IDX[sceneIdx].scene)]||null) : null;
  // live-harvested glare rows can drive the same verbatim fan: vc window captured at c[256..272]
@@ -1383,12 +1388,17 @@ function drawGlowFaith(){
  gl.activeTexture(33984+4);gl.bindTexture(3553,CAP_T14||sharedTex.tex14);gl.uniform1i(C('uLut14'),4);
  gl.uniform3fv(C('uGlowGain'),new Float32Array([0,0,0]));
  gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uLutOn'),0.0);gl.uniform2f(C('uDims'),W,H);
- // sun-glare: handled by the verbatim 65-vertex FAN below (glareBurst); the fullscreen
- // computeGlare add over-paints (the real geometry is sun-positioned, not screen-wide) - keep off here.
+ // sun-glare: the c868fd6a draw is NOT fullscreen - VERTS f014391_d021 decoded it as the 65-vertex
+ // TRIANGLE-FAN disc (radius 5/9, model space) positioned by its OWN MVP (row vc[6..9]); at most
+ // (scene,t) it transforms to a tiny spot or fully off-screen (fr82800: every vert at ndc ~3.7).
+ // Painting its fp over the whole screen (the old uGlow2 fullscreen hack) over-paints by
+ // construction - validated kaleidoscope at sc24 t=0.83. The fan path (GlobeBurst) is the
+ // correct geometry; keep the composite's fullscreen glare OFF.
  gl.uniform1f(C('uGlow2'),0.0);
  {const sh=D.shared||{};const gv=k=>{const v=sh[k]||[0,0,0,0];return [v[0],v[1],v[2],v[3]];};
   gl.uniform4f(C('c260'),...gv('260'));gl.uniform4f(C('c261'),...gv('261'));gl.uniform4f(C('c262'),...gv('262'));gl.uniform4f(C('c263'),...gv('263'));
-  gl.uniform4fv(C('gfc'),glareGfc());}
+  gl.uniform4fv(C('gfc'),glareGfc());
+  if(typeof window!=='undefined'){const grow=glareRow();window.__glareDbg={act:false,t:grow?grow.t:null,col:grow&&grow.gfc&&grow.gfc[13]?grow.gfc[13].slice(0,3):null};}}
  gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
  if(useBurst){
    // verbatim SUN-DISC BURST into the post RT (occlusion sampled from F_disp - no feedback)
