@@ -69,6 +69,7 @@ let INSCAT_GEN=0;               // MPGlobe.inscatgen: use the generated bufA/buf
 let SEED_MANIFEST=null, SEED_CACHE={}, _seedCur=null;   // cap3-aligned per-keyframe recovered seeds (seeds_cap3/)
 let _ipValid=false;             // the generated buffers correspond to the CURRENT scene's seeds
 let FLARE_ROWS=null, FLARES=0;   // per-frame sun-flare billboard rows (vp 48ad6e97 windows + fp consts); MPGlobe.flares gate
+let BIAS0=-8.0, BIAS2=-0.1562;   // REAL RSX LOD biases (DRAWCALLS); MPGlobe.bias0/bias2 for sampling A/B
 let STARS2=0;                    // MPGlobe.stars2: verbatim per-frame star brightness (the harvested enc2 consts) instead of the .mnu curve
 let FAITH_POLICY=null;           // faithful_policy.json: per-scene winners from the all-scene fbf sweep (measured vs presents)
 let FAITH_AUTO=0;                // MPGlobe.faithauto: auto-gate BLOOMDISP per scene from FAITH_POLICY
@@ -330,7 +331,8 @@ in vec4 tc0,tc3,tc4,tc5,tc6,tc8,tc9; in vec3 vN; in vec3 vL; in vec3 vSph; in ve
 uniform sampler2D tex0,tex1,tex2,tex3,tex4,tex5,tex6,tex13,tex14,tex15;   // tex0-3 = THIS patch's 4 firmware tiles (t00-t03)
 uniform samplerCube earthCube, cloudsCube, maskCube;   // legacy cube-map path (kept for DBG/fallback)
 uniform vec4 fc[23];
-uniform float uDbg, uMode, uSlum, uTiles, uT2bad;   // uTiles=1 -> per-patch tiles; uT2bad=1 -> this patch's t02 detail tile is corrupt, sample cloud from the cube instead
+uniform float uDbg, uMode, uSlum, uTiles, uT2bad;
+uniform float uBias0; uniform float uBias2;   // REAL RSX LOD biases (-8.0 / -0.1562), runtime-tunable for sampling A/B   // uTiles=1 -> per-patch tiles; uT2bad=1 -> this patch's t02 detail tile is corrupt, sample cloud from the cube instead
 uniform float uLutScale, uFeedback;   // firmware LUT COORD_SCALE2 (tex14/15 are UNNORMALIZED: scale=1/128). default 1.0 (legacy). r2 is sampled at r2*uLutScale.
 out vec4 ocol0;
 vec3 nrm(vec3 v){return length(v)>0.0?normalize(v):v;}
@@ -343,9 +345,9 @@ void main(){
   vec3 sd = normalize(vSph);   // seamless cube-map sample direction (replaces per-patch tile UVs)
   vec4 r0=vec4(0.),r1=vec4(0.),r2=vec4(0.),r3=vec4(0.),r4=vec4(0.);
   vec4 h0=vec4(0.),h1=vec4(0.),h2=vec4(0.),h3=vec4(0.),h4=vec4(0.),h5=vec4(0.),h6=vec4(0.),h7=vec4(0.);
-  r2.xyz = uTiles>0.5 ? texture(tex0, tc0.xy, -8.0).xyz : texture(earthCube, sd).xyz;   // fp: TEX2D(0, tc0.xy); REAL RSX sampler: LOD bias -8.0 (mip0 pinned, live DRAWCALLS)
+  r2.xyz = uTiles>0.5 ? texture(tex0, tc0.xy, uBias0).xyz : texture(earthCube, sd).xyz;   // fp: TEX2D(0, tc0.xy); REAL RSX sampler: LOD bias -8.0 (mip0 pinned, live DRAWCALLS)
   h2.xyz = nrm(tc7.xyz);
-  r3.xyz = uTiles>0.5 ? texture(tex1, tc0.zw, -8.0).xyz : texture(earthCube, sd).xyz;   // fp: TEX2D(1, tc0.zw); REAL RSX bias -8.0
+  r3.xyz = uTiles>0.5 ? texture(tex1, tc0.zw, uBias0).xyz : texture(earthCube, sd).xyz;   // fp: TEX2D(1, tc0.zw); REAL RSX bias -8.0
   r3.xyz = (r3.xyz + -r2.xyz);
   r4.xyz = fma3(tc4.xxx, r3.xyz, r2.xyz);
   h0.xyz = nrm(tc1.xyz);
@@ -355,7 +357,7 @@ void main(){
   r0.xyz = fma3(-h0.xyz, r0.zzz, -h2.xyz);
   h1.zw = tc8.zw;
   r3.xyz = (-r4.xyz + fc[1].xyz);
-  r2.x = ((uTiles>0.5 && uT2bad<0.5) ? texture(tex2, tc8.zw, -0.1562).x : texture(cloudsCube, sd).x);   // fp: TEX2D(2, tc8.zw); REAL RSX bias -0.1562
+  r2.x = ((uTiles>0.5 && uT2bad<0.5) ? texture(tex2, tc8.zw, uBias2).x : texture(cloudsCube, sd).x);   // fp: TEX2D(2, tc8.zw); REAL RSX bias -0.1562
   h7.w = fma1(r2.x, fc[2].x, fc[2].y);
   r2.x = (uTiles>0.5 ? texture(tex3, tc8.xy).x : texture(maskCube, sd).x);     // fp: TEX2D(3, tc8.xy)
   r1.xyz = fma3(r2.xxx, r3.xyz, r4.xyz);
@@ -365,14 +367,14 @@ void main(){
   r3.xy = tc6.xy;
   r4.x = fc[5].y;
   r1.xy = fma2(r3.xy, h7.ww, h1.zw);
-  r1.xyz = ((uTiles>0.5 && uT2bad<0.5) ? texture(tex2, r1.xy, -0.1562).xyz : texture(cloudsCube, sd).xyz);   // fp: TEX2D(2, r1.xy); REAL RSX bias -0.1562
+  r1.xyz = ((uTiles>0.5 && uT2bad<0.5) ? texture(tex2, r1.xy, uBias2).xyz : texture(cloudsCube, sd).xyz);   // fp: TEX2D(2, r1.xy); REAL RSX bias -0.1562
   h7.xyz = (r1.xyz * fc[6].z);
   h7.w = r2.x;
   h6.xyz = (-h5.xyz + fc[7].w);
   h5.xyz = fma3(h7.xyz, h6.xyz, h5.xyz);
   h7.z = dot(r0.xyz, fc[8].xyz);
   r0.xy = fma2(r4.zw, fc[9].xx, h1.zw);
-  r0.xyz = ((uTiles>0.5 && uT2bad<0.5) ? texture(tex2, r0.xy, -0.1562).xyz : texture(cloudsCube, sd).xyz);   // fp: TEX2D(2, r0.xy); REAL RSX bias -0.1562
+  r0.xyz = ((uTiles>0.5 && uT2bad<0.5) ? texture(tex2, r0.xy, uBias2).xyz : texture(cloudsCube, sd).xyz);   // fp: TEX2D(2, r0.xy); REAL RSX bias -0.1562
   h0.xyz = pc3(fma3(-r1.xyz, fc[10].xxx, r0.xyz), 0.,1.);
   h0.w = fc[11].y;
   r0.zw = fc[12].xy;
@@ -1167,6 +1169,7 @@ function drawGlow(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
    gl.uniform1f(U('uT2bad'), (T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  // (per-scene limb atmo frame is set in resolveInscat -> ATMO_SCENE auto-managed)
@@ -1306,6 +1309,7 @@ function drawGlowFaith(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]);}
    gl.uniform1f(U('uT2bad'),(T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex&&!STARSONLY) drawAtmo();   // tonemapped limb (uLinear=0, LDR) into F_disp
@@ -1498,6 +1502,7 @@ function draw(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
    gl.uniform1f(U('uT2bad'), (T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex)drawAtmo();
@@ -1884,6 +1889,8 @@ set cull(v){ CULL=v?1:0; },
  set flares(v){ FLARES=v?1:0; }, get flares(){ return FLARES; },
  set inscatgen(v){ INSCAT_GEN=v?1:0; }, get inscatgen(){ return INSCAT_GEN; },
  set stars2(v){ STARS2=v?1:0; }, get stars2(){ return STARS2; },
+ set bias0(v){ BIAS0=+v; }, get bias0(){ return BIAS0; },
+ set bias2(v){ BIAS2=+v; }, get bias2(){ return BIAS2; },
  set faithauto(v){ FAITH_AUTO=v?1:0; }, get faithauto(){ return FAITH_AUTO; },
  get _seedDiag(){ return {manifest:SEED_MANIFEST?Object.keys(SEED_MANIFEST).length:0, cached:Object.keys(SEED_CACHE).length, cur:!!_seedCur}; },
  _inscatStats(){ if(!_ipA.cur||!_ipC.cur) return 'not generated';
