@@ -1280,6 +1280,7 @@ function sceneAt(F,t){
   for(let i=0;i<F.length-1;i++){const a=F[i],b=F[i+1]; if(t>=a.t&&t<=b.t){const w=(t-a.t)/((b.t-a.t)||1);
     const o={}; for(const k of SCENE_KEYS){const va=a[k],vb=b[k]; o[k]=va&&vb?(HOLD_KEYS.has(k)?va:va.map((x,j)=>x+(vb[j]-x)*w)):va;}
     if(a.fr!==undefined&&b.fr!==undefined) o.fr=a.fr+(b.fr-a.fr)*w;   // capture-frame of this playback moment (aligns LUT selection exactly, incl. trimmed rows)
+    if(a.fc||b.fc) o.fc=(w<0.5?(a.fc||b.fc):(b.fc||a.fc));            // PER-ROW surface fp consts (sun/HDR vary within a scene; nearest row = real captured values)
     return o;}}
   return F[F.length-1];
 }
@@ -1312,6 +1313,7 @@ function tick(){
     const _si=(REALDUR&&SCENES_IDX&&SCENES_IDX[sceneIdx])?SCENES_IDX[sceneIdx]:null;
     const span=_si?Math.min(SCENE_CAP*60,Math.max(600,(_si.frame1-_si.frame0)*2)):SCENE_SECS*60;   // clamp to [10s, SCENE_CAP s] (camera path faithful; only time-scaling normalized so it is never frozen)
     const s=sceneAt(F,animT); for(const k of SCENE_KEYS){ if(s[k]) D.shared[k]=s[k]; }
+    if(s.fc) curFC=s.fc;   // per-row captured fp consts override the per-scene mid-row set
     if(USE_CAP){
       // bind this scene's REAL captured in-scatter (surface tex4) + limb (atmo tex0) LUT at the
       // nearest captured frame; draw the limb only where both the LUT and the per-scene atmo consts
@@ -1511,7 +1513,9 @@ const MPGlobe={
  _frame(sid,t){ if(!SCENES||!SCENES.length||!D) return 'no scenes';   // diagnostic: render exactly tick()'s
    running=false;                                                     // path frozen at (sid,t), no fade/advance
    sceneIdx=((sid%SCENES.length)+SCENES.length)%SCENES.length; animT=t;
+   setFC();   // per-scene fc + ATMO_SCENE (without this the PREVIOUS scene's atmo shell/sun consts leak in)
    const F=SCENES[sceneIdx]; const s=sceneAt(F,animT); for(const k of SCENE_KEYS){ if(s[k]) D.shared[k]=s[k]; }
+    if(s.fc) curFC=s.fc;   // per-row captured fp consts override the per-scene mid-row set
    if(USE_CAP){ const cl=capSceneLut(sceneIdx,animT,s.fr); CAP_LUT=cl?cl.surf:null; CAP_LIMB=cl?cl.limb:null; ATMO=(CAP_LIMB&&ATMO_SCENE)?1:0;
      if(TONELUT_PS){ const ct=capSceneTone(sceneIdx,animT,s.fr); CAP_T14=ct?ct.t14:null; CAP_T15=ct?ct.t15:null; } else { CAP_T14=null; CAP_T15=null; } }
    draw(); return 'ok'; },
