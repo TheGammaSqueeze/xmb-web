@@ -66,6 +66,7 @@ let ipUpProg=null, ipCombineProg=null;
 let _ipA={cur:null}, _ipB={cur:null}, _ipC={cur:null};
 let texBicubic=null, texSeedA=null, texSeedB=null;
 let INSCAT_GEN=0;               // MPGlobe.inscatgen: use the generated bufA/bufC instead of the streamed captured LUT bins
+let SEED_MANIFEST=null, SEED_CACHE={}, _seedCur=null;   // cap3-aligned per-keyframe recovered seeds (seeds_cap3/)
 let BLOOMDISP=0;                // MPGlobe.bloomdisp: FAITHFUL bloom-of-display (encode bd9c5fac -> pyramid -> display+bloom*0.125, the burst corona). Gated until measured vs presents.
 let BLOOMPREMUL=1;              // encode output rgb premultiplied by the brightpass key (wiring of out.w into the pyramid; measurement-decided)
 let BLOOMALPHA=0;               // decode term: 0 = a*8=1 (display alpha 1/8 steady-state), 1 = sample the display texture alpha
@@ -815,6 +816,20 @@ function capSceneTone(si, t, frOpt){
  if(c.t14.loaded&&c.t15.loaded){ _toneStick[String(s.scene)]=c; return c; }
  return _toneStick[String(s.scene)]||null;
 }
+// pick + lazy-load the nearest recovered seed pair for (scene, fr); swaps texSeedA/B when it changes.
+function seedCap3(si, t, frOpt){
+ if(!SEED_MANIFEST||!SCENES_IDX||!SCENES_IDX[si]) return false;
+ const s=SCENES_IDX[si]; const list=SEED_MANIFEST[String(s.scene)];
+ if(!list||!list.length) return false;
+ const fr=(frOpt!==undefined)?frOpt:(s.frame0 + t*((s.frame1-s.frame0)||1));
+ let best=list[0]; for(const e of list){ if(Math.abs(e.fr-fr)<Math.abs(best.fr-fr)) best=e; }
+ if(!SEED_CACHE[best.fr]) SEED_CACHE[best.fr]={
+   A:texF32(BASE+'gaia_lut/seeds_cap3/seedA_f'+String(best.fr).padStart(6,'0')+'.bin',40,40,1),
+   B:texF32(BASE+'gaia_lut/seeds_cap3/seedB_f'+String(best.fr).padStart(6,'0')+'.bin',40,20,1)};
+ const c=SEED_CACHE[best.fr];
+ if(c.A.loaded&&c.B.loaded){ if(_seedCur!==c){ texSeedA=c.A; texSeedB=c.B; _seedCur=c; } return true; }
+ return _seedCur!==null;   // keep the previous pair while loading (same-scene sticky)
+}
 function resolveInscat(){
  _psFrame=null; _psScat=null; _psName=null;
  if(!INSCAT_PS||!INSCAT_MANIFEST){ return; }
@@ -1176,7 +1191,7 @@ function genInscatter(){
 function drawGlowFaith(){
  const W=canvas.width,H=canvas.height;
  const Fd=ensureHDR(W,H), Fb=ensureHDR2(W,H);
- if(INSCAT_GEN) genInscatter();   // verbatim per-frame tex4/limb generation (firmware d017-d022)
+ if(INSCAT_GEN){ seedCap3(sceneIdx, animT); genInscatter(); }   // verbatim per-frame tex4/limb generation (firmware d017-d022) with cap3-aligned recovered seeds
  // ---- 1) F_disp = col0 earth (LDR) + tonemapped limb ----
  gl.bindFramebuffer(36160,Fd.fbo);
  // clear alpha = 1.0: the display A channel is the HDR-exponent (present dark sky alpha = 255 = 1.0)
@@ -1657,6 +1672,7 @@ async function load(){
        if(BURST_FAN&&SCENES_IDX){ FLARE_SCENES={};
          await Promise.all(SCENES_IDX.map(s=>fetch(BASE+'flare_scene_'+String(s.scene).padStart(2,'0')+'_cap2.json')
            .then(r=>r.ok?r.json():null).then(j=>{ if(j) FLARE_SCENES[String(s.scene)]=j; }).catch(()=>null))); }
+       SEED_MANIFEST=await fetch(BASE+'gaia_lut/seeds_cap3/seeds_manifest.json').then(r=>r.ok?r.json():null).catch(()=>null);
        // per-frame bloom-of-display chain rows (encode FC + blur kernel + combine scalars, all animated per frame)
        if(SCENES_IDX){ BLOOM_SCENES={};
          await Promise.all(SCENES_IDX.map(s=>fetch(BASE+'bloom_scene_'+String(s.scene).padStart(2,'0')+'_cap2.json')
@@ -1758,6 +1774,7 @@ set cull(v){ CULL=v?1:0; },
  set burst(v){ BURST=v?1:0; }, get burst(){ return BURST; },   // verbatim sun-disc burst pass (needs flare_scene data)
  set bloomdisp(v){ BLOOMDISP=v?1:0; }, get bloomdisp(){ return BLOOMDISP; },
  set inscatgen(v){ INSCAT_GEN=v?1:0; }, get inscatgen(){ return INSCAT_GEN; },
+ get _seedDiag(){ return {manifest:SEED_MANIFEST?Object.keys(SEED_MANIFEST).length:0, cached:Object.keys(SEED_CACHE).length, cur:!!_seedCur}; },
  _inscatStats(){ if(!_ipA.cur||!_ipC.cur) return 'not generated';
    const rd=(rt)=>{ const px=new Float32Array(256*128*4);
      gl.bindFramebuffer(36160,rt.fbo); gl.readPixels(0,0,256,128,6408,5126,px); gl.bindFramebuffer(36160,null);
