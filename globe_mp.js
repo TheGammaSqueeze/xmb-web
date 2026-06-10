@@ -99,7 +99,7 @@ let GLOW_SLUM=0.789;  // decode exposure (HDR.mnu EXPOSURE) applied to the verba
 let GLARE_THRESH=0.552855;  // HDR.mnu GLARE THRESH (default scene) -> the GlareSource bright-pass threshold (only > this blooms)
 let GLOW_CHROMA=0;             // retained for the MPGlobe.glowChroma setter API; no longer used by C_FS
 let D=null, eMesh=null, want=0, got=0, sharedTex={}, patchTex=[], black=null, black0=null;
-let aMesh=null, scatterTex=null, fcAtmo=null;        // verbatim atmosphere shell pass
+let aMesh=null, aMesh2=null, scatterTex=null, fcAtmo=null;  // verbatim atmosphere: main shell + the 400-vert inner band (firmware draws 3f6eeb47 TWICE; the band's w=0.982..1.0 inner edge overlaps the disc = the seamless disc->glow bridge)
 let ATMO_SCENES=null, ATMO_SCENE=null, ATMO=0;       // per-scene aligned atmosphere (coherent capture); MPGlobe.atmo toggles
 const ATMO_KEYS=['256','257','258','259','460','461','462'];
 let PATHS=null, animT=0, preset=null, presetIdx=7, errlog='';
@@ -159,6 +159,7 @@ let ATMO_FLIPY=1.0;                           // shell uFlipY (orientation probe
 let ATMO_HDR=7.863;                           // firmware preexpose scale = TEX15/TEX14 LUT (lut15_rgba32f) max 7.863, = the atmo fp's r0 exposure before the scene RT (replaces the rounded 8.0 approximation)
 let IEFULL=1;                                 // use the UNCLAMPED IE LUT (the clamped tex5 loses the night/negative term = proven bug; ieFull restores the dark side)
 let FCATMO_OVR=0;
+let ATMOBAND=1;                // second (inner-band) atmosphere draw (MPGlobe.atmoband)
 let ATMODEPTH=0;               // 1 = legacy: shell depth-tests against the earth (the thin black gap at the silhouette); 0 = shell draws regardless (MPGlobe.atmodepth)
 let ATMOGUARD=1;               // atmo camera-sanity guard (MPGlobe.atmoguard; 0 = always draw the shell)
 let ATMOFC=1;                   // real per-(scene,t) atmo fp consts from rows (MPGlobe.atmofc; 0 = legacy static+approx)                              // when set (MPGlobe.fcatmo used), use the REAL per-scene atmo fp consts (_AtmFactor from the atmo draw) instead of the curFC[4].y approximation
@@ -1563,6 +1564,11 @@ function drawAtmoLinear(){
  let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
  let tl=gl.getAttribLocation(aprog,'in_tc0');gl.bindBuffer(34962,aMesh.tbuf);gl.enableVertexAttribArray(tl);gl.vertexAttribPointer(tl,4,5126,false,0,0);
  gl.bindBuffer(34963,aMesh.ibuf);gl.drawElements(5,aMesh.n,5125,0);
+ if(aMesh2&&ATMOBAND){   // firmware's SECOND 3f6eeb47 draw (identical consts; only the geometry differs)
+   gl.bindBuffer(34962,aMesh2.pbuf);gl.vertexAttribPointer(pl,4,5126,false,0,0);
+   gl.bindBuffer(34962,aMesh2.tbuf);gl.vertexAttribPointer(tl,4,5126,false,0,0);
+   gl.bindBuffer(34963,aMesh2.ibuf);gl.drawElements(5,aMesh2.n,5125,0);
+ }
  gl.disable(3042); gl.depthMask(true);
 }
 
@@ -1636,6 +1642,11 @@ function drawAtmo(){
  let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
  let tl=gl.getAttribLocation(aprog,'in_tc0');gl.bindBuffer(34962,aMesh.tbuf);gl.enableVertexAttribArray(tl);gl.vertexAttribPointer(tl,4,5126,false,0,0);
  gl.bindBuffer(34963,aMesh.ibuf);gl.drawElements(5,aMesh.n,5125,0);
+ if(aMesh2&&ATMOBAND){   // firmware's SECOND 3f6eeb47 draw (identical consts; only the geometry differs)
+   gl.bindBuffer(34962,aMesh2.pbuf);gl.vertexAttribPointer(pl,4,5126,false,0,0);
+   gl.bindBuffer(34962,aMesh2.tbuf);gl.vertexAttribPointer(tl,4,5126,false,0,0);
+   gl.bindBuffer(34963,aMesh2.ibuf);gl.drawElements(5,aMesh2.n,5125,0);
+ }
  gl.disable(3042); gl.depthMask(true); gl.blendFunc(1,1); if(!ATMODEPTH) gl.enable(2929);
 }
 function atmoAt(t){ const F=ATMO_SCENE; if(!F||!F.length)return null; if(t<=F[0].t)return F[0]; if(t>=F[F.length-1].t)return F[F.length-1];
@@ -1839,6 +1850,16 @@ async function load(){
    const atbuf=gl.createBuffer();gl.bindBuffer(34962,atbuf);gl.bufferData(34962,new Float32Array(atb),35044);
    const aibuf=gl.createBuffer();gl.bindBuffer(34963,aibuf);gl.bufferData(34963,new Uint32Array(aib),35044);
    aMesh={pbuf:apbuf,tbuf:atbuf,ibuf:aibuf,n:new Uint32Array(aib).length};
+   try{
+     const [bp,bt,bi]=await Promise.all([
+       fetch(BASE+'mesh/c0b_pos.bin').then(r=>r.arrayBuffer()),
+       fetch(BASE+'mesh/c0b_tc0.bin').then(r=>r.arrayBuffer()),
+       fetch(BASE+'mesh/c0b_idx.bin').then(r=>r.arrayBuffer())]);
+     const bpb=gl.createBuffer();gl.bindBuffer(34962,bpb);gl.bufferData(34962,new Float32Array(bp),35044);
+     const btb=gl.createBuffer();gl.bindBuffer(34962,btb);gl.bufferData(34962,new Float32Array(bt),35044);
+     const bib=gl.createBuffer();gl.bindBuffer(34963,bib);gl.bufferData(34963,new Uint32Array(bi),35044);
+     aMesh2={pbuf:bpb,tbuf:btb,ibuf:bib,n:new Uint32Array(bi).length};
+   }catch(e){ aMesh2=null; }
    scatterTex=texF32(BASE+'win_tex/t04_f32.bin',256,128);
    const AC=await fetch(BASE+'c3000_consts.json').then(r=>r.json());
    fcAtmo=new Float32Array(17*4);for(let i=0;i<17;i++){const v=(AC.fc_atmo&&AC.fc_atmo[i])||[0,0,0,0];fcAtmo[i*4]=v[0];fcAtmo[i*4+1]=v[1];fcAtmo[i*4+2]=v[2];fcAtmo[i*4+3]=v[3];}
@@ -1999,6 +2020,7 @@ set cull(v){ CULL=v?1:0; },
  set atmofc(v){ ATMOFC=v?1:0; }, get atmofc(){ return ATMOFC; },
  set atmoguard(v){ ATMOGUARD=v?1:0; }, get atmoguard(){ return ATMOGUARD; },
  set atmodepth(v){ ATMODEPTH=v?1:0; }, get atmodepth(){ return ATMODEPTH; },
+ set atmoband(v){ ATMOBAND=v?1:0; }, get atmoband(){ return ATMOBAND; },
  set bias0(v){ BIAS0=+v; }, get bias0(){ return BIAS0; },
  set bias2(v){ BIAS2=+v; }, get bias2(){ return BIAS2; },
  set faithauto(v){ FAITH_AUTO=v?1:0; }, get faithauto(){ return FAITH_AUTO; },
