@@ -2189,6 +2189,18 @@ set cull(v){ CULL=v?1:0; },
    const r=k=>[vc[k*4],vc[k*4+1],vc[k*4+2],vc[k*4+3]];
    const c260=r(3),c261=r(4),c263=r(6);
    return JSON.stringify({c260,c261,c263, sphereCenterNDCy: c261[3]/c263[3], eclView:isEclipseView()}); }catch(e){return ''+e;} },
+ _pyrStats(){   // per-level bloom pyramid means (vs the real B0 profile 0.036->0.148)
+   if(!_lastGlow||!_lastGlow.levels) return 'no glow';
+   const out=[];
+   for(const L of _lastGlow.levels){
+     if(!L||!L.fbo){ out.push(null); continue; }
+     const w=L.w||4,h=L.h||2;
+     const px=new Float32Array(w*h*4);
+     gl.bindFramebuffer(36160,L.fbo); gl.readPixels(0,0,w,h,6408,5126,px); gl.bindFramebuffer(36160,null);
+     let s=0; for(let i=0;i<w*h;i++) s+=(px[i*4]+px[i*4+1]+px[i*4+2])/3;
+     out.push(+( s/(w*h)).toFixed(5));
+   }
+   return out; },
  _glowStats(){    // diagnostic: float magnitude of HDR FBO + glow tex (calibration only)
    if(!gl||!hdrFBO||!_lastGlow) return 'no glow yet';
    const readF=(fbo,tex,w,h)=>{ const f=gl.createFramebuffer(); gl.bindFramebuffer(36160,f);
