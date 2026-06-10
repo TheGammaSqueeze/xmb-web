@@ -1488,7 +1488,7 @@ let USE_COH=true;    // DEFAULT = coherent set (9 scenes) + aligned atmosphere l
 function setFC(){ curFC = (SCENE_FC && SCENES_IDX && SCENES_IDX[sceneIdx] && SCENE_FC[String(SCENES_IDX[sceneIdx].scene)]) || null;
  ATMO_SCENE = (ATMO_SCENES && ATMO_SCENES[sceneIdx]) || null;
  SCENE_HAS_TONE = !TONELUT_PS || !!(CAP_SCENE_TONE && SCENES_IDX && SCENES_IDX[sceneIdx] && (CAP_SCENE_TONE[String(SCENES_IDX[sceneIdx].scene)]||[]).length); }
-const SCENE_KEYS=['260','261','262','263','264','265','268','269','270','454','455','456','457','458','459','460','461','462','463','464','465','466','467'];
+const SCENE_KEYS=['260','261','262','263','264','265','266','267','268','269','270','271','454','455','456','457','458','459','460','461','462','463','464','465','466','467'];   // 266/267 = the REAL zoom rows (were MISSING: scenes framed with the static pose - the intermittent wide-arc bug)
 const HOLD_KEYS=new Set(['463','464','465','466','467']);   // STEPPED consts (LOD geomorph vc21 + tile UV transforms): the firmware switches them discretely; LERPING mid-step makes an invalid geomorph/UV for a window = spiky vertices + black tile checkerboard. Hold-previous instead.
 function sceneAt(F,t){
   if(t<=F[0].t)return F[0]; if(t>=F[F.length-1].t)return F[F.length-1];
