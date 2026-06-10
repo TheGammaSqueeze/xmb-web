@@ -964,10 +964,22 @@ const STARTEX_FS=`#version 300 es
 precision highp float; in vec2 vTC; out vec4 ocol0;
 uniform sampler2D starTex; uniform float uWhite; uniform float uPow;
 uniform sampler2D uEarthTex;   // earth HDR FBO; .a = earth/atmo/sun coverage (earth writes alpha=1; sky cleared to 0)
+uniform vec4 uE2[8]; uniform float uE2On;   // the VERBATIM star-brightness fp (775efaf5/ae34439d family) per-frame consts
 void main(){
  vec3 tx=texture(starTex, vTC).rgb;   // REPEAT + mipmaps; smooth per-face UV -> hardware LOD, no streaks
- // EARTH.mnu star curve: pow(tex, STARS POWSCALE) darkens the dim background -> sparse dots; * STARS WHITENESS.
- vec3 st=pow(max(tx,0.0), vec3(uPow))*uWhite;
+ vec3 st;
+ if(uE2On>0.5){
+   // VERBATIM star brightness (the harvested per-frame enc2 consts): desat toward the channel
+   // average (FC0=1/3, FC1) -> *FC2.y -> per-channel exp2(*8.64386) -> *(FC5.x*FC7.x ~5e-6) *8.
+   float lum=tx.r+tx.g+tx.b;
+   vec3 c=(lum*uE2[0].x-tx)*uE2[1].x+tx;
+   c*=uE2[2].y;
+   vec3 e=exp2(vec3(c.r*uE2[3].x, c.g*uE2[4].x, c.b*uE2[6].x));
+   st=(uE2[5].x*uE2[7].x)*e*8.0;
+ } else {
+   // EARTH.mnu star curve fallback: pow(tex, STARS POWSCALE) * STARS WHITENESS.
+   st=pow(max(tx,0.0), vec3(uPow))*uWhite;
+ }
  // OCCLUDE by the earth (firmware renders stars BEHIND it); display-space pass has no depth, so mask by HDR-FBO coverage .a at this pixel.
  float ea=texelFetch(uEarthTex, ivec2(gl_FragCoord.xy), 0).a; st*=clamp(1.0-ea,0.0,1.0);
  ocol0=vec4(st, 1.0);
@@ -998,6 +1010,15 @@ function drawStarsTex(){
  gl.useProgram(starTexProg); const U=n=>gl.getUniformLocation(starTexProg,n);
  gl.uniform4fv(U('c260'),s['260']);gl.uniform4fv(U('c261'),s['261']||s['260']);gl.uniform4fv(U('c263'),s['263']);
  gl.uniform1f(U('uWhite'),STAR_WHITE); gl.uniform1f(U('uPow'),STAR_POW); gl.uniform1f(U('uTile'),STAR_TILE);
+ { let row=null;   // per-frame star-brightness consts (the harvested enc2 rows); STARS2 gate
+   if(STARS2 && BLOOM_SCENES && SCENES_IDX && SCENES_IDX[sceneIdx]){
+     const rows=BLOOM_SCENES[String(SCENES_IDX[sceneIdx].scene)];
+     if(rows&&rows.length){ const sc=SCENES_IDX[sceneIdx]; const fr=sc.frame0+animT*((sc.frame1-sc.frame0)||1);
+       row=rows[0]; for(const e of rows){ if(Math.abs(e.fr-fr)<Math.abs(row.fr-fr)) row=e; } } }
+   const e2on=(STARS2&&row&&row.enc2)?1:0;
+   gl.uniform1f(U('uE2On'),e2on);
+   if(e2on){ const f=new Float32Array(32); for(let i=0;i<8;i++) for(let j=0;j<4;j++) f[i*4+j]=row.enc2[i][j];
+     gl.uniform4fv(U('uE2'),f); } }
  gl.activeTexture(33984+0); gl.bindTexture(3553,star2D); gl.uniform1i(U('starTex'),0);
  gl.activeTexture(33984+1); gl.bindTexture(3553, hdrFBO?hdrFBO.tex:black); gl.uniform1i(U('uEarthTex'),1);
  gl.bindBuffer(34962,starBoxBuf);
