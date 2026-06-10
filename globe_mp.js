@@ -159,6 +159,7 @@ let ATMO_FLIPY=1.0;                           // shell uFlipY (orientation probe
 let ATMO_HDR=7.863;                           // firmware preexpose scale = TEX15/TEX14 LUT (lut15_rgba32f) max 7.863, = the atmo fp's r0 exposure before the scene RT (replaces the rounded 8.0 approximation)
 let IEFULL=1;                                 // use the UNCLAMPED IE LUT (the clamped tex5 loses the night/negative term = proven bug; ieFull restores the dark side)
 let FCATMO_OVR=0;
+let BLOOMC1=1;                 // composite bloom gain = comp[1] (0.125): A/B vs presents picked FC1 decisively (sc23 flash 59->35 pd, sc24 wash at real magnitude, no regressions; FC0=1.0 overshot 2-3x everywhere)
 let ATMOBAND=1;                // second (inner-band) atmosphere draw (MPGlobe.atmoband)
 let ATMODEPTH=0;               // 1 = legacy: shell depth-tests against the earth (the thin black gap at the silhouette); 0 = shell draws regardless (MPGlobe.atmodepth)
 let ATMOGUARD=1;               // atmo camera-sanity guard (MPGlobe.atmoguard; 0 = always draw the shell)
@@ -1471,7 +1472,7 @@ function drawGlowFaith(){
    const glow=GlobeGlow.buildGlow(gl,ENC.tex,512,512,{blurWeights:blurW,upWeights:upW});_lastGlow=glow;
    // final composite: write-graph proven NET = display*1.0 + bloom*FC0 (d062 adds bloom*FC0
    // - display*FC1; the star tile pass d064+ adds stars + display*FC1 back; no temporal EMA).
-   const c0=row&&row.comp?row.comp[0]:1.0;
+   const c0=(BLOOMC1&&row&&row.comp)?row.comp[1]:(row&&row.comp?row.comp[0]:1.0);   // BLOOMC1: add bloom at FC1 (0.125, display-units) instead of FC0 (1.0) - the two firmware-derived interpretations of the d053 composite, A/B vs presents
    gl.bindFramebuffer(36160,null);gl.viewport(0,0,W,H);gl.disable(2929);gl.disable(2884);gl.disable(3042);
    gl.useProgram(cprog);
    gl.activeTexture(33984+0);gl.bindTexture(3553,FP.tex);gl.uniform1i(C('uEarth'),0);
@@ -2032,6 +2033,7 @@ set cull(v){ CULL=v?1:0; },
  set atmoguard(v){ ATMOGUARD=v?1:0; }, get atmoguard(){ return ATMOGUARD; },
  set atmodepth(v){ ATMODEPTH=v?1:0; }, get atmodepth(){ return ATMODEPTH; },
  set atmoband(v){ ATMOBAND=v?1:0; }, get atmoband(){ return ATMOBAND; },
+ set bloomc1(v){ BLOOMC1=v?1:0; }, get bloomc1(){ return BLOOMC1; },
  set bias0(v){ BIAS0=+v; }, get bias0(){ return BIAS0; },
  set bias2(v){ BIAS2=+v; }, get bias2(){ return BIAS2; },
  set faithauto(v){ FAITH_AUTO=v?1:0; }, get faithauto(){ return FAITH_AUTO; },
