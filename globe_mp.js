@@ -29,6 +29,7 @@ let gl=null, canvas=null, prog=null, aprog=null, raf=0, running=false;
 let cprog=null;                 // GLOW composite fullscreen program
 let gsProg=null;                // GlareSource bright-pass (verbatim firmware post-proc)
 let _gsRef={cur:null};          // bright-pass RT holder
+let _postRef={cur:null};        // post-burst scene RT (the firmware encodes the DISPLAY incl. the burst into the bloom)
 let hdrExt=null;                // EXT_color_buffer_float (RGBA16F FBO) - required for the GLOW path; null = fall back to forward
 let hdrFBO=null, glowVAO=null;  // lazy HDR scene FBO + composite VAO
 let GLOWFAITH=1;                // MPGlobe.glowfaith: FAITHFUL path (col0 earth + separate HDR limb/sun bloom); default off until validated
@@ -52,6 +53,8 @@ let _lastGlow=null;             // diagnostic handle to last buildGlow result
 // old raw-HDR bloom produced). Set so the limb/sun halo is visible but the toned scene dominates.
 let GLOW_GAIN=[0.012,0.012,0.012];
 let GLOW2=0;  // sun-glare pass (verbatim fp 727d0242); gated default off until validated
+let BURST=0;                           // verbatim sun-disc BURST pass (globe_burst.js, vp c868fd6a + fp ac07b20f); gated until the c[254..263] window recapture validates
+let FLARE_SCENES=null, BURST_FAN=null; // per-scene burst consts rows + the captured 65-vert fan
 let glowSprite=null;
 let GLOW_FC=[[1920,1080,0,0],[1.00918,0,0,0],[-1,0,0,0],[0.249846,-0.956276,-5.25935,0],[1920,1080,0,0],[0.249846,-0.956276,-5.25935,0],[-1,1,0,0],[1,0,0,0],[1,1,1,1],[1,1,1,1],[1,1,1,1],[1,1,1,1],[0,0,0,2],[0.433875,0.0737772,0.0257549,0],[1,0,0,0],[1,1,1,1],[0.433875,0.0737772,0.0257549,0]];  // bloom gain = 1/450 (web bloom accumulator ~450x firmware) -> adds the firmware bloom at FULL weight per the verbatim composite fp 316de80a (scene*0.125 + bloom*1). NOT a tiny limb-halo: the bloom is the dominant haze.
 let GLOW_WARM=[1.0,1.0,1.0];   // retained for the MPGlobe.glowWarm setter API; no longer used by C_FS
@@ -1076,9 +1079,16 @@ function drawGlowFaith(){
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex&&!STARSONLY) drawAtmo();   // tonemapped limb (uLinear=0, LDR) into F_disp
- // ---- 2) composite F_disp -> canvas NOW (before buildGlow alters GL state): passthrough, NO bloom ----
+ // ---- 2) composite F_disp (+BURST) -> canvas. With BURST active the composite goes through a POST
+ // texture RT first (the firmware encodes the DISPLAY - earth+limb+burst - into the bloom source, so
+ // the corona emerges from blooming the post-burst scene, not the limb-only buffer).
  const C=n=>gl.getUniformLocation(cprog,n);
- gl.bindFramebuffer(36160,null);gl.viewport(0,0,W,H);gl.disable(2929);gl.disable(3042);gl.disable(2884);
+ const burstRows=(BURST && BURST_FAN && FLARE_SCENES && typeof GlobeBurst!=='undefined' && SCENES_IDX && SCENES_IDX[sceneIdx]) ? (FLARE_SCENES[String(SCENES_IDX[sceneIdx].scene)]||null) : null;
+ const useBurst=!!(burstRows && burstRows.length);
+ let FP=null;
+ if(useBurst){ FP=ensureColorRT(_postRef,W,H); gl.bindFramebuffer(36160,FP.fbo); }
+ else gl.bindFramebuffer(36160,null);
+ gl.viewport(0,0,W,H);gl.disable(2929);gl.disable(3042);gl.disable(2884);
  gl.useProgram(cprog);
  gl.activeTexture(33984+0);gl.bindTexture(3553,Fd.tex);gl.uniform1i(C('uEarth'),0);
  gl.activeTexture(33984+1);gl.bindTexture(3553,black);gl.uniform1i(C('uGlow'),1);
@@ -1086,6 +1096,27 @@ function drawGlowFaith(){
  gl.uniform3fv(C('uGlowGain'),new Float32Array([0,0,0]));
  gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uLutOn'),0.0);gl.uniform1f(C('uGlow2'),0.0);gl.uniform2f(C('uDims'),W,H);
  gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
+ if(useBurst){
+   // verbatim SUN-DISC BURST into the post RT (occlusion sampled from F_disp - no feedback)
+   const s=SCENES_IDX[sceneIdx]; const fr=s.frame0+animT*((s.frame1-s.frame0)||1);
+   let best=burstRows[0]; for(const e of burstRows){ if(Math.abs(e.fr-fr)<Math.abs(best.fr-fr)) best=e; }
+   const vc=[]; for(let i=0;i<17;i++){ vc.push(best[String(254+i)]||[0,0,0,0]); }   // window base 254 (proven vs the present)
+   const fc=(best.fc||[]).slice(0,17); while(fc.length<17) fc.push([0,0,0,0]);
+   if(!GlobeBurst._inited){ try{ GlobeBurst.init(gl); GlobeBurst._inited=true; }catch(e){ errlog+=' burst:'+e.message; BURST=0; } }
+   if(GlobeBurst._inited){
+     const verts=new Float32Array(BURST_FAN.length*4);
+     for(let i=0;i<BURST_FAN.length;i++) for(let j=0;j<4;j++) verts[i*4+j]=BURST_FAN[i][j];
+     GlobeBurst.draw(gl,{verts,vc,fc,flipY:1.0,w:W,h:H,lutScale:1/128,
+       shapeTex:sharedTex.sundisc||black, sceneTex:Fd.tex, lut14:(CAP_T14||sharedTex.tex14), lut15:(CAP_T15||sharedTex.tex15)});
+   }
+   // post RT -> canvas passthrough
+   gl.bindFramebuffer(36160,null);gl.viewport(0,0,W,H);gl.disable(2929);gl.disable(3042);gl.disable(2884);
+   gl.useProgram(cprog);
+   gl.activeTexture(33984+0);gl.bindTexture(3553,FP.tex);gl.uniform1i(C('uEarth'),0);
+   gl.activeTexture(33984+1);gl.bindTexture(3553,black);gl.uniform1i(C('uGlow'),1);
+   gl.uniform1f(C('uPassthru'),1.0);
+   gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
+ }
  // ---- 3) blit F_disp depth -> F_bloom; render HDR limb+sun (bloom source) ----
  gl.bindFramebuffer(36008,Fd.fbo);gl.bindFramebuffer(36009,Fb.fbo);
  gl.blitFramebuffer(0,0,W,H,0,0,W,H,256,9728);   // DEPTH_BUFFER_BIT, NEAREST
@@ -1100,7 +1131,7 @@ function drawGlowFaith(){
  const GR=ensureColorRT(_gsRef,W,H);
  gl.bindFramebuffer(36160,GR.fbo);gl.viewport(0,0,W,H);
  gl.useProgram(gsProg);
- gl.activeTexture(33984+0);gl.bindTexture(3553,Fb.tex);gl.uniform1i(gl.getUniformLocation(gsProg,'uTone'),0);
+ gl.activeTexture(33984+0);gl.bindTexture(3553,(useBurst&&FP)?FP.tex:Fb.tex);gl.uniform1i(gl.getUniformLocation(gsProg,'uTone'),0);   // burst-active: bloom the POST-BURST scene (firmware encodes the display); else legacy HDR limb buffer
  gl.uniform1f(gl.getUniformLocation(gsProg,'uSlum'),GLOW_SLUM*0.125);
  gl.uniform1f(gl.getUniformLocation(gsProg,'uThresh'),GLARE_THRESH);
  gl.drawArrays(4,0,3);gl.bindVertexArray(null);
@@ -1365,6 +1396,12 @@ async function load(){
  sharedTex.tex0atmEcl=texF32(BASE+'gaia_lut/atmospace_eclipse_atm_tex0_256x128_rgba_f32_le.bin',256,128);
  sharedTex.tex0atmEclFlip=texF32(BASE+'gaia_lut/atmospace_eclipse_atm_tex0_256x128_rgba_f32_le_flip.bin',256,128);  // V-flipped variant (orientation probe)
  sharedTex.tex0atmEclSolid=texF32(BASE+'gaia_lut/atmospace_eclipse_atm_tex0_256x128_rgba_f32_le_SOLID.bin',256,128);  // solid-warm debug LUT (shader-math probe)
+ // the captured 128x128 sun-disc/burst shape sprite (RGBA8, real firmware texture) for GlobeBurst tex0
+ { const t=gl.createTexture(); gl.bindTexture(3553,t); gl.texImage2D(3553,0,6408,1,1,0,6408,5121,new Uint8Array([0,0,0,255]));
+   fetch(BASE+'gaia_lut/sundisc_128_rgba.bin').then(r=>{if(!r.ok)throw 0;return r.arrayBuffer();}).then(ab=>{ if(!gl)return;
+     gl.bindTexture(3553,t); gl.texImage2D(3553,0,6408,128,128,0,6408,5121,new Uint8Array(ab));
+     gl.texParameteri(3553,10241,9729);gl.texParameteri(3553,10240,9729);gl.texParameteri(3553,10242,33071);gl.texParameteri(3553,10243,33071); t.loaded=true; }).catch(()=>{});
+   sharedTex.sundisc=t; }
  // PER-SCENE in-scatter manifest (32 captured scenes). Lazy-load each scene's LUTs on demand (do NOT preload).
  fetch(BASE+'gaia_lut/inscatter/manifest.json').then(r=>r.ok?r.json():null).then(m=>{INSCAT_MANIFEST=m;}).catch(()=>{INSCAT_MANIFEST=null;});
  // REAL fp16 HDR tonemap LUTs (RTDUMP'd ac2b90000/ac2b70000, Y16_X16_FLOAT, max ~7.86) -- replaces
@@ -1441,6 +1478,11 @@ async function load(){
      }catch(e){ CAP_SCENE_LUTS=null; }
      // per-scene surface-fp tonemap LUTs (brightness fix); loaded if present, gated by TONELUT_PS. 128x128 rgba32f (ch0/ch1).
      try{
+       // per-scene burst rows (vp window consts + fp consts of the sun-disc draw) + the captured fan geometry
+       BURST_FAN=await fetch(BASE+'burst_fan65.json').then(r=>r.ok?r.json():null).catch(()=>null);
+       if(BURST_FAN&&SCENES_IDX){ FLARE_SCENES={};
+         await Promise.all(SCENES_IDX.map(s=>fetch(BASE+'flare_scene_'+String(s.scene).padStart(2,'0')+'_cap2.json')
+           .then(r=>r.ok?r.json():null).then(j=>{ if(j) FLARE_SCENES[String(s.scene)]=j; }).catch(()=>null))); }
        CAP_SCENE_TONE=await fetch(BASE+'cap_scene_tonelut.json').then(r=>r.ok?r.json():null).catch(()=>null);
        if(CAP_SCENE_TONE) CAP_TONE_CACHE={};   // lazy: capSceneTone() loads on demand (non-blocking)
      }catch(e){ CAP_SCENE_TONE=null; }
@@ -1528,6 +1570,7 @@ set cull(v){ CULL=v?1:0; },
  get t2all(){ return T2ALL; },
  set starBri(v){ STAR_BRI=v; },
  set glow2(v){ GLOW2=v?1:0; }, get glow2(){ return GLOW2; },
+ set burst(v){ BURST=v?1:0; }, get burst(){ return BURST; },   // verbatim sun-disc burst pass (needs flare_scene data)
  setGlowFC(v){ if(Array.isArray(v)&&v.length>=17) GLOW_FC=v; },
  get starBri(){ return STAR_BRI; },
  get starCount(){ return starN; },
