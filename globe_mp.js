@@ -69,6 +69,9 @@ let INSCAT_GEN=0;               // MPGlobe.inscatgen: use the generated bufA/buf
 let SEED_MANIFEST=null, SEED_CACHE={}, _seedCur=null;   // cap3-aligned per-keyframe recovered seeds (seeds_cap3/)
 let _ipValid=false;             // the generated buffers correspond to the CURRENT scene's seeds
 let FLARE_ROWS=null, FLARES=0;   // per-frame sun-flare billboard rows (vp 48ad6e97 windows + fp consts); MPGlobe.flares gate
+let STARS2=0;                    // MPGlobe.stars2: verbatim per-frame star brightness (the harvested enc2 consts) instead of the .mnu curve
+let FAITH_POLICY=null;           // faithful_policy.json: per-scene winners from the all-scene fbf sweep (measured vs presents)
+let FAITH_AUTO=0;                // MPGlobe.faithauto: auto-gate BLOOMDISP per scene from FAITH_POLICY
 let BLOOMDISP=0;                // MPGlobe.bloomdisp: FAITHFUL bloom-of-display (encode bd9c5fac -> pyramid -> display+bloom*0.125, the burst corona). Gated until measured vs presents.
 let BLOOMPREMUL=1;              // encode output rgb premultiplied by the brightpass key (wiring of out.w into the pyramid; measurement-decided)
 let BLOOMALPHA=0;               // decode term: 0 = a*8=1 (display alpha 1/8 steady-state), 1 = sample the display texture alpha
@@ -1277,6 +1280,9 @@ function drawGlowFaith(){
  // texture RT first (the firmware encodes the DISPLAY - earth+limb+burst - into the bloom source, so
  // the corona emerges from blooming the post-burst scene, not the limb-only buffer).
  const C=n=>gl.getUniformLocation(cprog,n);
+ if(FAITH_AUTO&&FAITH_POLICY&&SCENES_IDX&&SCENES_IDX[sceneIdx]){   // measurement-driven per-scene gating (the fbf-sweep winners)
+   const fa=FAITH_POLICY.bloomScenes&&FAITH_POLICY.bloomScenes.indexOf(SCENES_IDX[sceneIdx].scene)>=0;
+   BLOOMDISP=fa?1:0; }
  const burstRows=(BURST && BURST_FAN && FLARE_SCENES && typeof GlobeBurst!=='undefined' && SCENES_IDX && SCENES_IDX[sceneIdx]) ? (FLARE_SCENES[String(SCENES_IDX[sceneIdx].scene)]||null) : null;
  const useBurst=!!(burstRows && burstRows.length);
  const useFP=useBurst||(BLOOMDISP&&encProg);   // route the composite through the post RT whenever the firmware bloom-of-display path needs to sample it
@@ -1730,6 +1736,7 @@ async function load(){
            .then(r=>r.ok?r.json():null).then(j=>{ if(j) FLARE_SCENES[String(s.scene)]=j; }).catch(()=>null))); }
        SEED_MANIFEST=await fetch(BASE+'gaia_lut/seeds_cap3/seeds_manifest.json').then(r=>r.ok?r.json():null).catch(()=>null);
        FLARE_ROWS=await fetch(BASE+'flares_cap3.json').then(r=>r.ok?r.json():null).catch(()=>null);
+       FAITH_POLICY=await fetch(BASE+'faithful_policy.json').then(r=>r.ok?r.json():null).catch(()=>null);
        // per-frame bloom-of-display chain rows (encode FC + blur kernel + combine scalars, all animated per frame)
        if(SCENES_IDX){ BLOOM_SCENES={};
          await Promise.all(SCENES_IDX.map(s=>fetch(BASE+'bloom_scene_'+String(s.scene).padStart(2,'0')+'_cap2.json')
@@ -1832,6 +1839,8 @@ set cull(v){ CULL=v?1:0; },
  set bloomdisp(v){ BLOOMDISP=v?1:0; }, get bloomdisp(){ return BLOOMDISP; },
  set flares(v){ FLARES=v?1:0; }, get flares(){ return FLARES; },
  set inscatgen(v){ INSCAT_GEN=v?1:0; }, get inscatgen(){ return INSCAT_GEN; },
+ set stars2(v){ STARS2=v?1:0; }, get stars2(){ return STARS2; },
+ set faithauto(v){ FAITH_AUTO=v?1:0; }, get faithauto(){ return FAITH_AUTO; },
  get _seedDiag(){ return {manifest:SEED_MANIFEST?Object.keys(SEED_MANIFEST).length:0, cached:Object.keys(SEED_CACHE).length, cur:!!_seedCur}; },
  _inscatStats(){ if(!_ipA.cur||!_ipC.cur) return 'not generated';
    const rd=(rt)=>{ const px=new Float32Array(256*128*4);
