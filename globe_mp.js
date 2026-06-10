@@ -71,6 +71,7 @@ let _ipValid=false;             // the generated buffers correspond to the CURRE
 let FLARE_ROWS=null, FLARES=0;   // per-frame sun-flare billboard rows (vp 48ad6e97 windows + fp consts); MPGlobe.flares gate
 let BIAS0=-8.0, BIAS2=-0.1562;   // REAL RSX LOD biases (DRAWCALLS); MPGlobe.bias0/bias2 for sampling A/B
 let STARS2=0;                    // MPGlobe.stars2: verbatim per-frame star brightness (the harvested enc2 consts) instead of the .mnu curve
+let GLARE_ROWS=null;             // per-scene REAL sun-glare consts (vp c868fd6a, 17 fc rows in the GLOW_FC layout; [13]/[16]=color, denormal-zero when dormant)
 let FAITH_POLICY=null;           // faithful_policy.json: per-scene winners from the all-scene fbf sweep (measured vs presents)
 let FAITH_AUTO=0;                // MPGlobe.faithauto: auto-gate BLOOMDISP per scene from FAITH_POLICY
 let BLOOMDISP=0;                // MPGlobe.bloomdisp: FAITHFUL bloom-of-display (encode bd9c5fac -> pyramid -> display+bloom*0.125, the burst corona). Gated until measured vs presents.
@@ -1217,7 +1218,12 @@ function drawGlow(){
  gl.uniform1f(C('uLutFb'), psTone?(1.0/(1.0-0.125)):1.0);
  {const sh=D.shared||{};const gv=k=>{const v=sh[k]||[0,0,0,0];return [v[0],v[1],v[2],v[3]];};
   gl.uniform4f(C('c260'),...gv('260'));gl.uniform4f(C('c261'),...gv('261'));gl.uniform4f(C('c262'),...gv('262'));gl.uniform4f(C('c263'),...gv('263'));
-  const gf=new Float32Array(17*4);for(let i=0;i<17;i++){const v=GLOW_FC[i]||[0,0,0,0];gf[i*4]=v[0];gf[i*4+1]=v[1];gf[i*4+2]=v[2];gf[i*4+3]=v[3];}
+  let grow=null;   // per-scene REAL glare consts (nearest-t harvested row) - the firmware's own dormant/active animation
+  if(GLARE_ROWS && SCENES_IDX && SCENES_IDX[sceneIdx]){
+    const rows=GLARE_ROWS[String(SCENES_IDX[sceneIdx].scene)];
+    if(rows&&rows.length){ grow=rows[0]; for(const e of rows){ if(Math.abs(e.t-animT)<Math.abs(grow.t-animT)) grow=e; } } }
+  const gsrc=grow?grow.gfc:GLOW_FC;
+  const gf=new Float32Array(17*4);for(let i=0;i<17;i++){const v=gsrc[i]||[0,0,0,0];gf[i*4]=v[0];gf[i*4+1]=v[1];gf[i*4+2]=v[2];gf[i*4+3]=v[3];}
   gl.uniform4fv(C('gfc'),gf);}
  gl.bindVertexArray(glowVAO);
  gl.drawArrays(4,0,3);
@@ -1790,6 +1796,7 @@ async function load(){
        SEED_MANIFEST=await fetch(BASE+'gaia_lut/seeds_cap3/seeds_manifest.json').then(r=>r.ok?r.json():null).catch(()=>null);
        FLARE_ROWS=await fetch(BASE+'flares_cap3.json').then(r=>r.ok?r.json():null).catch(()=>null);
        FAITH_POLICY=await fetch(BASE+'faithful_policy.json').then(r=>r.ok?r.json():null).catch(()=>null);
+       GLARE_ROWS=await fetch(BASE+'glare_scene_rows.json').then(r=>r.ok?r.json():null).catch(()=>null);
        // per-frame bloom-of-display chain rows (encode FC + blur kernel + combine scalars, all animated per frame)
        if(SCENES_IDX){ BLOOM_SCENES={};
          await Promise.all(SCENES_IDX.map(s=>fetch(BASE+'bloom_scene_'+String(s.scene).padStart(2,'0')+'_cap2.json')
