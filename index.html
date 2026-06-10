@@ -10585,7 +10585,9 @@ function mpInitAudio() {
 
 function openMusicPlayer(tracks, idx) {
   mpInitAudio();
-  musicPlayer = {tracks: tracks, idx: idx, vis: (musicPlayer ? musicPlayer.vis : 0)};
+  // GLOBE is the default first visualizer (user request); SQUARE still cycles Waves/Canyon/Globe.
+  musicPlayer = {tracks: tracks, idx: idx, vis: (musicPlayer ? musicPlayer.vis : 2)};
+  if (musicPlayer.vis === 2 && typeof MPGlobe !== 'undefined') MPGlobe.start(mpGlobe2Canvas);
   mpPlayCurrent();
   playNav2();
 }
