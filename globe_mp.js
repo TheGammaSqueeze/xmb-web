@@ -67,6 +67,7 @@ let _ipA={cur:null}, _ipB={cur:null}, _ipC={cur:null};
 let texBicubic=null, texSeedA=null, texSeedB=null;
 let INSCAT_GEN=0;               // MPGlobe.inscatgen: use the generated bufA/bufC instead of the streamed captured LUT bins
 let SEED_MANIFEST=null, SEED_CACHE={}, _seedCur=null;   // cap3-aligned per-keyframe recovered seeds (seeds_cap3/)
+let FLARE_ROWS=null, FLARES=0;   // per-frame sun-flare billboard rows (vp 48ad6e97 windows + fp consts); MPGlobe.flares gate
 let BLOOMDISP=0;                // MPGlobe.bloomdisp: FAITHFUL bloom-of-display (encode bd9c5fac -> pyramid -> display+bloom*0.125, the burst corona). Gated until measured vs presents.
 let BLOOMPREMUL=1;              // encode output rgb premultiplied by the brightpass key (wiring of out.w into the pyramid; measurement-decided)
 let BLOOMALPHA=0;               // decode term: 0 = a*8=1 (display alpha 1/8 steady-state), 1 = sample the display texture alpha
@@ -1193,6 +1194,21 @@ function genInscatter(){
  gl.bindVertexArray(null);gl.bindFramebuffer(36160,null);
  return true;
 }
+// draw the per-frame sun-flare billboards (verbatim globe_flare.js) from the harvested rows.
+function drawFlares(){
+ if(!FLARES||!FLARE_ROWS||typeof GlobeFlare==='undefined'||!SCENES_IDX||!SCENES_IDX[sceneIdx]) return;
+ const s=SCENES_IDX[sceneIdx]; const fr=s.frame0+animT*((s.frame1-s.frame0)||1);
+ const keys=Object.keys(FLARE_ROWS); if(!keys.length) return;
+ let bk=keys[0]; for(const k of keys){ if(Math.abs(+k-fr)<Math.abs(+bk-fr)) bk=k; }
+ if(Math.abs(+bk-fr)>180) return;   // only when the capture has flares near this playback frame
+ if(!GlobeFlare._inited){ try{ GlobeFlare.init(gl); GlobeFlare._inited=true; }catch(e){ errlog+=' flare:'+e.message; FLARES=0; return; } }
+ const t14=CAP_T14||sharedTex.tex14, t15=CAP_T15||sharedTex.tex15;
+ for(const d of FLARE_ROWS[bk]){
+   const vc=[]; for(let i=0;i<17;i++) vc.push((d.c&&d.c[String(254+i)])||[0,0,0,0]);
+   const fc=[]; for(let i=0;i<8;i++) fc.push((d.fc&&d.fc[String(i)])||[0,0,0,0]);
+   GlobeFlare.draw(gl,{vc,fc,lut14:t14,lut15:t15,flipY:1.0});
+ }
+}
 // FAITHFUL render (GLOWFAITH): the firmware pipeline = earth -> col0 per-scene LUT -> DISPLAY (LDR), and the
 // LIMB/SUN -> their OWN tonemap + a SEPARATE HDR bloom -> additive composite. So we render TWO targets:
 //   F_disp (LDR): col0 earth (uMode=1, per-scene tex14/15, 1/128 scale, feedback) + drawAtmo (tonemapped limb)
@@ -1308,6 +1324,7 @@ function drawGlowFaith(){
    gl.uniform3fv(C('uGlowGain'),new Float32Array([c0,c0,c0]));
    gl.uniform1f(C('uPassthru'),1.0);
    gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
+   drawFlares();   // verbatim sun-flare billboards (post-composite, the real draw order)
    if(STARTEX)drawStarsTex();
    return;   // the legacy limb-HDR bloom (steps 3-5) is REPLACED by the real display-encode chain
  }
@@ -1687,6 +1704,7 @@ async function load(){
          await Promise.all(SCENES_IDX.map(s=>fetch(BASE+'flare_scene_'+String(s.scene).padStart(2,'0')+'_cap2.json')
            .then(r=>r.ok?r.json():null).then(j=>{ if(j) FLARE_SCENES[String(s.scene)]=j; }).catch(()=>null))); }
        SEED_MANIFEST=await fetch(BASE+'gaia_lut/seeds_cap3/seeds_manifest.json').then(r=>r.ok?r.json():null).catch(()=>null);
+       FLARE_ROWS=await fetch(BASE+'flares_cap3.json').then(r=>r.ok?r.json():null).catch(()=>null);
        // per-frame bloom-of-display chain rows (encode FC + blur kernel + combine scalars, all animated per frame)
        if(SCENES_IDX){ BLOOM_SCENES={};
          await Promise.all(SCENES_IDX.map(s=>fetch(BASE+'bloom_scene_'+String(s.scene).padStart(2,'0')+'_cap2.json')
@@ -1787,6 +1805,7 @@ set cull(v){ CULL=v?1:0; },
  set glow2(v){ GLOW2=v?1:0; }, get glow2(){ return GLOW2; },
  set burst(v){ BURST=v?1:0; }, get burst(){ return BURST; },   // verbatim sun-disc burst pass (needs flare_scene data)
  set bloomdisp(v){ BLOOMDISP=v?1:0; }, get bloomdisp(){ return BLOOMDISP; },
+ set flares(v){ FLARES=v?1:0; }, get flares(){ return FLARES; },
  set inscatgen(v){ INSCAT_GEN=v?1:0; }, get inscatgen(){ return INSCAT_GEN; },
  get _seedDiag(){ return {manifest:SEED_MANIFEST?Object.keys(SEED_MANIFEST).length:0, cached:Object.keys(SEED_CACHE).length, cur:!!_seedCur}; },
  _inscatStats(){ if(!_ipA.cur||!_ipC.cur) return 'not generated';
