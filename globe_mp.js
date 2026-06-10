@@ -59,6 +59,13 @@ let encProg=null;               // verbatim encode fp bd9c5fac/bc48008a: decode 
 let _encRef={cur:null};         // 512x512 bloom-source RT (firmware encode size, f82800 d017 viewport)
 let _dispFb={cur:null};         // persistent PREV-FRAME composited display (the bloom feedback loop input: the encode of frame N reads frame N-1's display = the eclipse-burst positive-feedback mechanism)
 let BLOOM_SCENES=null;          // per-scene rows {t,fr,enc[8],blur[8x3],up[8],comp[2]} harvested per frame (harvest_bloom.py)
+// ---- IN-SCATTER GENERATOR (the d017-d022 chain, VERBATIM; validated 63.7/65.4/68.0 dB vs live GPU
+//      buffers by bloom_tools/inscat_ref.py). Inputs: per-scene seedA 40x40 + seedB 40x20 (CPU-written
+//      in firmware) + the static BicubicTable 128x1. Outputs: bufA (limb scatter _AtmSpaceIv) + bufC (tex4).
+let ipUpProg=null, ipCombineProg=null;
+let _ipA={cur:null}, _ipB={cur:null}, _ipC={cur:null};
+let texBicubic=null, texSeedA=null, texSeedB=null;
+let INSCAT_GEN=0;               // MPGlobe.inscatgen: use the generated bufA/bufC instead of the streamed captured LUT bins
 let BLOOMDISP=0;                // MPGlobe.bloomdisp: FAITHFUL bloom-of-display (encode bd9c5fac -> pyramid -> display+bloom*0.125, the burst corona). Gated until measured vs presents.
 let BLOOMPREMUL=1;              // encode output rgb premultiplied by the brightpass key (wiring of out.w into the pyramid; measurement-decided)
 let BLOOMALPHA=0;               // decode term: 0 = a*8=1 (display alpha 1/8 steady-state), 1 = sample the display texture alpha
@@ -625,6 +632,43 @@ void main(){
   float key = dot(u, uEFC[7].xyz);
   ocol0 = vec4(dec, key);
 }`;
+// ---- VERBATIM in-scatter upsample (fps 69a20e74 seedA / 48b46d4c seedB, identical dataflow):
+//      LUT-weighted 4-tap bicubic upsample via the captured BicubicTable (x=minus-off, y=plus-off,
+//      z=minus-w, w=plus-w; 128 texels per phase period, REPEAT), then the gain h0*(1+sat(h0*4/3)/3).
+//      Both quads span tc 0..1; By = tc.y*fc1.z (A: 0.2 -> the seed's top band; B: 1.0). u-taps have
+//      no y-offset and v-taps no x-offset (fc5.x=0) - literal decompile asymmetries. PSNR 63.7/65.4 dB.
+const IPUP_FS=`#version 300 es
+precision highp float; precision highp sampler2D;
+uniform sampler2D uSeed; uniform sampler2D uTable;
+uniform vec2 uFc0; uniform float uFc1z; uniform float uFc4y;
+in vec2 vUV; out vec4 ocol0;
+void main(){
+  float Bx = vUV.x;
+  float By = vUV.y * uFc1z;
+  vec4 r2 = texture(uTable, vec2(Bx*uFc0.x - 0.5, 0.5));
+  vec4 r3 = texture(uTable, vec2(By*uFc0.y - 0.5, 0.5));
+  float um = Bx - r2.x*0.025, up = Bx + r2.y*0.025;
+  float vm = By - r3.x*uFc4y, vp = By + r3.y*uFc4y;
+  vec4 h1 = r3.w*texture(uSeed, vec2(um,vp)) + r3.z*texture(uSeed, vec2(um,vm));
+  vec4 h4 = texture(uSeed, vec2(up,vp))*r3.w + r3.z*texture(uSeed, vec2(up,vm));
+  vec4 h0 = h4*r2.w + r2.z*h1;
+  vec4 r1 = clamp(h0*1.33333, 0.0, 1.0);
+  ocol0 = r1*0.33333*h0 + h0;
+}`;
+// ---- VERBATIM horizon combine (fp 4dd03757 = lib_atm_atm_horiz.fpo): blend bufB toward bufA's
+//      CONSTANT ROW V=0 with a smoothstep band at v in [0.86, 1.0] (fc0=0.14 HORIZ BLEED, fc4=3).
+//      Alpha = bufB passthrough. PSNR 68.0 dB vs the live GPU bufC.
+const IPCOMB_FS=`#version 300 es
+precision highp float; precision highp sampler2D;
+uniform sampler2D uB; uniform sampler2D uA;
+in vec2 vUV; out vec4 ocol0;
+void main(){
+  float t = clamp((vUV.y - 0.86)/0.14, 0.0, 1.0);
+  float w = t*t*(3.0 - 2.0*t);
+  vec4 c = texture(uB, vUV);
+  vec3 arow = texture(uA, vec2(vUV.x, 0.5/128.0)).xyz;
+  ocol0 = vec4(c.rgb + w*(arow - c.rgb), c.a);
+}`;
 
 // ---- STAR FIELD (real-derived) : 1122 stars triangulated from the camera-sweep presents (back-projected
 //      through each frame's captured VP). Rendered at infinity via the SAME RSX viewport remap as the
@@ -1021,7 +1065,7 @@ function drawGlow(){
  gl.uniform1f(U('uSlum'),SLUM);
  gl.uniform1f(U('uLutScale'),LUTSCALE); gl.uniform1f(U('uFeedback'),FEEDBACK_PS);
  gl.uniform4fv(U('fc'),fc);
- const surfTex4 = CAP_LUT || ((INSCAT_PS&&_psSurfTex) ? _psSurfTex : ((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
+ const surfTex4 = ((INSCAT_GEN&&_ipC.cur)?_ipC.cur.tex:null) || CAP_LUT || ((INSCAT_PS&&_psSurfTex) ? _psSurfTex : ((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
  bindT(4,'tex4',surfTex4);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
  bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black);
  gl.uniform1f(U('uTiles'),TILES);
@@ -1094,6 +1138,36 @@ function drawGlow(){
  // (atmosphere is now rendered additively into the HDR FBO above, step 1b, so it blooms + tonemaps
  //  with the earth and keeps its blue -- no separate post pass needed.)
 }
+// Run the verbatim in-scatter generator chain: seeds -> bufA (limb scatter) + bufB -> bufC (tex4).
+// Mirrors the firmware d017-d022 sequence (clear 0.2-grey then write; blend OFF; 256x128 fp16 RTs).
+function genInscatter(){
+ if(!ipUpProg||!ipCombineProg||!texSeedA||!texSeedA.loaded||!texSeedB||!texSeedB.loaded||!texBicubic||!texBicubic.loaded) return false;
+ const A=ensureColorRT(_ipA,256,128), B=ensureColorRT(_ipB,256,128), Cc=ensureColorRT(_ipC,256,128);
+ gl.disable(2929);gl.disable(3042);gl.disable(2884);
+ gl.bindTexture(3553,texBicubic);gl.texParameteri(3553,10242,10497);   // REPEAT wrap_s for the phase coordinate
+ gl.bindVertexArray(glowVAO);
+ gl.useProgram(ipUpProg);
+ const U=n=>gl.getUniformLocation(ipUpProg,n);
+ const run=(rt,seed,fc0x,fc0y,fc1z,fc4y)=>{
+   gl.bindFramebuffer(36160,rt.fbo);gl.viewport(0,0,256,128);
+   gl.clearColor(0.2,0.2,0.2,1);gl.clear(16384);                        // verbatim clear fp 6db9195a fc0
+   gl.activeTexture(33984);gl.bindTexture(3553,seed);gl.uniform1i(U('uSeed'),0);
+   gl.activeTexture(33985);gl.bindTexture(3553,texBicubic);gl.uniform1i(U('uTable'),1);
+   gl.uniform2f(U('uFc0'),fc0x,fc0y);gl.uniform1f(U('uFc1z'),fc1z);gl.uniform1f(U('uFc4y'),fc4y);
+   gl.drawArrays(4,0,3);
+ };
+ run(A,texSeedA,40,40,0.2,0.025);
+ run(B,texSeedB,40,20,1.0,0.05);
+ gl.bindFramebuffer(36160,Cc.fbo);gl.viewport(0,0,256,128);
+ gl.clearColor(0.2,0.2,0.2,1);gl.clear(16384);
+ gl.useProgram(ipCombineProg);
+ const V=n=>gl.getUniformLocation(ipCombineProg,n);
+ gl.activeTexture(33984);gl.bindTexture(3553,B.tex);gl.uniform1i(V('uB'),0);
+ gl.activeTexture(33985);gl.bindTexture(3553,A.tex);gl.uniform1i(V('uA'),1);
+ gl.drawArrays(4,0,3);
+ gl.bindVertexArray(null);gl.bindFramebuffer(36160,null);
+ return true;
+}
 // FAITHFUL render (GLOWFAITH): the firmware pipeline = earth -> col0 per-scene LUT -> DISPLAY (LDR), and the
 // LIMB/SUN -> their OWN tonemap + a SEPARATE HDR bloom -> additive composite. So we render TWO targets:
 //   F_disp (LDR): col0 earth (uMode=1, per-scene tex14/15, 1/128 scale, feedback) + drawAtmo (tonemapped limb)
@@ -1102,6 +1176,7 @@ function drawGlow(){
 function drawGlowFaith(){
  const W=canvas.width,H=canvas.height;
  const Fd=ensureHDR(W,H), Fb=ensureHDR2(W,H);
+ if(INSCAT_GEN) genInscatter();   // verbatim per-frame tex4/limb generation (firmware d017-d022)
  // ---- 1) F_disp = col0 earth (LDR) + tonemapped limb ----
  gl.bindFramebuffer(36160,Fd.fbo);
  // clear alpha = 1.0: the display A channel is the HDR-exponent (present dark sky alpha = 255 = 1.0)
@@ -1115,7 +1190,7 @@ function drawGlowFaith(){
  gl.uniform1f(U('uSlum'),SLUM);
  gl.uniform1f(U('uLutScale'),1.0/128.0);gl.uniform1f(U('uFeedback'),1.0);   // faithful: 1/128 UN-scale + steady-state feedback
  gl.uniform4fv(U('fc'),fc);
- const surfTex4 = CAP_LUT || ((INSCAT_PS&&_psSurfTex)?_psSurfTex:((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
+ const surfTex4 = ((INSCAT_GEN&&_ipC.cur)?_ipC.cur.tex:null) || CAP_LUT || ((INSCAT_PS&&_psSurfTex)?_psSurfTex:((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
  bindT(4,'tex4',surfTex4);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
  bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black);
  gl.uniform1f(U('uTiles'),TILES);
@@ -1265,7 +1340,7 @@ function drawAtmoLinear(){
  gl.uniform4fv(U('fc'),fcAtmo);
  // _AtmSpaceIv (TEXUNIT0 of the atmo shell fp): per-scene -> the picked scene's LIMB lut (ac6e80000); eclipse ->
  // the shipped tex0atmEcl (broad warm scatter); else the daytime scatterTex. NOT the surface tex4 (nearly black).
- const aScat=CAP_LIMB || ((INSCAT_PS&&_psScat) ? _psScat : (INSCAT_ECL ? ((ATMO_SOLID&&sharedTex.tex0atmEclSolid)?sharedTex.tex0atmEclSolid:((ATMO_VFLIP&&sharedTex.tex0atmEclFlip)?sharedTex.tex0atmEclFlip:(sharedTex.tex0atmEcl||sharedTex.tex4ecl||scatterTex))) : scatterTex));
+ const aScat=((INSCAT_GEN&&_ipA.cur)?_ipA.cur.tex:null) || CAP_LIMB || ((INSCAT_PS&&_psScat) ? _psScat : (INSCAT_ECL ? ((ATMO_SOLID&&sharedTex.tex0atmEclSolid)?sharedTex.tex0atmEclSolid:((ATMO_VFLIP&&sharedTex.tex0atmEclFlip)?sharedTex.tex0atmEclFlip:(sharedTex.tex0atmEcl||sharedTex.tex4ecl||scatterTex))) : scatterTex));
  gl.activeTexture(33984);gl.bindTexture(3553,aScat);gl.uniform1i(U('tex0'),0);
  gl.disable(2884); gl.depthMask(false); gl.enable(3042); gl.blendFunc(1,1);
  let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
@@ -1293,7 +1368,7 @@ function draw(){
  gl.uniform1f(U('uSlum'),SLUM);
  gl.uniform1f(U('uLutScale'),LUTSCALE); gl.uniform1f(U('uFeedback'),FEEDBACK_PS);
  gl.uniform4fv(U('fc'),fc);
- const surfTex4 = CAP_LUT || ((INSCAT_PS&&_psSurfTex) ? _psSurfTex : ((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
+ const surfTex4 = ((INSCAT_GEN&&_ipC.cur)?_ipC.cur.tex:null) || CAP_LUT || ((INSCAT_PS&&_psSurfTex) ? _psSurfTex : ((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
  bindT(4,'tex4',surfTex4);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
  bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black);
  gl.uniform1f(U('uTiles'),TILES);
@@ -1333,7 +1408,7 @@ function drawAtmo(){
  if(curFC&&curFC[4]&&!FCATMO_OVR)fcAtmo[16*4]=curFC[4][1];   // per-scene atmosphere intensity approximation (real const[16].x != surface fc[4].y); skipped when the REAL atmo fp consts are fed via MPGlobe.fcatmo
  gl.uniform4fv(U('fc'),fcAtmo);
  // _AtmSpaceIv (TEXUNIT0): per-scene -> picked scene's LIMB lut; eclipse -> atmo draw's own tex0 RT (tex0atmEcl).
- const aScat=CAP_LIMB || ((INSCAT_PS&&_psScat) ? _psScat : (INSCAT_ECL ? ((ATMO_SOLID&&sharedTex.tex0atmEclSolid)?sharedTex.tex0atmEclSolid:((ATMO_VFLIP&&sharedTex.tex0atmEclFlip)?sharedTex.tex0atmEclFlip:(sharedTex.tex0atmEcl||sharedTex.tex4ecl||scatterTex))) : scatterTex));
+ const aScat=((INSCAT_GEN&&_ipA.cur)?_ipA.cur.tex:null) || CAP_LIMB || ((INSCAT_PS&&_psScat) ? _psScat : (INSCAT_ECL ? ((ATMO_SOLID&&sharedTex.tex0atmEclSolid)?sharedTex.tex0atmEclSolid:((ATMO_VFLIP&&sharedTex.tex0atmEclFlip)?sharedTex.tex0atmEclFlip:(sharedTex.tex0atmEcl||sharedTex.tex4ecl||scatterTex))) : scatterTex));
  gl.activeTexture(33984);gl.bindTexture(3553,aScat);gl.uniform1i(U('tex0'),0);
  gl.disable(2884); gl.depthMask(false); gl.enable(3042); gl.blendFuncSeparate(1,1,1,0);   // ONE,ONE additive color; alpha REPLACED by the atmo scatter term (measured: real limb ring α≈0.2 < sky α, so not additive)
  let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
@@ -1481,6 +1556,11 @@ async function load(){
  // gloss generation (replaces the static t04). odLut=optical-depth/transmittance 256(sun-elev)x40(shell);
  // ieFull=irradiance-on-earth LUT 256, UNCLAMPED (real HDR night values). Loaded now; wired by the in-scatter pass.
  sharedTex.odLut=texF32(BASE+'gaia_lut/od_lut_256x40_rgba_f32_le.bin',256,40);
+ // in-scatter generator inputs: the static BicubicTable (REPEAT set at use) + seeds (per-scene;
+ // the tz_* pair = the live-dumped timezone seeds, the generator's validation reference)
+ texBicubic=texF32(BASE+'gaia_lut/bicubic_table_128x1_rgba_f32.bin',128,1,1);
+ texSeedA=texF32(BASE+'gaia_lut/tz_seedA_40x40_rgba_f32.bin',40,40,1);
+ texSeedB=texF32(BASE+'gaia_lut/tz_seedB_40x20_rgba_f32.bin',40,20,1);
  sharedTex.ieFull=texF32(BASE+'gaia_lut/ie_lut_256x1_rgba_f32_le.bin',256,1);
  sharedTex.tex4ecl=texF32(BASE+'gaia_lut/inscatter_eclipse_tex4_256x128_rgba_f32_le.bin',256,128);  // eclipse SURFACE fp tex4 (real RT ac6f80000; mostly black, warm sliver at V=1)
  // eclipse ATMOSPHERE SHELL _AtmSpaceIv = the atmo draw's OWN tex0 RT (ac6e80000), a broad warm+cyan scatter
@@ -1613,6 +1693,10 @@ const MPGlobe={
    if(!gl.getProgramParameter(gsProg,gl.LINK_STATUS)){errlog+=' glaresrc link: '+gl.getProgramInfoLog(gsProg);}
    encProg=gl.createProgram();gl.attachShader(encProg,sh(35633,C_VS));gl.attachShader(encProg,sh(35632,ENC_FS));gl.linkProgram(encProg);
    if(!gl.getProgramParameter(encProg,gl.LINK_STATUS)){errlog+=' encode link: '+gl.getProgramInfoLog(encProg);encProg=null;}
+   ipUpProg=gl.createProgram();gl.attachShader(ipUpProg,sh(35633,C_VS));gl.attachShader(ipUpProg,sh(35632,IPUP_FS));gl.linkProgram(ipUpProg);
+   if(!gl.getProgramParameter(ipUpProg,gl.LINK_STATUS)){errlog+=' ipup link: '+gl.getProgramInfoLog(ipUpProg);ipUpProg=null;}
+   ipCombineProg=gl.createProgram();gl.attachShader(ipCombineProg,sh(35633,C_VS));gl.attachShader(ipCombineProg,sh(35632,IPCOMB_FS));gl.linkProgram(ipCombineProg);
+   if(!gl.getProgramParameter(ipCombineProg,gl.LINK_STATUS)){errlog+=' ipcomb link: '+gl.getProgramInfoLog(ipCombineProg);ipCombineProg=null;}
    starProg=gl.createProgram();gl.attachShader(starProg,sh(35633,STAR_VS));gl.attachShader(starProg,sh(35632,STAR_FS));gl.linkProgram(starProg);
    starTexProg=gl.createProgram();gl.attachShader(starTexProg,sh(35633,STARTEX_VS));gl.attachShader(starTexProg,sh(35632,STARTEX_FS));gl.linkProgram(starTexProg);
    // star skybox cube: 6 faces, each a quad (texcoord 0..1, tiled in the VS); inside-out, no cull
@@ -1672,7 +1756,19 @@ set cull(v){ CULL=v?1:0; },
  set starBri(v){ STAR_BRI=v; },
  set glow2(v){ GLOW2=v?1:0; }, get glow2(){ return GLOW2; },
  set burst(v){ BURST=v?1:0; }, get burst(){ return BURST; },   // verbatim sun-disc burst pass (needs flare_scene data)
- set bloomdisp(v){ BLOOMDISP=v?1:0; }, get bloomdisp(){ return BLOOMDISP; },     // faithful bloom-of-display (encode bd9c5fac -> pyramid -> +0.125)
+ set bloomdisp(v){ BLOOMDISP=v?1:0; }, get bloomdisp(){ return BLOOMDISP; },
+ set inscatgen(v){ INSCAT_GEN=v?1:0; }, get inscatgen(){ return INSCAT_GEN; },
+ _inscatStats(){ if(!_ipA.cur||!_ipC.cur) return 'not generated';
+   const rd=(rt)=>{ const px=new Float32Array(256*128*4);
+     gl.bindFramebuffer(36160,rt.fbo); gl.readPixels(0,0,256,128,6408,5126,px); gl.bindFramebuffer(36160,null);
+     let s=0,mx=0; for(let i=0;i<256*128;i++){ const v=Math.max(px[i*4],px[i*4+1],px[i*4+2]); s+=v; if(v>mx)mx=v; }
+     return {mean:+(s/(256*128)).toFixed(5), max:+mx.toFixed(4)}; };
+   return {A:rd(_ipA.cur), C:rd(_ipC.cur), seeds:!!(texSeedA&&texSeedA.loaded&&texSeedB&&texSeedB.loaded&&texBicubic&&texBicubic.loaded)}; },
+ _inscatSample(which,stride){ const rt=(which==='A'?_ipA:which==='B'?_ipB:_ipC).cur; if(!rt) return null;
+   stride=stride||8; const px=new Float32Array(256*128*4); const out=[];
+   gl.bindFramebuffer(36160,rt.fbo); gl.readPixels(0,0,256,128,6408,5126,px); gl.bindFramebuffer(36160,null);
+   for(let y=0;y<128;y+=stride) for(let x=0;x<256;x+=stride){ const i=(y*256+x)*4; out.push(+px[i].toFixed(5),+px[i+1].toFixed(5),+px[i+2].toFixed(5)); }
+   return out; },     // faithful bloom-of-display (encode bd9c5fac -> pyramid -> +0.125)
  set bloompremul(v){ BLOOMPREMUL=v?1:0; }, get bloompremul(){ return BLOOMPREMUL; },
  set bloomalpha(v){ BLOOMALPHA=v?1:0; }, get bloomalpha(){ return BLOOMALPHA; },
  _encStats(){ if(!_encRef.cur) return 'no enc';
