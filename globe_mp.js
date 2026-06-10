@@ -856,8 +856,8 @@ function seedCap3(si, t, frOpt){
  const fr=(frOpt!==undefined)?frOpt:(s.frame0 + t*((s.frame1-s.frame0)||1));
  let best=list[0]; for(const e of list){ if(Math.abs(e.fr-fr)<Math.abs(best.fr-fr)) best=e; }
  if(!SEED_CACHE[best.fr]) SEED_CACHE[best.fr]={scene:s.scene,
-   A:texF32(BASE+'gaia_lut/seeds_cap3/seedA_f'+String(best.fr).padStart(6,'0')+'.bin',40,40,1),
-   B:texF32(BASE+'gaia_lut/seeds_cap3/seedB_f'+String(best.fr).padStart(6,'0')+'.bin',40,20,1)};
+   A:texF32(lfsURL('gaia_lut/seeds_cap3/seedA_f'+String(best.fr).padStart(6,'0')+'.bin'),40,40,1),
+   B:texF32(lfsURL('gaia_lut/seeds_cap3/seedB_f'+String(best.fr).padStart(6,'0')+'.bin'),40,20,1)};
  const c=SEED_CACHE[best.fr];
  if(c.A.loaded&&c.B.loaded){ if(_seedCur!==c){ texSeedA=c.A; texSeedB=c.B; _seedCur=c; } return true; }
  return !!(_seedCur && _seedCur.scene===s.scene);   // hold ONLY within the same scene; never leak across scenes
@@ -1825,21 +1825,25 @@ async function load(){
      // per-scene surface-fp tonemap LUTs (brightness fix); loaded if present, gated by TONELUT_PS. 128x128 rgba32f (ch0/ch1).
      try{
        // per-scene burst rows (vp window consts + fp consts of the sun-disc draw) + the captured fan geometry
+       if(typeof window!=='undefined')(window.__ld=window.__ld||[]).push('burst');
        BURST_FAN=await fetch(BASE+'burst_fan65.json').then(r=>r.ok?r.json():null).catch(()=>null);
        if(BURST_FAN&&SCENES_IDX){ FLARE_SCENES={};
          await Promise.all(SCENES_IDX.map(s=>fetch(BASE+'flare_scene_'+String(s.scene).padStart(2,'0')+'_cap2.json')
            .then(r=>r.ok?r.json():null).then(j=>{ if(j) FLARE_SCENES[String(s.scene)]=j; }).catch(()=>null))); }
+       if(typeof window!=='undefined')window.__ld.push('seeds');
        SEED_MANIFEST=await fetch(BASE+'gaia_lut/seeds_cap3/seeds_manifest.json').then(r=>r.ok?r.json():null).catch(()=>null);
-       FLARE_ROWS=await fetch(BASE+'flares_cap3.json').then(r=>r.ok?r.json():null).catch(()=>null);
+       FLARE_ROWS=await fetch(lfsURL('flares_cap3.json')).then(r=>r.ok?r.json():null).catch(()=>null);   // LFS on Pages
        FAITH_POLICY=await fetch(BASE+'faithful_policy.json').then(r=>r.ok?r.json():null).catch(()=>null);
+       if(typeof window!=='undefined')window.__ld.push('glare');
        GLARE_ROWS=await fetch(BASE+'glare_gcap3_rows.json').then(r=>r.ok?r.json():null).catch(()=>null);   // globecap3-aligned (same capture as the presents + the proven fan-window layout)
        // per-frame bloom-of-display chain rows (encode FC + blur kernel + combine scalars, all animated per frame)
        if(SCENES_IDX){ BLOOM_SCENES={};
          await Promise.all(SCENES_IDX.map(s=>fetch(BASE+'bloom_scene_'+String(s.scene).padStart(2,'0')+'_cap2.json')
            .then(r=>r.ok?r.json():null).then(j=>{ if(j) BLOOM_SCENES[String(s.scene)]=j; }).catch(()=>null))); }
+       if(typeof window!=='undefined')window.__ld.push('tone');
        CAP_SCENE_TONE=await fetch(BASE+'cap_scene_tonelut.json').then(r=>r.ok?r.json():null).catch(()=>null);
        if(CAP_SCENE_TONE) CAP_TONE_CACHE={};   // lazy: capSceneTone() loads on demand (non-blocking)
-     }catch(e){ CAP_SCENE_TONE=null; }
+     }catch(e){ CAP_SCENE_TONE=null; if(typeof window!=='undefined')window.__ldErr=''+e; }
      ATMO_SCENES=await Promise.all(idx.map(s=>fetch(BASE+'atmo_scene_'+String(s.scene).padStart(2,'0')+'_cap2.json').then(r=>r.ok?r.json():null).catch(()=>null)));
      ATMO=0;   // per-scene gated in tick() (1 only when the scene has both a limb LUT and atmo consts)
    }
