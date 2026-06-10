@@ -68,7 +68,7 @@ let texBicubic=null, texSeedA=null, texSeedB=null;
 let INSCAT_GEN=0;               // MPGlobe.inscatgen: use the generated bufA/bufC instead of the streamed captured LUT bins
 let SEED_MANIFEST=null, SEED_CACHE={}, _seedCur=null;   // cap3-aligned per-keyframe recovered seeds (seeds_cap3/)
 let _ipValid=false;             // the generated buffers correspond to the CURRENT scene's seeds
-let FLARE_ROWS=null, FLARES=0, FLARESPRE=0;   // per-frame sun-flare billboard rows (vp 48ad6e97 windows + fp consts); MPGlobe.flares gate
+let FLARE_ROWS=null, FLARES=0, FLARESPRE=0, DISPRETAIN=0;   // per-frame sun-flare billboard rows (vp 48ad6e97 windows + fp consts); MPGlobe.flares gate
 let BIAS0=-8.0, BIAS2=-0.1562;   // REAL RSX LOD biases (DRAWCALLS); MPGlobe.bias0/bias2 for sampling A/B
 let STARS2=0;                    // MPGlobe.stars2: verbatim per-frame star brightness (the harvested enc2 consts) instead of the .mnu curve
 let GLARE_ROWS=null;             // per-scene REAL sun-glare consts (vp c868fd6a, 17 fc rows in the GLOW_FC layout; [13]/[16]=color, denormal-zero when dormant)
@@ -1306,7 +1306,10 @@ function drawGlowFaith(){
  // ---- 1) F_disp = col0 earth (LDR) + tonemapped limb ----
  gl.bindFramebuffer(36160,Fd.fbo);
  // clear alpha = 1.0: the display A channel is the HDR-exponent (present dark sky alpha = 255 = 1.0)
- gl.viewport(0,0,W,H);gl.clearColor(0,0,0,1);gl.clear(16640);gl.enable(2929);gl.depthFunc(515);
+ gl.viewport(0,0,W,H);
+ if(DISPRETAIN){ gl.clear(256); }   // REAL pipeline: the display is NEVER color-cleared (no clear pass in the draw list) - the sky temporally accumulates (flare lobes = equilibrium); depth-only clear
+ else { gl.clearColor(0,0,0,1); gl.clear(16640); }
+ gl.enable(2929);gl.depthFunc(515);
  if(CULL){gl.enable(2884);gl.cullFace(1029);}else{gl.disable(2884);}
  gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
  const fcsrc=curFC||D.fc; const fc=new Float32Array(23*4);for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
@@ -1945,6 +1948,7 @@ set cull(v){ CULL=v?1:0; },
  set bloomdisp(v){ BLOOMDISP=v?1:0; }, get bloomdisp(){ return BLOOMDISP; },
  set flares(v){ FLARES=v?1:0; }, get flares(){ return FLARES; },
  set flarespre(v){ FLARESPRE=v?1:0; }, get flarespre(){ return FLARESPRE; },
+ set dispretain(v){ DISPRETAIN=v?1:0; }, get dispretain(){ return DISPRETAIN; },
  set inscatgen(v){ INSCAT_GEN=v?1:0; }, get inscatgen(){ return INSCAT_GEN; },
  set stars2(v){ STARS2=v?1:0; }, get stars2(){ return STARS2; },
  set bias0(v){ BIAS0=+v; }, get bias0(){ return BIAS0; },
