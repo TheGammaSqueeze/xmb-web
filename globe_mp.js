@@ -335,7 +335,8 @@ vec4 ip = in_pos;
 const FS=`#version 300 es
 precision highp float;
 in vec4 tc0,tc3,tc4,tc5,tc6,tc8,tc9; in vec3 vN; in vec3 vL; in vec3 vSph; in vec4 vClip;
-uniform sampler2D tex0,tex1,tex2,tex3,tex4,tex5,tex6,tex13,tex14,tex15;   // tex0-3 = THIS patch's 4 firmware tiles (t00-t03)
+uniform sampler2D tex0,tex1,tex2,tex3,tex4,tex5,tex6,tex13,tex14,tex15;
+uniform float uT3Flip;   // tex0-3 = THIS patch's 4 firmware tiles (t00-t03)
 uniform samplerCube earthCube, cloudsCube, maskCube;   // legacy cube-map path (kept for DBG/fallback)
 uniform vec4 fc[23];
 uniform float uDbg, uMode, uSlum, uTiles, uT2bad;
@@ -392,7 +393,8 @@ void main(){
   r4.z = fc[15].y;
   r3.y = fc[16].x;
   r3.z = fc[17].x;
-  r1 = texture(tex4, tc3.xy);
+  vec2 _t3=tc3.xy; if(uT3Flip>0.5) _t3.y=1.0-_t3.y;   // per-scene illumination V-flip (lit-direction repair; present-A/B'd)
+  r1 = texture(tex4, _t3);
   h6.xyz = fma3(-r1.www, r3.xyz, r4.xyz);
   r4.xyz = texture(tex5, tc5.xy).xyz;
   h6.xyz = (r4.xyz * h6.xyz);
@@ -1022,6 +1024,7 @@ void main(){
  if(dot(c263.xyz,d)<0.0) d=-d;
  d=normalize(d);
  float b=dot(uEye,d), cc=dot(uEye,uEye)-1.0;
+ if(cc<0.1){ ocol0=vec4(st,1.0); return; }   // eye inside/at the unit sphere = degenerate occlusion row (sc11-class artifact guard)
  if(uDbg>0.5){ ocol0=vec4((b<0.0&&b*b-cc>=0.0)?vec3(1.0,0.0,0.0):vec3(0.0,0.3,0.0),1.0); return; }
  if(b<0.0 && b*b-cc>=0.0) st=vec3(0.0);
  ocol0=vec4(st, 1.0);
@@ -1197,7 +1200,7 @@ function drawGlow(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
    gl.uniform1f(U('uT2bad'), (T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
-   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  // (per-scene limb atmo frame is set in resolveInscat -> ATMO_SCENE auto-managed)
@@ -1354,7 +1357,7 @@ function drawGlowFaith(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]);}
    gl.uniform1f(U('uT2bad'),(T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
-   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex&&!STARSONLY) drawAtmo();   // tonemapped limb (uLinear=0, LDR) into F_disp
@@ -1477,7 +1480,12 @@ function drawGlowFaith(){
    gl.useProgram(cprog);
    gl.activeTexture(33984+0);gl.bindTexture(3553,FP.tex);gl.uniform1i(C('uEarth'),0);
    gl.activeTexture(33984+1);gl.bindTexture(3553,glow.tex);gl.uniform1i(C('uGlow'),1);
-   gl.uniform3fv(C('uGlowGain'),new Float32Array([c0,c0,c0]));
+   let cg=c0;
+   if(FAITH_POLICY&&FAITH_POLICY.bloomGain&&SCENES_IDX&&SCENES_IDX[sceneIdx]){
+     const g=FAITH_POLICY.bloomGain[String(SCENES_IDX[sceneIdx].scene)];
+     if(typeof g==='number') cg=c0*g;   // per-scene present-fitted gain (approximation pass, user-approved 2026-06-11)
+   }
+   gl.uniform3fv(C('uGlowGain'),new Float32Array([cg,cg,cg]));
    gl.uniform1f(C('uPassthru'),1.0);
    gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
    drawFlares();   // verbatim sun-flare billboards (post-composite, the real draw order)
@@ -1617,7 +1625,7 @@ function draw(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
    gl.uniform1f(U('uT2bad'), (T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
-   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex)drawAtmo();
@@ -2034,6 +2042,7 @@ set cull(v){ CULL=v?1:0; },
  set atmodepth(v){ ATMODEPTH=v?1:0; }, get atmodepth(){ return ATMODEPTH; },
  set atmoband(v){ ATMOBAND=v?1:0; }, get atmoband(){ return ATMOBAND; },
  set bloomc1(v){ BLOOMC1=v?1:0; }, get bloomc1(){ return BLOOMC1; },
+ setBloomGain(sid,g){ if(FAITH_POLICY){ FAITH_POLICY.bloomGain=FAITH_POLICY.bloomGain||{}; FAITH_POLICY.bloomGain[String(sid)]=g; return 1; } return 0; },
  set bias0(v){ BIAS0=+v; }, get bias0(){ return BIAS0; },
  set bias2(v){ BIAS2=+v; }, get bias2(){ return BIAS2; },
  set faithauto(v){ FAITH_AUTO=v?1:0; }, get faithauto(){ return FAITH_AUTO; },
