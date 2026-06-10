@@ -1484,6 +1484,14 @@ function drawGlowFaith(){
    if(FAITH_POLICY&&FAITH_POLICY.bloomGain&&SCENES_IDX&&SCENES_IDX[sceneIdx]){
      const g=FAITH_POLICY.bloomGain[String(SCENES_IDX[sceneIdx].scene)];
      if(typeof g==='number') cg=c0*g;   // per-scene present-fitted gain (approximation pass, user-approved 2026-06-11)
+     else if(Array.isArray(g)&&g.length){   // per-(scene,t) ENVELOPE [[t,gain],...] - piecewise linear (the real bloom animates per frame; fitted per t vs the presents)
+       let gv=g[0][1];
+       for(let i=0;i<g.length;i++){
+         if(animT<=g[i][0]){ if(i===0){gv=g[0][1];} else { const a=g[i-1],b=g[i]; const w=(animT-a[0])/((b[0]-a[0])||1); gv=a[1]+(b[1]-a[1])*w; } break; }
+         gv=g[i][1];
+       }
+       cg=c0*gv;
+     }
    }
    gl.uniform3fv(C('uGlowGain'),new Float32Array([cg,cg,cg]));
    gl.uniform1f(C('uPassthru'),1.0);
