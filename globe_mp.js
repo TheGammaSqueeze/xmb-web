@@ -67,6 +67,7 @@ let _ipA={cur:null}, _ipB={cur:null}, _ipC={cur:null};
 let texBicubic=null, texSeedA=null, texSeedB=null;
 let INSCAT_GEN=0;               // MPGlobe.inscatgen: use the generated bufA/bufC instead of the streamed captured LUT bins
 let SEED_MANIFEST=null, SEED_CACHE={}, _seedCur=null;   // cap3-aligned per-keyframe recovered seeds (seeds_cap3/)
+let _ipValid=false;             // the generated buffers correspond to the CURRENT scene's seeds
 let FLARE_ROWS=null, FLARES=0;   // per-frame sun-flare billboard rows (vp 48ad6e97 windows + fp consts); MPGlobe.flares gate
 let BLOOMDISP=0;                // MPGlobe.bloomdisp: FAITHFUL bloom-of-display (encode bd9c5fac -> pyramid -> display+bloom*0.125, the burst corona). Gated until measured vs presents.
 let BLOOMPREMUL=1;              // encode output rgb premultiplied by the brightpass key (wiring of out.w into the pyramid; measurement-decided)
@@ -834,12 +835,12 @@ function seedCap3(si, t, frOpt){
  if(!list||!list.length) return false;
  const fr=(frOpt!==undefined)?frOpt:(s.frame0 + t*((s.frame1-s.frame0)||1));
  let best=list[0]; for(const e of list){ if(Math.abs(e.fr-fr)<Math.abs(best.fr-fr)) best=e; }
- if(!SEED_CACHE[best.fr]) SEED_CACHE[best.fr]={
+ if(!SEED_CACHE[best.fr]) SEED_CACHE[best.fr]={scene:s.scene,
    A:texF32(BASE+'gaia_lut/seeds_cap3/seedA_f'+String(best.fr).padStart(6,'0')+'.bin',40,40,1),
    B:texF32(BASE+'gaia_lut/seeds_cap3/seedB_f'+String(best.fr).padStart(6,'0')+'.bin',40,20,1)};
  const c=SEED_CACHE[best.fr];
  if(c.A.loaded&&c.B.loaded){ if(_seedCur!==c){ texSeedA=c.A; texSeedB=c.B; _seedCur=c; } return true; }
- return _seedCur!==null;   // keep the previous pair while loading (same-scene sticky)
+ return !!(_seedCur && _seedCur.scene===s.scene);   // hold ONLY within the same scene; never leak across scenes
 }
 function resolveInscat(){
  _psFrame=null; _psScat=null; _psName=null;
@@ -1091,7 +1092,7 @@ function drawGlow(){
  gl.uniform1f(U('uSlum'),SLUM);
  gl.uniform1f(U('uLutScale'),LUTSCALE); gl.uniform1f(U('uFeedback'),FEEDBACK_PS);
  gl.uniform4fv(U('fc'),fc);
- const surfTex4 = ((INSCAT_GEN&&_ipC.cur)?_ipC.cur.tex:null) || CAP_LUT || ((INSCAT_PS&&_psSurfTex) ? _psSurfTex : ((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
+ const surfTex4 = ((INSCAT_GEN&&_ipValid&&_ipC.cur)?_ipC.cur.tex:null) || CAP_LUT || ((INSCAT_PS&&_psSurfTex) ? _psSurfTex : ((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
  bindT(4,'tex4',surfTex4);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
  bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black);
  gl.uniform1f(U('uTiles'),TILES);
@@ -1219,7 +1220,7 @@ function drawFlares(){
 function drawGlowFaith(){
  const W=canvas.width,H=canvas.height;
  const Fd=ensureHDR(W,H), Fb=ensureHDR2(W,H);
- if(INSCAT_GEN){ seedCap3(sceneIdx, animT); genInscatter(); }   // verbatim per-frame tex4/limb generation (firmware d017-d022) with cap3-aligned recovered seeds
+ if(INSCAT_GEN){ if(seedCap3(sceneIdx, animT)){ genInscatter(); _ipValid=true; } else { _ipValid=false; } }   // verbatim per-frame tex4/limb generation; falls back to the streamed bin while this scene's seeds load
  // ---- 1) F_disp = col0 earth (LDR) + tonemapped limb ----
  gl.bindFramebuffer(36160,Fd.fbo);
  // clear alpha = 1.0: the display A channel is the HDR-exponent (present dark sky alpha = 255 = 1.0)
@@ -1233,7 +1234,7 @@ function drawGlowFaith(){
  gl.uniform1f(U('uSlum'),SLUM);
  gl.uniform1f(U('uLutScale'),1.0/128.0);gl.uniform1f(U('uFeedback'),1.0);   // faithful: 1/128 UN-scale + steady-state feedback
  gl.uniform4fv(U('fc'),fc);
- const surfTex4 = ((INSCAT_GEN&&_ipC.cur)?_ipC.cur.tex:null) || CAP_LUT || ((INSCAT_PS&&_psSurfTex)?_psSurfTex:((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
+ const surfTex4 = ((INSCAT_GEN&&_ipValid&&_ipC.cur)?_ipC.cur.tex:null) || CAP_LUT || ((INSCAT_PS&&_psSurfTex)?_psSurfTex:((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
  bindT(4,'tex4',surfTex4);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
  bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black);
  gl.uniform1f(U('uTiles'),TILES);
@@ -1384,7 +1385,7 @@ function drawAtmoLinear(){
  gl.uniform4fv(U('fc'),fcAtmo);
  // _AtmSpaceIv (TEXUNIT0 of the atmo shell fp): per-scene -> the picked scene's LIMB lut (ac6e80000); eclipse ->
  // the shipped tex0atmEcl (broad warm scatter); else the daytime scatterTex. NOT the surface tex4 (nearly black).
- const aScat=((INSCAT_GEN&&_ipA.cur)?_ipA.cur.tex:null) || CAP_LIMB || ((INSCAT_PS&&_psScat) ? _psScat : (INSCAT_ECL ? ((ATMO_SOLID&&sharedTex.tex0atmEclSolid)?sharedTex.tex0atmEclSolid:((ATMO_VFLIP&&sharedTex.tex0atmEclFlip)?sharedTex.tex0atmEclFlip:(sharedTex.tex0atmEcl||sharedTex.tex4ecl||scatterTex))) : scatterTex));
+ const aScat=((INSCAT_GEN&&_ipValid&&_ipA.cur)?_ipA.cur.tex:null) || CAP_LIMB || ((INSCAT_PS&&_psScat) ? _psScat : (INSCAT_ECL ? ((ATMO_SOLID&&sharedTex.tex0atmEclSolid)?sharedTex.tex0atmEclSolid:((ATMO_VFLIP&&sharedTex.tex0atmEclFlip)?sharedTex.tex0atmEclFlip:(sharedTex.tex0atmEcl||sharedTex.tex4ecl||scatterTex))) : scatterTex));
  gl.activeTexture(33984);gl.bindTexture(3553,aScat);gl.uniform1i(U('tex0'),0);
  gl.disable(2884); gl.depthMask(false); gl.enable(3042); gl.blendFunc(1,1);
  let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
@@ -1412,7 +1413,7 @@ function draw(){
  gl.uniform1f(U('uSlum'),SLUM);
  gl.uniform1f(U('uLutScale'),LUTSCALE); gl.uniform1f(U('uFeedback'),FEEDBACK_PS);
  gl.uniform4fv(U('fc'),fc);
- const surfTex4 = ((INSCAT_GEN&&_ipC.cur)?_ipC.cur.tex:null) || CAP_LUT || ((INSCAT_PS&&_psSurfTex) ? _psSurfTex : ((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
+ const surfTex4 = ((INSCAT_GEN&&_ipValid&&_ipC.cur)?_ipC.cur.tex:null) || CAP_LUT || ((INSCAT_PS&&_psSurfTex) ? _psSurfTex : ((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
  bindT(4,'tex4',surfTex4);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
  bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black);
  gl.uniform1f(U('uTiles'),TILES);
@@ -1452,7 +1453,7 @@ function drawAtmo(){
  if(curFC&&curFC[4]&&!FCATMO_OVR)fcAtmo[16*4]=curFC[4][1];   // per-scene atmosphere intensity approximation (real const[16].x != surface fc[4].y); skipped when the REAL atmo fp consts are fed via MPGlobe.fcatmo
  gl.uniform4fv(U('fc'),fcAtmo);
  // _AtmSpaceIv (TEXUNIT0): per-scene -> picked scene's LIMB lut; eclipse -> atmo draw's own tex0 RT (tex0atmEcl).
- const aScat=((INSCAT_GEN&&_ipA.cur)?_ipA.cur.tex:null) || CAP_LIMB || ((INSCAT_PS&&_psScat) ? _psScat : (INSCAT_ECL ? ((ATMO_SOLID&&sharedTex.tex0atmEclSolid)?sharedTex.tex0atmEclSolid:((ATMO_VFLIP&&sharedTex.tex0atmEclFlip)?sharedTex.tex0atmEclFlip:(sharedTex.tex0atmEcl||sharedTex.tex4ecl||scatterTex))) : scatterTex));
+ const aScat=((INSCAT_GEN&&_ipValid&&_ipA.cur)?_ipA.cur.tex:null) || CAP_LIMB || ((INSCAT_PS&&_psScat) ? _psScat : (INSCAT_ECL ? ((ATMO_SOLID&&sharedTex.tex0atmEclSolid)?sharedTex.tex0atmEclSolid:((ATMO_VFLIP&&sharedTex.tex0atmEclFlip)?sharedTex.tex0atmEclFlip:(sharedTex.tex0atmEcl||sharedTex.tex4ecl||scatterTex))) : scatterTex));
  gl.activeTexture(33984);gl.bindTexture(3553,aScat);gl.uniform1i(U('tex0'),0);
  const _t14=CAP_T14||sharedTex.tex14, _t15=CAP_T15||sharedTex.tex15;
  gl.activeTexture(33985);gl.bindTexture(3553,_t14);gl.uniform1i(U('aTex14'),1);
