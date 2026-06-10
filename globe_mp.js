@@ -1274,8 +1274,11 @@ function drawFlares(){
  if(Math.abs(+bk-fr)>180) return;   // only when the capture has flares near this playback frame
  if(!GlobeFlare._inited){ try{ GlobeFlare.init(gl); GlobeFlare._inited=true; }catch(e){ errlog+=' flare:'+e.message; FLARES=0; return; } }
  const t14=CAP_T14||sharedTex.tex14, t15=CAP_T15||sharedTex.tex15;
- let n=0;
+ let n=0; let di=0;
+ const only=(typeof window!=='undefined'&&window.__flareOnly!==undefined&&window.__flareOnly!==null)?+window.__flareOnly:-1;
  for(const d of FLARE_ROWS[bk]){
+   const idx=di++;
+   if(only>=0 && idx!==only) continue;
    const vc=[]; for(let i=0;i<17;i++) vc.push((d.c&&d.c[String(254+i)])||[0,0,0,0]);
    const fc=[]; for(let i=0;i<8;i++) fc.push((d.fc&&d.fc[String(i)])||[0,0,0,0]);
    GlobeFlare.draw(gl,{vc,fc,lut14:t14,lut15:t15,flipY:1.0}); n++;
