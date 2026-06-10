@@ -158,7 +158,8 @@ let ATMO_SOLID=0;                             // debug: bind a solid-warm LUT to
 let ATMO_FLIPY=1.0;                           // shell uFlipY (orientation probe)
 let ATMO_HDR=7.863;                           // firmware preexpose scale = TEX15/TEX14 LUT (lut15_rgba32f) max 7.863, = the atmo fp's r0 exposure before the scene RT (replaces the rounded 8.0 approximation)
 let IEFULL=1;                                 // use the UNCLAMPED IE LUT (the clamped tex5 loses the night/negative term = proven bug; ieFull restores the dark side)
-let FCATMO_OVR=0;                              // when set (MPGlobe.fcatmo used), use the REAL per-scene atmo fp consts (_AtmFactor from the atmo draw) instead of the curFC[4].y approximation
+let FCATMO_OVR=0;
+let ATMOFC=1;                   // real per-(scene,t) atmo fp consts from rows (MPGlobe.atmofc; 0 = legacy static+approx)                              // when set (MPGlobe.fcatmo used), use the REAL per-scene atmo fp consts (_AtmFactor from the atmo draw) instead of the curFC[4].y approximation
 let STARS_ON=1;                              // MPGlobe.stars
 let TILES=1;                                 // 1 = faithful per-patch tile sampling (firmware 24-patch x 4-tile); 0 = legacy cube map (MPGlobe.tiles)
 let CULL=1;                                   // per-patch back-face cull (MPGlobe.cull); 0 = no cull (rely on depth) - test for grazing-patch triangular gaps
@@ -1515,6 +1516,21 @@ function atmoCamBad(a,s){
  if(rel(a&&a['259'], s&&s['263'])>0.25) return true;
  return false;
 }
+// REAL per-(scene,t) atmo fp consts (vp 3f6eeb47 const[0..16], harvested from globecap3 into the
+// atmo rows' fc key, present-aligned). Replaces the static default + the fc16~surface-fc[4].y
+// approximation: real const[16] spans 0.06 (sc42-44) .. 3.67 (sc31-35), and the scatter terms set
+// the limb ALPHA (r0.w) = the encode bright-pass key at the limb (B7 real eclipse limb alpha ~0.02
+// vs the old default's overshoot = the sc47/40 bloom blowout seed). Falls back to the legacy
+// approximation for rows without harvested fc. ATMOFC-gated for A/B validation.
+function atmoFcArray(a){
+ if(ATMOFC&&a&&a.fc&&a.fc.length>=17){
+   const fa=new Float32Array(17*4);
+   for(let i=0;i<17;i++){const v=a.fc[i]||[0,0,0,0];fa[i*4]=v[0];fa[i*4+1]=v[1];fa[i*4+2]=v[2];fa[i*4+3]=v[3];}
+   return fa;
+ }
+ if(curFC&&curFC[4]&&!FCATMO_OVR)fcAtmo[16*4]=curFC[4][1];   // legacy per-scene intensity approximation
+ return fcAtmo;
+}
 function drawAtmoLinear(){
  if(!aMesh||!scatterTex||got<want)return; const s=D.shared; if(!s['460']||!s['461']||!s['462'])return;
  const a=(ATMO_SCENE?atmoAt(animT):null)||{};
@@ -1533,8 +1549,7 @@ function drawAtmoLinear(){
  gl.uniform1f(U('uLinear'),1.0);
  gl.uniform1f(U('uAtmoHdr'),ATMO_HDR);
  gl.uniform3fv(U('c5'),c5);gl.uniform3fv(U('c6'),c6);gl.uniform3fv(U('c7'),c7);gl.uniform3fv(U('c8'),c8);
- if(curFC&&curFC[4]&&!FCATMO_OVR)fcAtmo[16*4]=curFC[4][1];   // per-scene atmosphere intensity approximation (real const[16].x != surface fc[4].y); skipped when the REAL atmo fp consts are fed via MPGlobe.fcatmo
- gl.uniform4fv(U('fc'),fcAtmo);
+ gl.uniform4fv(U('fc'),atmoFcArray(a));
  // _AtmSpaceIv (TEXUNIT0 of the atmo shell fp): per-scene -> the picked scene's LIMB lut (ac6e80000); eclipse ->
  // the shipped tex0atmEcl (broad warm scatter); else the daytime scatterTex. NOT the surface tex4 (nearly black).
  const aScat=((INSCAT_GEN&&_ipValid&&_ipA.cur)?_ipA.cur.tex:null) || CAP_LIMB || ((INSCAT_PS&&_psScat) ? _psScat : (INSCAT_ECL ? ((ATMO_SOLID&&sharedTex.tex0atmEclSolid)?sharedTex.tex0atmEclSolid:((ATMO_VFLIP&&sharedTex.tex0atmEclFlip)?sharedTex.tex0atmEclFlip:(sharedTex.tex0atmEcl||sharedTex.tex4ecl||scatterTex))) : scatterTex));
@@ -1604,8 +1619,7 @@ function drawAtmo(){
  gl.uniform1f(U('uLinear'),0.0);
  gl.uniform1f(U('uAtmoHdr'),ATMO_HDR);
  gl.uniform3fv(U('c5'),c5);gl.uniform3fv(U('c6'),c6);gl.uniform3fv(U('c7'),c7);gl.uniform3fv(U('c8'),c8);
- if(curFC&&curFC[4]&&!FCATMO_OVR)fcAtmo[16*4]=curFC[4][1];   // per-scene atmosphere intensity approximation (real const[16].x != surface fc[4].y); skipped when the REAL atmo fp consts are fed via MPGlobe.fcatmo
- gl.uniform4fv(U('fc'),fcAtmo);
+ gl.uniform4fv(U('fc'),atmoFcArray(a));
  // _AtmSpaceIv (TEXUNIT0): per-scene -> picked scene's LIMB lut; eclipse -> atmo draw's own tex0 RT (tex0atmEcl).
  const aScat=((INSCAT_GEN&&_ipValid&&_ipA.cur)?_ipA.cur.tex:null) || CAP_LIMB || ((INSCAT_PS&&_psScat) ? _psScat : (INSCAT_ECL ? ((ATMO_SOLID&&sharedTex.tex0atmEclSolid)?sharedTex.tex0atmEclSolid:((ATMO_VFLIP&&sharedTex.tex0atmEclFlip)?sharedTex.tex0atmEclFlip:(sharedTex.tex0atmEcl||sharedTex.tex4ecl||scatterTex))) : scatterTex));
  gl.activeTexture(33984);gl.bindTexture(3553,aScat);gl.uniform1i(U('tex0'),0);
@@ -1621,7 +1635,9 @@ function drawAtmo(){
 }
 function atmoAt(t){ const F=ATMO_SCENE; if(!F||!F.length)return null; if(t<=F[0].t)return F[0]; if(t>=F[F.length-1].t)return F[F.length-1];
   for(let i=0;i<F.length-1;i++){const a=F[i],b=F[i+1]; if(t>=a.t&&t<=b.t){const w=(t-a.t)/((b.t-a.t)||1);
-    const o={}; for(const k of ATMO_KEYS){const va=a[k],vb=b[k]; o[k]=va&&vb?va.map((x,j)=>x+(vb[j]-x)*w):va;} return o;}}
+    const o={}; for(const k of ATMO_KEYS){const va=a[k],vb=b[k]; o[k]=va&&vb?va.map((x,j)=>x+(vb[j]-x)*w):va;}
+    o.fc=(w<0.5?a.fc:b.fc)||a.fc||b.fc;   // real atmo fp consts (per-scene static; nearest row)
+    return o;}}
   return F[F.length-1]; }
 
 function lookAtMVP(eye,center,up,fovy,asp){
@@ -1975,6 +1991,7 @@ set cull(v){ CULL=v?1:0; },
  set dispretain(v){ DISPRETAIN=v?1:0; }, get dispretain(){ return DISPRETAIN; },
  set inscatgen(v){ INSCAT_GEN=v?1:0; }, get inscatgen(){ return INSCAT_GEN; },
  set stars2(v){ STARS2=v?1:0; }, get stars2(){ return STARS2; },
+ set atmofc(v){ ATMOFC=v?1:0; }, get atmofc(){ return ATMOFC; },
  set bias0(v){ BIAS0=+v; }, get bias0(){ return BIAS0; },
  set bias2(v){ BIAS2=+v; }, get bias2(){ return BIAS2; },
  set faithauto(v){ FAITH_AUTO=v?1:0; }, get faithauto(){ return FAITH_AUTO; },
