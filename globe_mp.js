@@ -57,6 +57,7 @@ let BURST=0;                           // verbatim sun-disc BURST pass (globe_bu
 let FLARE_SCENES=null, BURST_FAN=null; // per-scene burst consts rows + the captured 65-vert fan
 let encProg=null;               // verbatim encode fp bd9c5fac/bc48008a: decode display (rgb*a*8) + sqrt-curve brightpass key -> bloom source
 let _encRef={cur:null};         // 512x512 bloom-source RT (firmware encode size, f82800 d017 viewport)
+let _dispFb={cur:null};         // persistent PREV-FRAME composited display (the bloom feedback loop input: the encode of frame N reads frame N-1's display = the eclipse-burst positive-feedback mechanism)
 let BLOOM_SCENES=null;          // per-scene rows {t,fr,enc[8],blur[8x3],up[8],comp[2]} harvested per frame (harvest_bloom.py)
 let BLOOMDISP=0;                // MPGlobe.bloomdisp: FAITHFUL bloom-of-display (encode bd9c5fac -> pyramid -> display+bloom*0.125, the burst corona). Gated until measured vs presents.
 let BLOOMPREMUL=1;              // encode output rgb premultiplied by the brightpass key (wiring of out.w into the pyramid; measurement-decided)
@@ -462,7 +463,7 @@ void main(){
  r0.xyz=r0.xyz*fc[16].x;r0.xyz=(-r1.y*r0.xyz+r0.xyz);r0.w=(-r1.x*r0.w+r0.w);r0.xyz=((r0.w*r0.xyz+r0.xyz)*uAtmoHdr);
  if(uLinear>0.5){ ocol0=vec4(r0.xyz,1.0); return; }   // GLOW path: emit linear HDR atmo so it feeds the bloom
  vec3 tcol=r0.xyz*0.789; float Wl=3.40918; tcol=(tcol*(1.0+tcol/(Wl*Wl)))/(1.0+tcol);
- ocol0=vec4(clamp(tcol,0.0,1.0),1.0);
+ ocol0=vec4(clamp(tcol,0.0,1.0),clamp(r0.w,0.0,1.0));   // α = the fp's final scatter term r0.w = the display exponent at the limb (measured real ring α≈0.2 vs earth 0.024 / sky ~0.7)
 }`;
 
 // ---- GLOW COMPOSITE (fullscreen) : combines linear-HDR earth + bloom glow, then the
@@ -598,27 +599,31 @@ void main(){
 //      key(0)=0, key(1)~3.05 -- a soft knee that replaces the legacy threshold form for the
 //      bloom-of-display path (this is what builds the eclipse BURST corona: the white wash =
 //      pyramid(encode(display)) * 0.125 added back, d053 const[1]=0.125).
+// VERBATIM port of the REAL bloom encode (fp 0x775efaf5de4caa88 / 589e8d52, the 512x512 draw at
+// frame end, 8 consts, viewport scale=256,256): desaturate toward the channel-average (FC0=1/3,
+// FC1 amount), pre-scale FC2.y, per-channel EXPONENTIAL glare 2^(c*8.64386) * (FC5.x*FC7.x ~ 5e-6)
+// (zero below ~0.7, exploding >1 near white = the true glare threshold), *8, then the SAME dual
+// tone-LUT display encode as the surface (R=t15.ch1(8r), G=t15.ch0(8g), B=t14.ch1(8b,max(8r,8g))).
 const ENC_FS=`#version 300 es
 precision highp float; precision highp sampler2D;
-uniform sampler2D uDisp;            // the DISPLAY (post-burst composite RT)
-uniform float uAlphaMode;           // 0: a*8 = 1 (steady-state display alpha 1/8); 1: use texture alpha*8
-uniform float uPremul;              // 1: rgb *= max(key,0) (pyramid consumes premultiplied); 0: plain rgb, key in .w
-uniform vec4 uEFC[8];               // the encode draw's REAL per-frame const[0..7] (FC1/FC4..6 animate per frame)
+uniform sampler2D uDisp;            // the DISPLAY (the composited LDR scene)
+uniform sampler2D tex14; uniform sampler2D tex15;   // per-scene tone LUTs (2ch: .x=ch0, .y=ch1)
+uniform float uLutScale;            // 1/128 UN-scale
+uniform vec4 uEFC[8];               // the encode draw's REAL per-frame const[0..7]
 in vec2 vUV; out vec4 ocol0;
 void main(){
-  vec4 r1 = texture(uDisp, vUV);
-  vec3 c  = r1.rgb;
-  vec3 q  = (vec3(uEFC[0].x) - c);                      // FC0 - r1
-  q = (q - c*q) / 4.0;                                  // (FC0-c)*(1-c)/4
-  vec3 t = vec3(c.r*uEFC[1].x, c.g*uEFC[2].x, c.b*uEFC[3].x) + q;
-  vec3 r2v = sqrt(max(t*4.0, 0.0));                     // divsq(|x|,x) = sqrt
-  vec3 dec = c * ((uAlphaMode>0.5) ? (r1.a*8.0) : 1.0); // decode rgb*a*8 (a=1/8 steady-state -> identity)
-  float rcp45 = 1.0/(uEFC[4].x*uEFC[5].x);
-  vec3 u = (c + r2v) * rcp45 - rcp45;                   // fma(r1+r2, rcp(FC4*FC5), -rcp)
-  u /= uEFC[6].x;                                       // FC6
-  float key = dot(u, uEFC[7].xyz);                      // FC7 luma (0.27,0.67,0.06, frame-stable)
-  vec3 outc = (uPremul>0.5) ? dec*max(key,0.0) : dec;
-  ocol0 = vec4(outc, key);
+  vec3 c = texture(uDisp, vUV).xyz;
+  float lumsum = c.r + c.g + c.b;
+  vec3 r1 = lumsum*uEFC[0].x - c;                       // fma(lumsum, FC0, -rgb)
+  c = r1*uEFC[1].x + c;                                 // desaturate toward the average by FC1
+  c *= uEFC[2].y;                                       // pre-scale (2.15..2.70)
+  vec3 e = exp2(vec3(c.r*uEFC[3].x, c.g*uEFC[4].x, c.b*uEFC[6].x));
+  vec3 g = (uEFC[5].x*uEFC[7].x) * e;                   // ~5e-6 * 2^(8.64*2.15*c') glare term
+  vec3 g8 = g*8.0;
+  float r = texture(tex15, vec2(g8.x,g8.y)*uLutScale).y;   // ch1
+  float gg= texture(tex15, vec2(g8.x,g8.y)*uLutScale).x;   // ch0
+  float b = texture(tex14, vec2(g8.z, max(g8.x,g8.y))*uLutScale).y;
+  ocol0 = vec4(r,gg,b,0.0);
 }`;
 
 // ---- STAR FIELD (real-derived) : 1122 stars triangulated from the camera-sweep presents (back-projected
@@ -1169,8 +1174,10 @@ function drawGlowFaith(){
    gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
  }
  if(BLOOMDISP&&encProg&&FP){
-   // ---- FAITHFUL bloom-of-display (fp bd9c5fac -> pyramid -> +comp[1], fp 59b46122) ----
-   // ALL chain constants are PER-FRAME firmware data (harvest_bloom.py rows); f82800 set = fallback.
+   // ---- FAITHFUL bloom chain: HDR layer -> ENCODE (fp 775efaf5: desat -> exp2 glare -> tone-LUT)
+   //      -> pyramid (per-frame blur+combine consts) -> composite FP*(1-FC1)+bloom*FC0 (fp 59b46122).
+   //      The encode input is the HDR limb/sun layer (offline sim: encoding the LDR display explodes;
+   //      the real encode output is sparse = an HDR layer with isolated hot points).
    let row=null;
    if(BLOOM_SCENES && SCENES_IDX && SCENES_IDX[sceneIdx]){
      const rows=BLOOM_SCENES[String(SCENES_IDX[sceneIdx].scene)];
@@ -1178,22 +1185,28 @@ function drawGlowFaith(){
        row=rows[0]; for(const e of rows){ if(Math.abs(e.fr-fr)<Math.abs(row.fr-fr)) row=e; } }
    }
    const encFC=new Float32Array(8*4);
-   const encsrc=row?row.enc:[[1,0,0,0],[0.13828,0,0,0],[0.13828,0,0,0],[0.13828,0,0,0],[0.13828,0,0,0],[2,0,0,0],[0.881311,0,0,0],[0.27,0.67,0.06,0]];
+   const encsrc=(row&&row.enc2)?row.enc2:[[0.333333,0,0,0],[0.217,0,0,0],[0.000194,2.1493,0,0],[8.64386,0,0,0],[8.64386,0,0,0],[0.000194,2.1493,0,0],[8.64386,0,0,0],[0.05,0,0,0]];
    for(let i=0;i<8;i++) for(let j=0;j<4;j++) encFC[i*4+j]=encsrc[i][j];
+   // the encode reads the PREVIOUS frame's composited display (closed loop, the firmware's d054
+   // end-of-frame encode = next frame's pyramid input). First frame: the current pre-composite FP.
+   const FB=ensureColorRT(_dispFb,W,H);
+   const fbSrc=FB.warm?FB.tex:FP.tex; FB.warm=true;
    const ENC=ensureColorRT(_encRef,512,512);
    gl.bindFramebuffer(36160,ENC.fbo);gl.viewport(0,0,512,512);gl.disable(2929);gl.disable(3042);gl.disable(2884);
    gl.useProgram(encProg);
-   gl.activeTexture(33984+0);gl.bindTexture(3553,FP.tex);gl.uniform1i(gl.getUniformLocation(encProg,'uDisp'),0);
-   gl.uniform1f(gl.getUniformLocation(encProg,'uAlphaMode'),BLOOMALPHA);
-   gl.uniform1f(gl.getUniformLocation(encProg,'uPremul'),BLOOMPREMUL);
+   gl.activeTexture(33984+0);gl.bindTexture(3553,fbSrc);gl.uniform1i(gl.getUniformLocation(encProg,'uDisp'),0);
+   gl.activeTexture(33984+1);gl.bindTexture(3553,CAP_T14||sharedTex.tex14);gl.uniform1i(gl.getUniformLocation(encProg,'tex14'),1);
+   gl.activeTexture(33984+2);gl.bindTexture(3553,CAP_T15||sharedTex.tex15);gl.uniform1i(gl.getUniformLocation(encProg,'tex15'),2);
+   gl.uniform1f(gl.getUniformLocation(encProg,'uLutScale'),1/128);
    gl.uniform4fv(gl.getUniformLocation(encProg,'uEFC'),encFC);
    gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
    gl.bindFramebuffer(36160,null);
    const blurW=row?row.blur:ENC_BLUR_W, upW=row?row.up:ENC_UP_W;
    const glow=GlobeGlow.buildGlow(gl,ENC.tex,512,512,{blurWeights:blurW,upWeights:upW});_lastGlow=glow;
    // final composite (fp 59b46122 VERBATIM, additive into the display): out = display*(1-FC1) + bloom*FC0
+   // rendered INTO the persistent feedback RT (next frame's encode input), then passthrough to canvas.
    const c0=row&&row.comp?row.comp[0]:1.0, c1=row&&row.comp?row.comp[1]:0.125;
-   gl.bindFramebuffer(36160,null);gl.viewport(0,0,W,H);gl.disable(2929);gl.disable(2884);gl.disable(3042);
+   gl.bindFramebuffer(36160,FB.fbo);gl.viewport(0,0,W,H);gl.disable(2929);gl.disable(2884);gl.disable(3042);
    gl.useProgram(cprog);
    gl.activeTexture(33984+0);gl.bindTexture(3553,FP.tex);gl.uniform1i(C('uEarth'),0);
    gl.activeTexture(33984+1);gl.bindTexture(3553,glow.tex);gl.uniform1i(C('uGlow'),1);
@@ -1202,6 +1215,11 @@ function drawGlowFaith(){
    gl.uniform1f(C('uPassthru'),1.0);
    gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
    gl.uniform1f(C('uEarthGain'),1.0);   // restore for every other cprog use
+   // FB -> canvas
+   gl.bindFramebuffer(36160,null);gl.viewport(0,0,W,H);
+   gl.activeTexture(33984+0);gl.bindTexture(3553,FB.tex);gl.uniform1i(C('uEarth'),0);
+   gl.activeTexture(33984+1);gl.bindTexture(3553,black);gl.uniform1i(C('uGlow'),1);
+   gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
    if(STARTEX)drawStarsTex();
    return;   // the legacy limb-HDR bloom (steps 3-5) is REPLACED by the real display-encode chain
  }
@@ -1329,7 +1347,7 @@ function drawAtmo(){
  // _AtmSpaceIv (TEXUNIT0): per-scene -> picked scene's LIMB lut; eclipse -> atmo draw's own tex0 RT (tex0atmEcl).
  const aScat=CAP_LIMB || ((INSCAT_PS&&_psScat) ? _psScat : (INSCAT_ECL ? ((ATMO_SOLID&&sharedTex.tex0atmEclSolid)?sharedTex.tex0atmEclSolid:((ATMO_VFLIP&&sharedTex.tex0atmEclFlip)?sharedTex.tex0atmEclFlip:(sharedTex.tex0atmEcl||sharedTex.tex4ecl||scatterTex))) : scatterTex));
  gl.activeTexture(33984);gl.bindTexture(3553,aScat);gl.uniform1i(U('tex0'),0);
- gl.disable(2884); gl.depthMask(false); gl.enable(3042); gl.blendFuncSeparate(1,1,0,1);   // ONE,ONE additive color; alpha keeps the display exponent channel (dst)
+ gl.disable(2884); gl.depthMask(false); gl.enable(3042); gl.blendFuncSeparate(1,1,1,0);   // ONE,ONE additive color; alpha REPLACED by the atmo scatter term (measured: real limb ring α≈0.2 < sky α, so not additive)
  let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
  let tl=gl.getAttribLocation(aprog,'in_tc0');gl.bindBuffer(34962,aMesh.tbuf);gl.enableVertexAttribArray(tl);gl.vertexAttribPointer(tl,4,5126,false,0,0);
  gl.bindBuffer(34963,aMesh.ibuf);gl.drawElements(5,aMesh.n,5125,0);
