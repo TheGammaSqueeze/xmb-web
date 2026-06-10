@@ -38,7 +38,7 @@ void main(){
   const FS = `#version 300 es
 precision highp float;
 uniform sampler2D tex14; uniform sampler2D tex15;   // per-scene tone LUTs (.x=ch0, .y=ch1)
-uniform vec4 uFc[8];
+uniform vec4 uFc[8]; uniform float uDbg;
 in vec4 tc0; in vec4 tc1;
 out vec4 ocol0;
 #define FC(i) uFc[i]
@@ -53,7 +53,8 @@ void main(){
   vec3 q = n*proj + FC(4).xyz;
   float qd = dot(q,q);
   float ex = fall*FC(5).x;                           // *1.4427 (1/ln2)
-  float vis = (sqrt(abs(qd)) >= FC(6).x) ? 1.0 : 0.0;   // the geometric sun-visibility gate
+  float vis = (sqrt(abs(qd)) < FC(6).x) ? 1.0 : 0.0;   // gate: pass INSIDE the sun-axis cone (empirical test vs the real blobs; the >= variant came from a dormant-era decompile)
+  if(uDbg>0.5){ ocol0=vec4(1.0,0.0,0.0,1.0); return; }   // debug: solid red where the quad rasterizes
   vec4 col = exp2(ex) * FC(7) * vis;
   vec3 r8 = col.xyz*8.0;
   vec2 s15 = texture(tex15, r8.xy*(1.0/128.0)).xy;
@@ -81,6 +82,7 @@ void main(){
     const flat=(a,n)=>{ const f=new Float32Array(n*4); for(let i=0;i<n&&i<a.length;i++) for(let j=0;j<4;j++) f[i*4+j]=a[i][j]; return f; };
     gl.uniform4fv(U('uVc'),flat(o.vc,17)); gl.uniform4fv(U('uFc'),flat(o.fc,8));
     gl.uniform1f(U('uFlipY'),o.flipY!==undefined?o.flipY:1.0);
+    gl.uniform1f(U('uDbg'),(typeof window!=='undefined'&&window.__flareDbg)?1.0:0.0);
     const bind=(u,n,t)=>{ gl.activeTexture(gl.TEXTURE0+u); gl.bindTexture(gl.TEXTURE_2D,t); gl.uniform1i(U(n),u); };
     bind(0,'tex14',o.lut14); bind(1,'tex15',o.lut15);
     gl.enable(gl.BLEND); gl.blendFuncSeparate(gl.SRC_ALPHA,gl.ONE,gl.ZERO,gl.ONE);   // the captured blend: src=770(SRC_ALPHA) dst=1(ONE)
