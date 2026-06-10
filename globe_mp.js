@@ -1408,7 +1408,18 @@ function drawGlowFaith(){
    // verbatim SUN-DISC BURST into the post RT (occlusion sampled from F_disp - no feedback)
    let vc,fc;
    if(glareBurst){
-     vc=[]; for(let i=0;i<17;i++) vc.push(glareBurst.vc[i]||[0,0,0,0]);   // gcap3 window: base 254, same layout as the proven FLARE_SCENES rows
+     // VP-UCODE-PROVEN const map for the c868fd6a fan (LE d1>>12 decode, calibrated on the fan vp):
+     // FC(0..2)=c256-258 ray rows, FC(3..6)=c260-263 MVP, FC(7)=c465 uv (pos+x)*y, FC(8)=c466,
+     // FC(9)=c467 sun point. The old sequential base-254 feed shifted the MVP by 3 rows and fed
+     // camera rows as uv/sun (the fan never rendered sanely). vch = c454..c467 (harvest v2).
+     const VCH=glareBurst.vch||null;
+     const vcr=i=>glareBurst.vc[i-254]||[0,0,0,0];
+    const vchr=i=>(VCH&&VCH[i-454])||[0,0,0,0];
+     vc=[]; for(let i=0;i<17;i++) vc.push([0,0,0,0]);
+     vc[0]=vcr(256);vc[1]=vcr(257);vc[2]=vcr(258);
+     vc[3]=vcr(260);vc[4]=vcr(261);vc[5]=vcr(262);vc[6]=vcr(263);
+     vc[7]=vchr(465);vc[8]=vchr(466);vc[9]=vchr(467);
+     if(!VCH){ vc[7]=[1,0.5,0,0]; }   // until the vch harvest lands: c465 is the (pos+1)*0.5 uv pair at every captured frame
      fc=glareBurst.gfc.slice(0,17);
    } else {
      const s=SCENES_IDX[sceneIdx]; const fr=s.frame0+animT*((s.frame1-s.frame0)||1);
@@ -2061,9 +2072,13 @@ set cull(v){ CULL=v?1:0; },
  _encStats(){ if(!_encRef.cur) return 'no enc';
    const px=new Float32Array(512*512*4);
    gl.bindFramebuffer(36160,_encRef.cur.fbo); gl.readPixels(0,0,512,512,6408,5126,px); gl.bindFramebuffer(36160,null);
-   let mx=0,sum=0,hot=0,asum=0;
-   for(let i=0;i<512*512;i++){ const v=Math.max(px[i*4],px[i*4+1],px[i*4+2]); sum+=v; if(v>mx)mx=v; if(v>0.5)hot++; asum+=px[i*4+3]; }
-   return {mean:+(sum/(512*512)).toFixed(5), max:+mx.toFixed(3), hot:hot, keyMean:+(asum/(512*512)).toFixed(4)}; },
+   let mx=0,sum=0,hot=0,asum=0; const hots=[];
+   for(let i=0;i<512*512;i++){ const v=Math.max(px[i*4],px[i*4+1],px[i*4+2]); sum+=v; if(v>mx)mx=v;
+     if(v>0.5){ hot++; if(hots.length<400) hots.push([i%512,(i/512)|0,+v.toFixed(2)]); } asum+=px[i*4+3]; }
+   let cx=0,cy=0; for(const h of hots){cx+=h[0];cy+=h[1];}
+   return {mean:+(sum/(512*512)).toFixed(5), max:+mx.toFixed(3), hot:hot, keyMean:+(asum/(512*512)).toFixed(4),
+           hotCentroid:hots.length?[Math.round(cx/hots.length),Math.round(cy/hots.length)]:null,
+           hotSample:hots.filter((_,j)=>j%40==0)}; },
  _fpAlpha(){ const Fd=hdrFBO; if(!Fd) return 'no fd';   // sample the display RT alpha (the exponent channel)
    const px=new Float32Array(64*64*4);
    gl.bindFramebuffer(36160,(_postRef.cur||Fd).fbo); gl.readPixels((canvas.width>>1)-32,(canvas.height>>1)-32,64,64,6408,5126,px); gl.bindFramebuffer(36160,null);
