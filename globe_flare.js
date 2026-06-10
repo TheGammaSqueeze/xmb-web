@@ -53,7 +53,7 @@ void main(){
   vec3 q = n*proj + FC(4).xyz;
   float qd = dot(q,q);
   float ex = fall*FC(5).x;                           // *1.4427 (1/ln2)
-  float vis = (sqrt(abs(qd)) < FC(6).x) ? 1.0 : 0.0;   // gate: pass INSIDE the sun-axis cone (empirical test vs the real blobs; the >= variant came from a dormant-era decompile)
+  float vis = (sqrt(abs(qd)) >= FC(6).x) ? 1.0 : 0.0;   // VERBATIM gate (4a9b1f2f decompile; vindicated once the vp ucode gave the true FC registers - the earlier flip compensated a register-mapping error)
   if(uDbg>0.5&&uDbg<1.5){ ocol0=vec4(1.0,0.0,0.0,1.0); return; }   // 1: solid red where the quad rasterizes
   if(uDbg>1.5&&uDbg<2.5){ ocol0=vec4(vec3(exp2(ex)),1.0); return; }  // 2: falloff intensity only
   if(uDbg>2.5&&uDbg<3.5){ ocol0=vec4(0.0,vis,0.0,1.0); return; }     // 3: gate only
