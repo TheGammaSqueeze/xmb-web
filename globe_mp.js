@@ -1468,6 +1468,7 @@ function drawGlowFaith(){
  gl.uniform1f(C('uPassthru'),1.0);
  gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
  gl.disable(3042);
+ drawFlares();   // the real pipeline draws the 15 flare billboards EVERY frame (visibility = the FS sun gate)
  if(STARTEX)drawStarsTex();
 }
 // atmosphere shell with LINEAR-HDR output (uLinear=1), additive into the HDR FBO so it feeds the bloom.
@@ -1832,7 +1833,7 @@ async function load(){
            .then(r=>r.ok?r.json():null).then(j=>{ if(j) FLARE_SCENES[String(s.scene)]=j; }).catch(()=>null))); }
        if(typeof window!=='undefined')window.__ld.push('seeds');
        SEED_MANIFEST=await fetch(BASE+'gaia_lut/seeds_cap3/seeds_manifest.json').then(r=>r.ok?r.json():null).catch(()=>null);
-       FLARE_ROWS=await fetch(lfsURL('flares_cap3.json')).then(r=>r.ok?r.json():null).catch(()=>null);   // LFS on Pages
+       FLARE_ROWS=await fetch(lfsURL('flares_gcap3.json')).then(r=>r.ok?r.json():null).catch(()=>null);   // globecap3-aligned flare billboards (LFS on Pages)
        FAITH_POLICY=await fetch(BASE+'faithful_policy.json').then(r=>r.ok?r.json():null).catch(()=>null);
        if(typeof window!=='undefined')window.__ld.push('glare');
        GLARE_ROWS=await fetch(BASE+'glare_gcap3_rows.json').then(r=>r.ok?r.json():null).catch(()=>null);   // globecap3-aligned (same capture as the presents + the proven fan-window layout)
