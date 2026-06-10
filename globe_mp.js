@@ -159,6 +159,8 @@ let ATMO_FLIPY=1.0;                           // shell uFlipY (orientation probe
 let ATMO_HDR=7.863;                           // firmware preexpose scale = TEX15/TEX14 LUT (lut15_rgba32f) max 7.863, = the atmo fp's r0 exposure before the scene RT (replaces the rounded 8.0 approximation)
 let IEFULL=1;                                 // use the UNCLAMPED IE LUT (the clamped tex5 loses the night/negative term = proven bug; ieFull restores the dark side)
 let FCATMO_OVR=0;
+let ATMODEPTH=0;               // 1 = legacy: shell depth-tests against the earth (the thin black gap at the silhouette); 0 = shell draws regardless (MPGlobe.atmodepth)
+let ATMOGUARD=1;               // atmo camera-sanity guard (MPGlobe.atmoguard; 0 = always draw the shell)
 let ATMOFC=1;                   // real per-(scene,t) atmo fp consts from rows (MPGlobe.atmofc; 0 = legacy static+approx)                              // when set (MPGlobe.fcatmo used), use the REAL per-scene atmo fp consts (_AtmFactor from the atmo draw) instead of the curFC[4].y approximation
 let STARS_ON=1;                              // MPGlobe.stars
 let TILES=1;                                 // 1 = faithful per-patch tile sampling (firmware 24-patch x 4-tile); 0 = legacy cube map (MPGlobe.tiles)
@@ -1512,8 +1514,11 @@ function atmoCamBad(a,s){
    return d/Math.max(n,1e-6); };
  // eye row AND the projection w-row must both agree with the surface camera: sparse/mis-captured
  // atmo rows can interpolate a plausible eye while the rotation rows are wrong (the sc1 ring).
- if(rel(a&&a['460'], s&&s['460'])>0.4) return true;
- if(rel(a&&a['259'], s&&s['263'])>0.25) return true;
+ const r1=rel(a&&a['460'], s&&s['460']), r2=rel(a&&a['259'], s&&s['263']);
+ if(typeof window!=='undefined') window.__atmoDbg={r460:+r1.toFixed(3),r259:+r2.toFixed(3),guard:ATMOGUARD,bad:(r1>0.4||r2>0.25)};
+ if(!ATMOGUARD) return false;
+ if(r1>0.4) return true;
+ if(r2>0.25) return true;
  return false;
 }
 // REAL per-(scene,t) atmo fp consts (vp 3f6eeb47 const[0..16], harvested from globecap3 into the
@@ -1627,11 +1632,11 @@ function drawAtmo(){
  gl.activeTexture(33985);gl.bindTexture(3553,_t14);gl.uniform1i(U('aTex14'),1);
  gl.activeTexture(33986);gl.bindTexture(3553,_t15);gl.uniform1i(U('aTex15'),2);
  gl.uniform1f(U('uALut'),(_t14&&_t15)?1.0:0.0);   // verbatim fp 63d3246d display tail when the per-scene LUTs exist
- gl.disable(2884); gl.depthMask(false); gl.enable(3042); gl.blendFuncSeparate(1,1,1,0);   // ONE,ONE additive color; alpha REPLACED by the atmo scatter term (measured: real limb ring α≈0.2 < sky α, so not additive). NOTE: the live music-globe atmo (fp 7fcca1e2 variant) runs blend=0 REPLACE - tested 2026-06-10: full REPLACE regresses the daytime limb (sc24 45->101); that variant's fp likely composites the under-content itself. Keep additive until ITS decompile is ported.
+ gl.disable(2884); gl.depthMask(false); if(!ATMODEPTH) gl.disable(2929); gl.enable(3042); gl.blendFuncSeparate(1,1,1,0);   // ONE,ONE additive color; alpha REPLACED by the atmo scatter term (measured: real limb ring α≈0.2 < sky α, so not additive). NOTE: the live music-globe atmo (fp 7fcca1e2 variant) runs blend=0 REPLACE - tested 2026-06-10: full REPLACE regresses the daytime limb (sc24 45->101); that variant's fp likely composites the under-content itself. Keep additive until ITS decompile is ported.
  let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
  let tl=gl.getAttribLocation(aprog,'in_tc0');gl.bindBuffer(34962,aMesh.tbuf);gl.enableVertexAttribArray(tl);gl.vertexAttribPointer(tl,4,5126,false,0,0);
  gl.bindBuffer(34963,aMesh.ibuf);gl.drawElements(5,aMesh.n,5125,0);
- gl.disable(3042); gl.depthMask(true); gl.blendFunc(1,1);
+ gl.disable(3042); gl.depthMask(true); gl.blendFunc(1,1); if(!ATMODEPTH) gl.enable(2929);
 }
 function atmoAt(t){ const F=ATMO_SCENE; if(!F||!F.length)return null; if(t<=F[0].t)return F[0]; if(t>=F[F.length-1].t)return F[F.length-1];
   for(let i=0;i<F.length-1;i++){const a=F[i],b=F[i+1]; if(t>=a.t&&t<=b.t){const w=(t-a.t)/((b.t-a.t)||1);
@@ -1992,6 +1997,8 @@ set cull(v){ CULL=v?1:0; },
  set inscatgen(v){ INSCAT_GEN=v?1:0; }, get inscatgen(){ return INSCAT_GEN; },
  set stars2(v){ STARS2=v?1:0; }, get stars2(){ return STARS2; },
  set atmofc(v){ ATMOFC=v?1:0; }, get atmofc(){ return ATMOFC; },
+ set atmoguard(v){ ATMOGUARD=v?1:0; }, get atmoguard(){ return ATMOGUARD; },
+ set atmodepth(v){ ATMODEPTH=v?1:0; }, get atmodepth(){ return ATMODEPTH; },
  set bias0(v){ BIAS0=+v; }, get bias0(){ return BIAS0; },
  set bias2(v){ BIAS2=+v; }, get bias2(){ return BIAS2; },
  set faithauto(v){ FAITH_AUTO=v?1:0; }, get faithauto(){ return FAITH_AUTO; },
