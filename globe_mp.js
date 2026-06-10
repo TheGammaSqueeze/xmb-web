@@ -442,7 +442,7 @@ void main(){
     ocol0 = vec4(clamp(disp,0.0,1.0),1.0); return;
   }
   if(uMode>1.5){ ocol0 = vec4(clamp(log2(max(r2.xyz,0.0)+1.0)/6.0,0.0,1.0), 1.0); return; }  // raw HDR r2 (log-encoded for readback): r2=2^(v*6)-1
-  if(uMode>0.5){ ocol0 = vec4(col0.xyz, col0.w); return; }      // verbatim ramp-encoded output incl. the A exponent channel
+  if(uMode>0.5){ ocol0 = vec4(col0.xyz, clamp(col0.w,0.0,1.0)); return; }      // verbatim ramp-encoded output incl. the A exponent channel (UNORM-clamped like the real 8-bit display write; the LUT ch0 has fp16 negatives)
   ocol0 = vec4(clamp(tc,0.0,1.0), 1.0);
 }`;
 // ---- VERBATIM ATMOSPHERE SHELL (vp 3f6eeb47 + fp 63d3246d), ported 1:1 from globe_atmo_real.html ----
@@ -563,7 +563,7 @@ void main(){
   // then *0.789 decode exposure (HDR.mnu). scene*0.125*0.789 = scene*0.0986 -> surface stays at
   // the validated 0.65/255; bloom restored to FULL weight (the dominant haze the firmware adds).
   if(uGlow2>0.5) e = e + computeGlare();   // verbatim firmware sun-glare (fp 727d0242), gated
-  if(uPassthru>0.5){ float eg=(abs(uEarthGain)<1e-6)?1.0:uEarthGain; ocol0 = vec4(clamp(e*eg + g * uGlowGain, 0.0, 1.0), e4.w); return; }   // faithful: LDR scene + limb/sun bloom; α carries the display exponent through to the encode. Unset (0) uEarthGain behaves as 1 so legacy sites need no change.
+  if(uPassthru>0.5){ float eg=(abs(uEarthGain)<1e-6)?1.0:uEarthGain; ocol0 = vec4(clamp(e*eg + g * uGlowGain, 0.0, 1.0), clamp(e4.w,0.0,1.0)); return; }   // faithful: LDR scene + limb/sun bloom; α carries the display exponent through to the encode. Unset (0) uEarthGain behaves as 1 so legacy sites need no change.
   if(uLutOn>0.5){
     // VERBATIM firmware surface-fp LUT tonemap = THE GOLD WARMTH (measured: LUT(real r2)=gold 1:0.90:0.17).
     // R,G = tex15(hc.xy); B = tex14(hc.z, max(hc.x,hc.y)).x. hc = earth exposed to the firmware r2 range
@@ -1326,7 +1326,7 @@ function drawGlowFaith(){
        row=rows[0]; for(const e of rows){ if(Math.abs(e.fr-fr)<Math.abs(row.fr-fr)) row=e; } }
    }
    const encFC=new Float32Array(8*4);
-   const encsrc=(row&&row.enc2)?row.enc2:[[0.333333,0,0,0],[0.217,0,0,0],[0.000194,2.1493,0,0],[8.64386,0,0,0],[8.64386,0,0,0],[0.000194,2.1493,0,0],[8.64386,0,0,0],[0.05,0,0,0]];
+   const encsrc=(row&&row.enc)?row.enc:[[1,0,0,0],[0.13828,0,0,0],[0.13828,0,0,0],[0.13828,0,0,0],[0.13828,0,0,0],[2,0,0,0],[0.881311,0,0,0],[0.27,0.67,0.06,0]];   // the ENCODE draw's per-frame consts (bd9c5fac family) - NOT enc2 (the star-brightness pass)
    for(let i=0;i<8;i++) for(let j=0;j<4;j++) encFC[i*4+j]=encsrc[i][j];
    // the encode reads THIS frame's PRE-BLOOM display (write-graph proven: d026 tex0 = 0xdc80000,
    // before the composite d062 adds the bloom). NO temporal feedback anywhere in the real chain.
@@ -1839,6 +1839,13 @@ set cull(v){ CULL=v?1:0; },
      let s=0,mx=0; for(let i=0;i<256*128;i++){ const v=Math.max(px[i*4],px[i*4+1],px[i*4+2]); s+=v; if(v>mx)mx=v; }
      return {mean:+(s/(256*128)).toFixed(5), max:+mx.toFixed(4)}; };
    return {A:rd(_ipA.cur), C:rd(_ipC.cur), seeds:!!(texSeedA&&texSeedA.loaded&&texSeedB&&texSeedB.loaded&&texBicubic&&texBicubic.loaded)}; },
+ _glowSample(){ if(!_lastGlow||!_lastGlow.state||!_lastGlow.state.glowRT) return null;
+   const rt=_lastGlow.state.glowRT; const px=new Float32Array(rt.w*rt.h*4); const out=[];
+   gl.bindFramebuffer(36160,rt.fbo); gl.readPixels(0,0,rt.w,rt.h,6408,5126,px); gl.bindFramebuffer(36160,null);
+   const sx=Math.max(1,rt.w>>6), sy=Math.max(1,rt.h>>5);
+   for(let y=0;y<rt.h;y+=sy) for(let x=0;x<rt.w;x+=sx){ const i=(y*rt.w+x)*4;
+     out.push(+px[i].toFixed(5),+px[i+1].toFixed(5),+px[i+2].toFixed(5)); }
+   return {w:Math.ceil(rt.w/sx),h:Math.ceil(rt.h/sy),data:out}; },
  _dispSample(stride){ if(!_postRef.cur) return null;   // the pre-bloom display: [maxRGB, alpha] grid
    stride=stride||8; const W=_postRef.cur.w,H=_postRef.cur.h;
    const px=new Float32Array(W*H*4); const out=[];
