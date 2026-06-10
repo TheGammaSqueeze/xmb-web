@@ -1341,7 +1341,15 @@ function drawGlowFaith(){
    if(tw){ BLOOMDISP=tw[Math.min(2,Math.floor(animT*3))]?1:0; }   // per-(scene,t-tertile): restores the sc24 burst corona while keeping early-scene legacy
    else { BLOOMDISP=(FAITH_POLICY.bloomScenes&&FAITH_POLICY.bloomScenes.indexOf(scid)>=0)?1:0; } }
  const burstRows=(BURST && BURST_FAN && FLARE_SCENES && typeof GlobeBurst!=='undefined' && SCENES_IDX && SCENES_IDX[sceneIdx]) ? (FLARE_SCENES[String(SCENES_IDX[sceneIdx].scene)]||null) : null;
- const useBurst=!!(burstRows && burstRows.length);
+ // live-harvested glare rows can drive the same verbatim fan: vc window captured at c[256..272]
+ // (VS FC(0) = c257 -> shift one), fp consts = the 17 glare rows. GLOW2-gated.
+ let glareBurst=null;
+ if(GLOW2 && BURST_FAN && GLARE_ROWS && typeof GlobeBurst!=='undefined' && SCENES_IDX && SCENES_IDX[sceneIdx]){
+   const rows=GLARE_ROWS[String(SCENES_IDX[sceneIdx].scene)];
+   if(rows&&rows.length){ let g=rows[0]; for(const e of rows){ if(Math.abs(e.t-animT)<Math.abs(g.t-animT)) g=e; }
+     if(g.vc && g.gfc && Math.max(Math.abs(g.gfc[13][0]),Math.abs(g.gfc[13][1]),Math.abs(g.gfc[13][2]))>1e-6) glareBurst=g; } }
+ const useBurst=!!((burstRows && burstRows.length) || glareBurst);
+ if(typeof window!=='undefined') window.__gbDbg={glow2:GLOW2,bf:!!BURST_FAN,gr:!!GLARE_ROWS,gb:!!glareBurst,br:!!(burstRows&&burstRows.length),useBurst:useBurst,scene:SCENES_IDX&&SCENES_IDX[sceneIdx]?SCENES_IDX[sceneIdx].scene:-1,animT:animT};
  const useFP=useBurst||(BLOOMDISP&&encProg);   // route the composite through the post RT whenever the firmware bloom-of-display path needs to sample it
  let FP=null;
  if(useFP){ FP=ensureColorRT(_postRef,W,H); gl.bindFramebuffer(36160,FP.fbo); }
@@ -1355,18 +1363,25 @@ function drawGlowFaith(){
  gl.activeTexture(33984+4);gl.bindTexture(3553,CAP_T14||sharedTex.tex14);gl.uniform1i(C('uLut14'),4);
  gl.uniform3fv(C('uGlowGain'),new Float32Array([0,0,0]));
  gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uLutOn'),0.0);gl.uniform2f(C('uDims'),W,H);
- // verbatim sun-glare INTO the display (the real d023 runs pre-encode, so the bloom chain blooms it)
- gl.uniform1f(C('uGlow2'),GLOW2);
+ // sun-glare: handled by the verbatim 65-vertex FAN below (glareBurst); the fullscreen
+ // computeGlare add over-paints (the real geometry is sun-positioned, not screen-wide) - keep off here.
+ gl.uniform1f(C('uGlow2'),0.0);
  {const sh=D.shared||{};const gv=k=>{const v=sh[k]||[0,0,0,0];return [v[0],v[1],v[2],v[3]];};
   gl.uniform4f(C('c260'),...gv('260'));gl.uniform4f(C('c261'),...gv('261'));gl.uniform4f(C('c262'),...gv('262'));gl.uniform4f(C('c263'),...gv('263'));
   gl.uniform4fv(C('gfc'),glareGfc());}
  gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
  if(useBurst){
    // verbatim SUN-DISC BURST into the post RT (occlusion sampled from F_disp - no feedback)
-   const s=SCENES_IDX[sceneIdx]; const fr=s.frame0+animT*((s.frame1-s.frame0)||1);
-   let best=burstRows[0]; for(const e of burstRows){ if(Math.abs(e.fr-fr)<Math.abs(best.fr-fr)) best=e; }
-   const vc=[]; for(let i=0;i<17;i++){ vc.push(best[String(254+i)]||[0,0,0,0]); }   // window base 254 (proven vs the present)
-   const fc=(best.fc||[]).slice(0,17); while(fc.length<17) fc.push([0,0,0,0]);
+   let vc,fc;
+   if(glareBurst){
+     vc=[]; for(let i=0;i<17;i++) vc.push(glareBurst.vc[i]||[0,0,0,0]);   // gcap3 window: base 254, same layout as the proven FLARE_SCENES rows
+     fc=glareBurst.gfc.slice(0,17);
+   } else {
+     const s=SCENES_IDX[sceneIdx]; const fr=s.frame0+animT*((s.frame1-s.frame0)||1);
+     let best=burstRows[0]; for(const e of burstRows){ if(Math.abs(e.fr-fr)<Math.abs(best.fr-fr)) best=e; }
+     vc=[]; for(let i=0;i<17;i++){ vc.push(best[String(254+i)]||[0,0,0,0]); }   // window base 254 (proven vs the present)
+     fc=(best.fc||[]).slice(0,17); while(fc.length<17) fc.push([0,0,0,0]);
+   }
    if(!GlobeBurst._inited){ try{ GlobeBurst.init(gl); GlobeBurst._inited=true; }catch(e){ errlog+=' burst:'+e.message; BURST=0; } }
    if(GlobeBurst._inited){
      const verts=new Float32Array(BURST_FAN.length*4);
@@ -1817,7 +1832,7 @@ async function load(){
        SEED_MANIFEST=await fetch(BASE+'gaia_lut/seeds_cap3/seeds_manifest.json').then(r=>r.ok?r.json():null).catch(()=>null);
        FLARE_ROWS=await fetch(BASE+'flares_cap3.json').then(r=>r.ok?r.json():null).catch(()=>null);
        FAITH_POLICY=await fetch(BASE+'faithful_policy.json').then(r=>r.ok?r.json():null).catch(()=>null);
-       GLARE_ROWS=await fetch(BASE+'glare_scene_rows.json').then(r=>r.ok?r.json():null).catch(()=>null);
+       GLARE_ROWS=await fetch(BASE+'glare_gcap3_rows.json').then(r=>r.ok?r.json():null).catch(()=>null);   // globecap3-aligned (same capture as the presents + the proven fan-window layout)
        // per-frame bloom-of-display chain rows (encode FC + blur kernel + combine scalars, all animated per frame)
        if(SCENES_IDX){ BLOOM_SCENES={};
          await Promise.all(SCENES_IDX.map(s=>fetch(BASE+'bloom_scene_'+String(s.scene).padStart(2,'0')+'_cap2.json')
