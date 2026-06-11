@@ -155,7 +155,7 @@ let SURF_ECLFLIP=0;                           // DEPRECATED no-op: the surface e
                                               // (firmware-viewport identity, proven via TF gl_Position vs ecl2/warm2 presents).
                                               // The old per-eclipse flip experiment is gone; the setter is retained for harness compat.
 let ATMO_VFLIP=0;                             // orientation probe for the atmo shell _AtmSpaceIv LUT
-let ATMO_REAL=0;                              // MPGlobe.atmoreal: REAL f566cf05 whole-earth scatter atmosphere (verbatim) + dst-alpha composite
+let ATMO_REAL=1;                              // MPGlobe.atmoreal: REAL atmosphere compositing (fp c47472608e740973 = 63d3246d math) + dst-alpha blend (src=773/dst=772, live D21) + sky-alpha=0 clear + camera-guard bypass. Replaces the legacy additive "huge white band". Default ON: the dst-alpha law is the firmware-universal music-globe atmosphere composite.
 let ATMO_OVER=0;
 let ATMO_DSTA=0;                              // MPGlobe.atmodsta: REAL dst-alpha atmo blend (src=ONE_MINUS_DST_ALPHA,dst=DST_ALPHA) captured live from DRAWCALLS                              // MPGlobe.atmoover: alpha-OVER atmo compositing (faithful music-globe REPLACE-with-coverage) vs legacy additive (white band)
 let ATMO_HDRC=0;                              // MPGlobe.atmohdrc: FAITHFUL HDR-domain composite -- render surface+atmo as LINEAR HDR, then ONE real dual-LUT tonemap (the limb HDR rolls off smoothly, no additive-LDR white band)
@@ -501,54 +501,14 @@ vec3 bdivsq3(vec3 a,float b){vec3 t=a/bsqrt(b);return mix(a,t,vec3(greaterThan(a
 float bdivsq1(float a,float b){float t=a/bsqrt(b);return (abs(a)>0.0)?t:a;}
 vec4 clamp16f(vec4 v){return vec4(unpackHalf2x16(packHalf2x16(v.xy)),unpackHalf2x16(packHalf2x16(v.zw)));}
 void main(){
- if(uAtmoReal>0.5){
-   // VERBATIM f566cf05 (the real music-globe ATMOSPHERE: screen-space optical-depth scatter -> blue
-   // haze over the WHOLE disc, densest at the limb; dual-LUT tonemap; composited dst-alpha).
-   vec4 wpos = gl_FragCoord*vec4(1.0,uWposScale,1.0,1.0)+vec4(uWposBias,0.0,0.0);
-   vec3 V = vec3(0.0);   // VERBATIM: the real atmo vp 3f6eeb47 sets tc1=(0,0,0,1) -> view ray = tc1.xyz*w = 0. The coverage terms collapse to constants (no view-ray spatial variation); the whole-earth glow comes from the in-scatter LUT sampled on the shell (tex0 @ vTC). (vRay reconstruction was a wrong guess.)
-   vec4 R0=vec4(0.),R1=vec4(0.),R2=vec4(0.),H2=vec4(0.);
-   R0.z=dot(V,V);
-   R0.x=1.0/fc[0].x;
-   R1.w=fc[1].w;
-   R1.xyz=bdivsq3(V,R0.z);
-   R1.w=R1.w+fc[2].w;
-   R0.z=dot(R1.xyz,-fc[3].xyz);
-   R0.y=1.0/fc[4].y;
-   R1.xyz=R1.xyz*R0.z+fc[5].xyz;
-   R0.xy=wpos.xy*R0.xy;
-   R1.w=1.0/R1.w;
-   R0.w=dot(R1.xyz,R1.xyz);
-   R0.xy=-R0.xy*fc[6].xy+abs(fc[6].zx);
-   R0.xyz=texture(tex0,R0.xy).xyz;
-   R1.xyz=-R0.xyz+fc[7].xxx;
-   R1.xyz=(-R0.xyz*R1.xyz+R1.xyz)*0.25;
-   R2.w=(R0.y*fc[8].y+R1.y)*4.0;
-   R1.z=(R0.z*fc[9].y+R1.z)*4.0;
-   R2.x=bdivsq1(abs(R0.w),R0.w);
-   R0.w=(R0.x*fc[10].y+R1.x)*4.0;
-   R1.x=bdivsq1(abs(R0.w),R0.w);
-   R0.w=clamp((R2.x*R1.w-R1.w)*2.0,0.0,1.0);
-   R1.y=bdivsq1(abs(R2.w),R2.w);
-   R1.w=fc[11].y;
-   R1.w=R1.w*fc[12].w;
-   R2.xyz=R0.w*(vec3(1.0)-fc[13].xyz);
-   R1.z=bdivsq1(abs(R1.z),R1.z);
-   R0.xyz=R0.xyz+R1.xyz;
-   R0.w=(R1.w!=0.0)?1.0/R1.w:3.0e38;   // RSX RCP(0)=large-finite (NOT inf): R0.xyz*R0.w-R0.w must stay a steep finite ramp, not 0*inf=NaN (which blacked out the disc)
-   R0.xyz=clamp16f(vec4(R0.xyz*R0.w-R0.w,0.0)).xyz;
-   R0.xyz=R0.xyz/fc[15].x;
-   R2.xyz=R2.xyz+fc[16].x;
-   R1.xyz=mix(texture(tex0,vTC),texture(tex0b,vTC),uA0Mix).xyz;
-   R0.xyz=(R1.xyz*R2.xyz+R0.xyz)*8.0;
-   R0.xyz=R0.xyz*uLimbGain;
-   if(uLinear>0.5){ ocol0=vec4(R0.xyz,1.0); return; }
-   H2.z=clamp16f(R0).z;
-   H2.w=max(R0.x,R0.y);
-   vec2 E15=texture(aTex15,R0.xy*(1.0/128.0)).xy;
-   vec2 E14=texture(aTex14,vec2(H2.z,H2.w)*(1.0/128.0)).xy;
-   ocol0=vec4(E15.y,E15.x,E14.y,clamp(R0.w,0.0,1.0));
-   return;
- }
+ // The REAL music-globe atmosphere fp is c47472608e740973 (live drawcalls D21/D22, vp 3f6eeb47,
+ // blend src=773/dst=772). Its microcode decompiles to the 63d3246d math below (NOT f566cf05 =
+ // FragmentProgram52, which was a wrong premise): 63d3246d's pc() clamps survive the real D21
+ // const[3]/const[7]={inf,...} that would make f566cf05's dot(r1,-fc3) blow up to inf/NaN, and the
+ // surface already binds tex1==tex0 to the same RT (so D21's tex1=tex0 is inherited convention, NOT
+ // proof the atmosphere samples tex1). uAtmoReal now controls only the JS-side compositing
+ // (dst-alpha blend, sky-alpha=0 clear, camera-guard bypass, drawAtmo routing); the shader math is
+ // the single 63d3246d path for ALL callers.
  vec4 tc0=vec4(vTC,0.,1.);vec4 r0=vec4(0.),r1=vec4(0.),r2=vec4(0.),r3=vec4(0.);
  r1.x=fc[0].x;r1.z=fc[0].z;r1.y=1.0/fc[1].z;r0.x=fc[2].w;r0.y=fc[2].z;r0.w=(-r0.y+fc[3].x);r1.xyz=tc0.xyz*r1.xyz;
  r3.y=pc(r0.w/-fc[4].z,0.,1.);r0.w=fc[5].w;r3.x=(-r0.w+fc[6].x);r3.w=r3.y*r3.y;r2.w=r3.y*2.;
@@ -1420,7 +1380,10 @@ function drawGlowFaith(){
  const W=canvas.width,H=canvas.height;
  // FAITHFUL HDR-domain composite gate: global toggle OR per-scene policy (the close-up band family).
  // Surface+atmo render as LINEAR HDR -> one real dual-LUT tonemap (no additive-LDR white limb band).
- const HDRC = (typeof window!=='undefined'&&window.__noHDRC) ? false : (ATMO_HDRC || (FAITH_POLICY&&FAITH_POLICY.hdrcScenes&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.hdrcScenes.indexOf(SCENES_IDX[sceneIdx].scene)>=0));
+ // ATMO_REAL forces HDRC off: the real firmware composites the surface (LDR display) and the atmosphere
+ // (dst-alpha) in the SAME LDR/display domain. The HDRC deferred-tonemap path renders the surface as
+ // linear HDR (uMode=5) which does NOT compose with the LDR dst-alpha atmosphere (2nd-half blacks out).
+ const HDRC = ATMO_REAL ? false : ((typeof window!=='undefined'&&window.__noHDRC) ? false : (ATMO_HDRC || (FAITH_POLICY&&FAITH_POLICY.hdrcScenes&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.hdrcScenes.indexOf(SCENES_IDX[sceneIdx].scene)>=0)));
  const Fd=ensureHDR(W,H), Fb=ensureHDR2(W,H);
  if(INSCAT_GEN){ if(seedCap3(sceneIdx, animT)){ genInscatter(); _ipValid=true; } else { _ipValid=false; } }   // verbatim per-frame tex4/limb generation; falls back to the streamed bin while this scene's seeds load
  // ---- 1) F_disp = col0 earth (LDR) + tonemapped limb ----
@@ -1457,7 +1420,7 @@ function drawGlowFaith(){
    gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
- if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex&&!STARSONLY){ if(HDRC) drawAtmoLinear(); else drawAtmo(); }   // HDRC: HDR limb added in LINEAR domain into Fd (single deferred tonemap, no LDR-additive white band); else legacy tonemapped LDR limb
+ if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex&&!STARSONLY){ if(ATMO_REAL) drawAtmo(); else if(HDRC) drawAtmoLinear(); else drawAtmo(); }   // ATMO_REAL: the real music-globe fp f566cf05 is a SELF-CONTAINED LDR shader (own dual-LUT tonemap + dst-alpha composite); never route it through the HDR-additive linear path (= blown-out white). HDRC: HDR limb added in LINEAR domain into Fd; else legacy tonemapped LDR limb
  if(FLARESPRE) drawFlares();   // flares INTO the display pre-encode: the real eclipse LOBES = the bloom of this light (test gate)
  // ---- 2) composite F_disp (+BURST) -> canvas. With BURST active the composite goes through a POST
  // texture RT first (the firmware encodes the DISPLAY - earth+limb+burst - into the bloom source, so
@@ -1638,6 +1601,7 @@ function drawGlowFaith(){
 // atmo eye 2-5x off the surface eye) render the limb as a wrong-scale RING across the frame. Until those
 // scenes' atmo rows are re-harvested from the live cycle, skip the shell when the eyes disagree.
 function atmoCamBad(a,s){
+ if(ATMO_REAL) return false;   // the real f566cf05 shell uses the shared surface camera basis (c5-c8) and self-tonemaps via dst-alpha; it does NOT render as the legacy wrong-scale ring this guard suppresses. Always draw it.
  const rel=(av,sv)=>{ if(!av||!sv) return 0;
    let d=0,n=0; for(let i=0;i<3;i++){ d+=Math.abs(av[i]-sv[i]); n+=Math.abs(sv[i]); }
    return d/Math.max(n,1e-6); };
@@ -1788,7 +1752,9 @@ function drawAtmo(){
  // registered to the earth). ATMO_FLIPY stays the orientation-probe knob (default 1.0 -> shipped -1.0).
  gl.uniform1f(U('uFlipY'),-ATMO_FLIPY);
  gl.uniform1f(U('uLinear'),0.0);
- gl.uniform1f(U('uAtmoHdr'),ATMO_HDR);gl.uniform1f(U('uLimbGain'),limbGainAt());
+ // ATMO_REAL = verbatim 63d3246d: the color line's gain must be 1.0 so the dual-LUT tail's *8 is the
+ // SINGLE verbatim multiply (uAtmoHdr*8 would double-count -> ~8x blowout). uLimbGain=1.0 (no calib).
+ gl.uniform1f(U('uAtmoHdr'),ATMO_REAL?1.0:ATMO_HDR);gl.uniform1f(U('uLimbGain'),ATMO_REAL?1.0:limbGainAt());
  gl.uniform3fv(U('c5'),c5);gl.uniform3fv(U('c6'),c6);gl.uniform3fv(U('c7'),c7);gl.uniform3fv(U('c8'),c8);
  gl.uniform4fv(U('fc'),atmoFcArray(a));
  // _AtmSpaceIv (TEXUNIT0): per-scene -> picked scene's LIMB lut; eclipse -> atmo draw's own tex0 RT (tex0atmEcl).
