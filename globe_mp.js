@@ -1780,7 +1780,11 @@ function drawAtmo(){
  let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
  let tl=gl.getAttribLocation(aprog,'in_tc0');gl.bindBuffer(34962,aMesh.tbuf);gl.enableVertexAttribArray(tl);gl.vertexAttribPointer(tl,4,5126,false,0,0);
  gl.bindBuffer(34963,aMesh.ibuf);gl.drawElements(5,aMesh.n,5125,0);
- if(aMesh2&&ATMOBAND){   // firmware's SECOND 3f6eeb47 draw (identical consts; only the geometry differs)
+ if(aMesh2&&ATMOBAND&&!ATMO_REAL){   // firmware's SECOND 3f6eeb47 draw (the inner disc-side band, radius 0.982-1.0).
+   // The real GPU DEPTH-OCCLUDES this band behind the earth surface so it only bridges the disc edge; the web
+   // shell forces clip.z=0 (no depth), so the band glows OVER the disc and over-spreads the limb (measured FWHM
+   // 51 vs real 35). With it omitted the limb is tight (FWHM 32) and matches the real's roll-off, no gap under
+   // dst-alpha. So for the real-atmo path, omitting it best approximates the real's occluded-band result.
    gl.bindBuffer(34962,aMesh2.pbuf);gl.vertexAttribPointer(pl,4,5126,false,0,0);
    gl.bindBuffer(34962,aMesh2.tbuf);gl.vertexAttribPointer(tl,4,5126,false,0,0);
    gl.bindBuffer(34963,aMesh2.ibuf);gl.drawElements(5,aMesh2.n,5125,0);
