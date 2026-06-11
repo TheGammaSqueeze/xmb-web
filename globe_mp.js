@@ -339,7 +339,8 @@ in vec4 tc0,tc3,tc4,tc5,tc6,tc8,tc9; in vec3 vN; in vec3 vL; in vec3 vSph; in ve
 uniform sampler2D tex0,tex1,tex2,tex3,tex4,tex5,tex6,tex13,tex14,tex15;
 uniform float uT3Flip;
 uniform sampler2D tex4b; uniform float uT4Mix;   // bracketing in-scatter bin crossfade
-uniform float uLimbGain2;   // surface horizon-band gain (the ring painter; per-scene ratio-calibrated vs presents)   // tex0-3 = THIS patch's 4 firmware tiles (t00-t03)
+uniform float uLimbGain2;   // surface horizon-band gain (the ring painter; per-scene ratio-calibrated vs presents)
+uniform float uDiscGain;   // per-scene disc/face exposure lift   // tex0-3 = THIS patch's 4 firmware tiles (t00-t03)
 uniform samplerCube earthCube, cloudsCube, maskCube;   // legacy cube-map path (kept for DBG/fallback)
 uniform vec4 fc[23];
 uniform float uDbg, uMode, uSlum, uTiles, uT2bad;
@@ -407,6 +408,7 @@ void main(){
   r3.xyz = max(h6.xyz, fc[20].xxx);
   r2.xyz = (h4.xyz * r3.xyz);
   r2.xyz = (fma3(r2.xyz, h3.xyz, h2.xyz) * 8.0);   // VERBATIM: firmware surface fp 506ad546 has this *8 ("* 8.")
+  r2.xyz *= uDiscGain;   // per-scene face lift (HDR domain, before BOTH glow-emit & tonemap; saturated rim rolls off) - 'ring too bright' = disc too dark (present-measured 0.6x)
   // firmware globe HDR.mnu tonemap of the HDR scene r2: EXPOSURE 0.789, WHITE LEVEL 3.40918,
   // extended Reinhard, GAMMA 1. Real .mnu params, verified vs the real surface RT (0.65/255).
   vec3 tc = r2.xyz * 0.789;
@@ -1221,7 +1223,7 @@ function drawGlow(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
    gl.uniform1f(U('uT2bad'), (T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
-   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  // (per-scene limb atmo frame is set in resolveInscat -> ATMO_SCENE auto-managed)
@@ -1379,7 +1381,7 @@ function drawGlowFaith(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]);}
    gl.uniform1f(U('uT2bad'),(T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
-   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex&&!STARSONLY) drawAtmo();   // tonemapped limb (uLinear=0, LDR) into F_disp
@@ -1578,6 +1580,15 @@ function atmoCamBad(a,s){
 // the limb ALPHA (r0.w) = the encode bright-pass key at the limb (B7 real eclipse limb alpha ~0.02
 // vs the old default's overshoot = the sc47/40 bloom blowout seed). Falls back to the legacy
 // approximation for rows without harvested fc. ATMOFC-gated for A/B validation.
+function discGainAt(){
+ if(!(FAITH_POLICY&&FAITH_POLICY.discGain&&SCENES_IDX&&SCENES_IDX[sceneIdx])) return 1.0;
+ const g=FAITH_POLICY.discGain[String(SCENES_IDX[sceneIdx].scene)];
+ if(typeof g==='number') return g;
+ if(Array.isArray(g)&&g.length){ let gv=g[0][1];
+   for(let i=0;i<g.length;i++){ if(animT<=g[i][0]){ if(i===0){gv=g[0][1];} else {const a=g[i-1],b=g[i];const w=(animT-a[0])/((b[0]-a[0])||1);gv=a[1]+(b[1]-a[1])*w;} break;} gv=g[i][1]; }
+   return gv; }
+ return 1.0;
+}
 function limbGainAt(){
  if(!(FAITH_POLICY&&FAITH_POLICY.limbGain&&SCENES_IDX&&SCENES_IDX[sceneIdx])) return 1.0;
  const g=FAITH_POLICY.limbGain[String(SCENES_IDX[sceneIdx].scene)];
@@ -1672,7 +1683,7 @@ function draw(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
    gl.uniform1f(U('uT2bad'), (T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
-   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex)drawAtmo();
@@ -2102,6 +2113,8 @@ set cull(v){ CULL=v?1:0; },
  set atmoband(v){ ATMOBAND=v?1:0; }, get atmoband(){ return ATMOBAND; },
  set bloomc1(v){ BLOOMC1=v?1:0; }, get bloomc1(){ return BLOOMC1; },
  setBloomGain(sid,g){ if(FAITH_POLICY){ FAITH_POLICY.bloomGain=FAITH_POLICY.bloomGain||{}; FAITH_POLICY.bloomGain[String(sid)]=g; return 1; } return 0; },
+ setDiscGain(sid,g){ if(FAITH_POLICY){ FAITH_POLICY.discGain=FAITH_POLICY.discGain||{}; if(g===null)delete FAITH_POLICY.discGain[String(sid)]; else FAITH_POLICY.discGain[String(sid)]=g; return 1; } return 0; },
+ _discDbg(sid){ return FAITH_POLICY?JSON.stringify(FAITH_POLICY.discGain||{}):'no pol'; },
  set bias0(v){ BIAS0=+v; }, get bias0(){ return BIAS0; },
  set bias2(v){ BIAS2=+v; }, get bias2(){ return BIAS2; },
  set faithauto(v){ FAITH_AUTO=v?1:0; }, get faithauto(){ return FAITH_AUTO; },
