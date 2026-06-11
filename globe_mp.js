@@ -1571,7 +1571,7 @@ function atmoCamBad(a,s){
  if(typeof window!=='undefined') window.__atmoDbg={r460:+r1.toFixed(3),r259:+r2.toFixed(3),guard:ATMOGUARD,bad:(r1>0.4||r2>0.25)};
  if(!ATMOGUARD) return false;
  if(r1>0.4) return true;
- if(r2>0.25) return true;
+ if(r2>0.5) return true;   // raised 0.25->0.5: sc00's legit near-match (r259 0.26-0.31) was wrongly blocked = limb 'disappears after a few seconds' (user); mis-captured cams (sc2 r259~2.0) still caught
  return false;
 }
 // REAL per-(scene,t) atmo fp consts (vp 3f6eeb47 const[0..16], harvested from globecap3 into the
