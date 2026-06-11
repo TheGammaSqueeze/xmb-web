@@ -155,6 +155,7 @@ let SURF_ECLFLIP=0;                           // DEPRECATED no-op: the surface e
                                               // (firmware-viewport identity, proven via TF gl_Position vs ecl2/warm2 presents).
                                               // The old per-eclipse flip experiment is gone; the setter is retained for harness compat.
 let ATMO_VFLIP=0;                             // orientation probe for the atmo shell _AtmSpaceIv LUT
+let ATMO_REAL=0;                              // MPGlobe.atmoreal: REAL f566cf05 whole-earth scatter atmosphere (verbatim) + dst-alpha composite
 let ATMO_OVER=0;
 let ATMO_DSTA=0;                              // MPGlobe.atmodsta: REAL dst-alpha atmo blend (src=ONE_MINUS_DST_ALPHA,dst=DST_ALPHA) captured live from DRAWCALLS                              // MPGlobe.atmoover: alpha-OVER atmo compositing (faithful music-globe REPLACE-with-coverage) vs legacy additive (white band)
 let ATMO_HDRC=0;                              // MPGlobe.atmohdrc: FAITHFUL HDR-domain composite -- render surface+atmo as LINEAR HDR, then ONE real dual-LUT tonemap (the limb HDR rolls off smoothly, no additive-LDR white band)
@@ -477,22 +478,77 @@ const A_VS=`#version 300 es
 precision highp float;
 in vec4 in_pos; in vec4 in_tc0;
 uniform vec4 mvp0,mvp1,mvp2,mvp3; uniform float uFlipY; uniform vec3 c5,c6,c7,c8;
-out vec2 vTC;
+out vec2 vTC; out vec4 vRay;
 void main(){
  float A=1.0/sqrt(max(dot(c8,c8),1e-10));float w=in_pos.w;float B=sqrt(max((1.0/A)*(1.0/A)-w*w,1e-10));
  float s=A*w*w,t=A*B*w; vec3 r0=s*c5+t*(in_tc0.z*c7+in_tc0.w*c6); vTC=in_tc0.xy;
+ vRay=vec4(r0-c8,1.0);   // eye-space view ray (shell point minus eye); the real fp's tc1*w
  vec4 p=vec4(r0,1.0); vec4 clip=vec4(dot(p,mvp0),dot(p,mvp1),dot(p,mvp2),dot(p,mvp3));
  vec2 ndc=clip.xy/clip.w; vec2 win=ndc*vec2(960.0,-540.0)+vec2(960.0,540.0);
  clip.xy=((win/vec2(960.0,540.0))-1.0)*clip.w; clip.z=0.0; clip.y*=uFlipY; gl_Position=clip;
 }`;
 const A_FS=`#version 300 es
 precision highp float;
-in vec2 vTC; out vec4 ocol0; uniform sampler2D tex0; uniform vec4 fc[17]; uniform float uLinear; uniform float uAtmoHdr;
+in vec2 vTC; in vec4 vRay; out vec4 ocol0; uniform sampler2D tex0; uniform vec4 fc[17]; uniform float uLinear; uniform float uAtmoHdr;
 uniform sampler2D tex0b; uniform float uA0Mix;   // bracketing limb-LUT crossfade
 uniform float uLimbGain;   // per-scene ring-ratio calibration vs the real presents
 uniform sampler2D aTex14; uniform sampler2D aTex15; uniform float uALut;   // the per-scene tone LUTs for the VERBATIM display tail (fp 63d3246d)
+uniform float uAtmoReal;   // 1 = REAL music-globe whole-earth scatter (f566cf05 verbatim); 0 = legacy timezone limb math
+uniform vec2 uWposBias; uniform float uWposScale;   // screen-space optical-depth sample (real fp uses gl_FragCoord)
 float pc(float x,float a,float b){return (x!=x)?0.:clamp(x,a,b);} float fma1(float a,float b,float c){return a*b+c;}
+float bsqrt(float x){return sqrt(abs(x));}
+vec3 bdivsq3(vec3 a,float b){vec3 t=a/bsqrt(b);return mix(a,t,vec3(greaterThan(abs(a),vec3(0.0))));}
+float bdivsq1(float a,float b){float t=a/bsqrt(b);return (abs(a)>0.0)?t:a;}
+vec4 clamp16f(vec4 v){return vec4(unpackHalf2x16(packHalf2x16(v.xy)),unpackHalf2x16(packHalf2x16(v.zw)));}
 void main(){
+ if(uAtmoReal>0.5){
+   // VERBATIM f566cf05 (the real music-globe ATMOSPHERE: screen-space optical-depth scatter -> blue
+   // haze over the WHOLE disc, densest at the limb; dual-LUT tonemap; composited dst-alpha).
+   vec4 wpos = gl_FragCoord*vec4(1.0,uWposScale,1.0,1.0)+vec4(uWposBias,0.0,0.0);
+   vec3 V = vRay.xyz;
+   vec4 R0=vec4(0.),R1=vec4(0.),R2=vec4(0.),H2=vec4(0.);
+   R0.z=dot(V,V);
+   R0.x=1.0/fc[0].x;
+   R1.w=fc[1].w;
+   R1.xyz=bdivsq3(V,R0.z);
+   R1.w=R1.w+fc[2].w;
+   R0.z=dot(R1.xyz,-fc[3].xyz);
+   R0.y=1.0/fc[4].y;
+   R1.xyz=R1.xyz*R0.z+fc[5].xyz;
+   R0.xy=wpos.xy*R0.xy;
+   R1.w=1.0/R1.w;
+   R0.w=dot(R1.xyz,R1.xyz);
+   R0.xy=-R0.xy*fc[6].xy+abs(fc[6].zx);
+   R0.xyz=texture(tex0,R0.xy).xyz;
+   R1.xyz=-R0.xyz+fc[7].xxx;
+   R1.xyz=(-R0.xyz*R1.xyz+R1.xyz)*0.25;
+   R2.w=(R0.y*fc[8].y+R1.y)*4.0;
+   R1.z=(R0.z*fc[9].y+R1.z)*4.0;
+   R2.x=bdivsq1(abs(R0.w),R0.w);
+   R0.w=(R0.x*fc[10].y+R1.x)*4.0;
+   R1.x=bdivsq1(abs(R0.w),R0.w);
+   R0.w=clamp((R2.x*R1.w-R1.w)*2.0,0.0,1.0);
+   R1.y=bdivsq1(abs(R2.w),R2.w);
+   R1.w=fc[11].y;
+   R1.w=R1.w*fc[12].w;
+   R2.xyz=R0.w*(vec3(1.0)-fc[13].xyz);
+   R1.z=bdivsq1(abs(R1.z),R1.z);
+   R0.xyz=R0.xyz+R1.xyz;
+   R0.w=1.0/R1.w;
+   R0.xyz=clamp16f(vec4(R0.xyz*R0.w-R0.w,0.0)).xyz;
+   R0.xyz=R0.xyz/fc[15].x;
+   R2.xyz=R2.xyz+fc[16].x;
+   R1.xyz=mix(texture(tex0,vTC),texture(tex0b,vTC),uA0Mix).xyz;
+   R0.xyz=(R1.xyz*R2.xyz+R0.xyz)*8.0;
+   R0.xyz=R0.xyz*uLimbGain;
+   if(uLinear>0.5){ ocol0=vec4(R0.xyz,1.0); return; }
+   H2.z=clamp16f(R0).z;
+   H2.w=max(R0.x,R0.y);
+   vec2 E15=texture(aTex15,R0.xy*(1.0/128.0)).xy;
+   vec2 E14=texture(aTex14,vec2(H2.z,H2.w)*(1.0/128.0)).xy;
+   ocol0=vec4(E15.y,E15.x,E14.y,clamp(R0.w,0.0,1.0));
+   return;
+ }
  vec4 tc0=vec4(vTC,0.,1.);vec4 r0=vec4(0.),r1=vec4(0.),r2=vec4(0.),r3=vec4(0.);
  r1.x=fc[0].x;r1.z=fc[0].z;r1.y=1.0/fc[1].z;r0.x=fc[2].w;r0.y=fc[2].z;r0.w=(-r0.y+fc[3].x);r1.xyz=tc0.xyz*r1.xyz;
  r3.y=pc(r0.w/-fc[4].z,0.,1.);r0.w=fc[5].w;r3.x=(-r0.w+fc[6].x);r3.w=r3.y*r3.y;r2.w=r3.y*2.;
@@ -1372,7 +1428,7 @@ function drawGlowFaith(){
  // clear alpha = 1.0: the display A channel is the HDR-exponent (present dark sky alpha = 255 = 1.0)
  gl.viewport(0,0,W,H);
  if(DISPRETAIN){ gl.clear(256); }   // REAL pipeline: the display is NEVER color-cleared (no clear pass in the draw list) - the sky temporally accumulates (flare lobes = equilibrium); depth-only clear
- else { gl.clearColor(0,0,0,1); gl.clear(16640); }
+ else { gl.clearColor(0,0,0,ATMO_REAL?0.0:1.0); gl.clear(16640); }   // ATMO_REAL: clear sky alpha=0 so the dst-alpha atmosphere shows in the sky (atmo*(1-0)); the atmo shell then writes alpha->1 (matching the present's sky alpha=255). Legacy=1.
  gl.enable(2929);gl.depthFunc(515);
  if(CULL){gl.enable(2884);gl.cullFace(1029);}else{gl.disable(2884);}
  gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
@@ -1653,6 +1709,7 @@ function drawAtmoLinear(){
  // registered to the earth). ATMO_FLIPY stays the orientation-probe knob (default 1.0 -> shipped -1.0).
  gl.uniform1f(U('uFlipY'),-ATMO_FLIPY);
  gl.uniform1f(U('uLinear'),1.0);
+ gl.uniform1f(U('uAtmoReal'),ATMO_REAL?1.0:0.0); gl.uniform1f(U('uWposScale'),1.0); gl.uniform2f(U('uWposBias'),0.0,0.0);
  gl.uniform1f(U('uAtmoHdr'),ATMO_HDR);gl.uniform1f(U('uLimbGain'),limbGainAt());
  gl.uniform3fv(U('c5'),c5);gl.uniform3fv(U('c6'),c6);gl.uniform3fv(U('c7'),c7);gl.uniform3fv(U('c8'),c8);
  gl.uniform4fv(U('fc'),atmoFcArray(a));
@@ -1743,8 +1800,9 @@ function drawAtmo(){
  gl.activeTexture(33985);gl.bindTexture(3553,_t14);gl.uniform1i(U('aTex14'),1);
  gl.activeTexture(33986);gl.bindTexture(3553,_t15);gl.uniform1i(U('aTex15'),2);
  gl.uniform1f(U('uALut'),(_t14&&_t15)?1.0:0.0);   // verbatim fp 63d3246d display tail when the per-scene LUTs exist
+ gl.uniform1f(U('uAtmoReal'),ATMO_REAL?1.0:0.0); gl.uniform1f(U('uWposScale'),1.0); gl.uniform2f(U('uWposBias'),0.0,0.0);   // real f566cf05 screen-space scatter (wpos defaults match the upright web FB)
  gl.disable(2884); gl.depthMask(false); if(!ATMODEPTH) gl.disable(2929); gl.enable(3042);
- if(ATMO_DSTA){ gl.blendFuncSeparate(773,772,773,772); }   // REAL music-globe atmo blend (live DRAWCALLS: src=ONE_MINUS_DST_ALPHA 773, dst=DST_ALPHA 772): result = atmo*(1-surfA) + surf*surfA, weighted by the surface's HDR-exponent alpha (col0.w). The real compositing law that replaces my additive band.
+ if(ATMO_REAL||ATMO_DSTA){ gl.blendFuncSeparate(773,772,773,772); }   // REAL music-globe atmo blend (live DRAWCALLS: src=ONE_MINUS_DST_ALPHA 773, dst=DST_ALPHA 772): result = atmo*(1-surfA) + surf*surfA, weighted by the surface's HDR-exponent alpha (col0.w). The real compositing law that replaces my additive band.
  else if(ATMO_OVER){ gl.blendFuncSeparate(770,771,1,0); }   // alpha-OVER (atmo*a + surf*(1-a))
  else gl.blendFuncSeparate(1,1,1,0);   // legacy ONE,ONE additive color (the white band)
  let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
@@ -2244,6 +2302,7 @@ set cull(v){ CULL=v?1:0; },
  _pickScene(sun,attn){ const s=pickScene(sun,attn); return s?s.name:null; },      // diagnostic: pure pickScene by explicit sun/attn
  set iefull(v){ IEFULL=v?1:0; }, get iefull(){ return IEFULL; },               // unclamped IE LUT (restores night/dark side)
  set atmovflip(v){ ATMO_VFLIP=v?1:0; }, get atmovflip(){ return ATMO_VFLIP; },  // orientation probe for the atmo shell scatter LUT
+ set atmoreal(v){ ATMO_REAL=v?1:0; }, get atmoreal(){ return ATMO_REAL; },  // REAL f566cf05 whole-earth scatter atmosphere
  set atmoover(v){ ATMO_OVER=v?1:0; }, get atmoover(){ return ATMO_OVER; },  // alpha-OVER atmo compositing (faithful) vs additive (white band)
  set atmodsta(v){ ATMO_DSTA=v?1:0; }, get atmodsta(){ return ATMO_DSTA; },  // real dst-alpha atmo blend
  set atmohdrc(v){ ATMO_HDRC=v?1:0; }, get atmohdrc(){ return ATMO_HDRC; },  // faithful HDR-domain composite (surface+atmo linear HDR -> single dual-LUT tonemap)
