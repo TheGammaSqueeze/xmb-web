@@ -338,7 +338,8 @@ precision highp float;
 in vec4 tc0,tc3,tc4,tc5,tc6,tc8,tc9; in vec3 vN; in vec3 vL; in vec3 vSph; in vec4 vClip;
 uniform sampler2D tex0,tex1,tex2,tex3,tex4,tex5,tex6,tex13,tex14,tex15;
 uniform float uT3Flip;
-uniform sampler2D tex4b; uniform float uT4Mix;   // bracketing in-scatter bin crossfade   // tex0-3 = THIS patch's 4 firmware tiles (t00-t03)
+uniform sampler2D tex4b; uniform float uT4Mix;   // bracketing in-scatter bin crossfade
+uniform float uLimbGain2;   // surface horizon-band gain (the ring painter; per-scene ratio-calibrated vs presents)   // tex0-3 = THIS patch's 4 firmware tiles (t00-t03)
 uniform samplerCube earthCube, cloudsCube, maskCube;   // legacy cube-map path (kept for DBG/fallback)
 uniform vec4 fc[23];
 uniform float uDbg, uMode, uSlum, uTiles, uT2bad;
@@ -400,7 +401,7 @@ void main(){
   h6.xyz = fma3(-r1.www, r3.xyz, r4.xyz);
   r4.xyz = texture(tex5, tc5.xy).xyz;
   h6.xyz = (r4.xyz * h6.xyz);
-  h2.xyz = (r1.xyz * fc[18].y);
+  h2.xyz = (r1.xyz * fc[18].y);   // (rim-painter isolation PROVED the bright rim is NOT the in-scatter: whole-h2 scaling moved the ring ratio the WRONG way; the rim lives in the IE/cloud/tone grazing terms - task #44)
   h4.xyz = fma3(h1.xyz, r2.xxx, h5.xyz);
   h3.xyz = fma3(-h0.xyz, h0.www, fc[19].xxx);
   r3.xyz = max(h6.xyz, fc[20].xxx);
@@ -478,6 +479,7 @@ const A_FS=`#version 300 es
 precision highp float;
 in vec2 vTC; out vec4 ocol0; uniform sampler2D tex0; uniform vec4 fc[17]; uniform float uLinear; uniform float uAtmoHdr;
 uniform sampler2D tex0b; uniform float uA0Mix;   // bracketing limb-LUT crossfade
+uniform float uLimbGain;   // per-scene ring-ratio calibration vs the real presents
 uniform sampler2D aTex14; uniform sampler2D aTex15; uniform float uALut;   // the per-scene tone LUTs for the VERBATIM display tail (fp 63d3246d)
 float pc(float x,float a,float b){return (x!=x)?0.:clamp(x,a,b);} float fma1(float a,float b,float c){return a*b+c;}
 void main(){
@@ -488,7 +490,7 @@ void main(){
  r1.x=(-r1.x*fc[8].x);r1.z=(r1.y+-fc[9].w);r3.x=pc(r1.z/r3.x,0.,1.);r3.z=(-r1.w+fc[10].x);r3.y=r2.x*r3.z;r0.w=r1.x*fc[11].x;
  r1.x=pc(r1.y/fc[12].y,0.,1.);r1.w=(-r2.x+fc[13].x);r2.x=fma1(r3.w,r1.w,-r3.y);r1.w=r1.x*2.;r1.w=(-r1.w+fc[14].x);r1.x=r1.x*r1.x;r1.x=r1.x*r1.w;
  r1.w=r3.x*2.;r1.w=(-r1.w+fc[15].x);r1.y=r3.x*r3.x;r1.y=r1.y*r1.w;r0.w=exp2(r0.w);r0.w=r2.x*r0.w;
- r0.xyz=r0.xyz*fc[16].x;r0.xyz=(-r1.y*r0.xyz+r0.xyz);r0.w=(-r1.x*r0.w+r0.w);r0.xyz=((r0.w*r0.xyz+r0.xyz)*uAtmoHdr);
+ r0.xyz=r0.xyz*fc[16].x;r0.xyz=(-r1.y*r0.xyz+r0.xyz);r0.w=(-r1.x*r0.w+r0.w);r0.xyz=((r0.w*r0.xyz+r0.xyz)*uAtmoHdr*uLimbGain);
  if(uLinear>0.5){ ocol0=vec4(r0.xyz,1.0); return; }   // GLOW path: emit linear HDR atmo so it feeds the bloom
  if(uALut>0.5){
    // VERBATIM display tail (fp 63d3246d): rgb = HDR*8 -> dual tone-LUT encode (R=t15.ch1(8R,8G),
@@ -1203,7 +1205,7 @@ function drawGlow(){
  gl.uniform4fv(U('fc'),fc);
  const surfTex4 = ((INSCAT_GEN&&_ipValid&&_ipC.cur)?_ipC.cur.tex:null) || CAP_LUT || ((INSCAT_PS&&_psSurfTex) ? _psSurfTex : ((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
  const surfTex4B=(surfTex4===CAP_LUT&&CAP_LUTB)?CAP_LUTB:surfTex4; const t4mix=(surfTex4===CAP_LUT&&CAP_LUTB)?CAP_MIX:0.0;
- bindT(4,'tex4',surfTex4);bindT(9,'tex4b',surfTex4B);gl.uniform1f(U('uT4Mix'),t4mix);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
+ bindT(4,'tex4',surfTex4);bindT(9,'tex4b',surfTex4B);gl.uniform1f(U('uT4Mix'),t4mix);gl.uniform1f(U('uLimbGain2'),limbGainAt());bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
  bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black0||black);
  gl.uniform1f(U('uTiles'),TILES);
  const bindCube=(unit,name,tex)=>{gl.activeTexture(33984+unit);gl.bindTexture(34067,tex);gl.uniform1i(U(name),unit);};
@@ -1364,7 +1366,7 @@ function drawGlowFaith(){
  gl.uniform4fv(U('fc'),fc);
  const surfTex4 = ((INSCAT_GEN&&_ipValid&&_ipC.cur)?_ipC.cur.tex:null) || CAP_LUT || ((INSCAT_PS&&_psSurfTex) ? _psSurfTex : ((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
  const surfTex4B=(surfTex4===CAP_LUT&&CAP_LUTB)?CAP_LUTB:surfTex4; const t4mix=(surfTex4===CAP_LUT&&CAP_LUTB)?CAP_MIX:0.0;
- bindT(4,'tex4',surfTex4);bindT(9,'tex4b',surfTex4B);gl.uniform1f(U('uT4Mix'),t4mix);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
+ bindT(4,'tex4',surfTex4);bindT(9,'tex4b',surfTex4B);gl.uniform1f(U('uT4Mix'),t4mix);gl.uniform1f(U('uLimbGain2'),limbGainAt());bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
  bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black0||black);
  gl.uniform1f(U('uTiles'),TILES);
  const bindCube=(unit,name,tex)=>{gl.activeTexture(33984+unit);gl.bindTexture(34067,tex);gl.uniform1i(U(name),unit);};
@@ -1576,6 +1578,20 @@ function atmoCamBad(a,s){
 // the limb ALPHA (r0.w) = the encode bright-pass key at the limb (B7 real eclipse limb alpha ~0.02
 // vs the old default's overshoot = the sc47/40 bloom blowout seed). Falls back to the legacy
 // approximation for rows without harvested fc. ATMOFC-gated for A/B validation.
+function limbGainAt(){
+ if(!(FAITH_POLICY&&FAITH_POLICY.limbGain&&SCENES_IDX&&SCENES_IDX[sceneIdx])) return 1.0;
+ const g=FAITH_POLICY.limbGain[String(SCENES_IDX[sceneIdx].scene)];
+ if(typeof g==='number') return g;
+ if(Array.isArray(g)&&g.length){
+   let gv=g[0][1];
+   for(let i=0;i<g.length;i++){
+     if(animT<=g[i][0]){ if(i===0){gv=g[0][1];} else { const a=g[i-1],b=g[i]; const w=(animT-a[0])/((b[0]-a[0])||1); gv=a[1]+(b[1]-a[1])*w; } break; }
+     gv=g[i][1];
+   }
+   return gv;
+ }
+ return 1.0;
+}
 function atmoFcArray(a){
  if(ATMOFC&&a&&a.fc&&a.fc.length>=17){
    const fa=new Float32Array(17*4);
@@ -1601,7 +1617,7 @@ function drawAtmoLinear(){
  // registered to the earth). ATMO_FLIPY stays the orientation-probe knob (default 1.0 -> shipped -1.0).
  gl.uniform1f(U('uFlipY'),-ATMO_FLIPY);
  gl.uniform1f(U('uLinear'),1.0);
- gl.uniform1f(U('uAtmoHdr'),ATMO_HDR);
+ gl.uniform1f(U('uAtmoHdr'),ATMO_HDR);gl.uniform1f(U('uLimbGain'),limbGainAt());
  gl.uniform3fv(U('c5'),c5);gl.uniform3fv(U('c6'),c6);gl.uniform3fv(U('c7'),c7);gl.uniform3fv(U('c8'),c8);
  gl.uniform4fv(U('fc'),atmoFcArray(a));
  // _AtmSpaceIv (TEXUNIT0 of the atmo shell fp): per-scene -> the picked scene's LIMB lut (ac6e80000); eclipse ->
@@ -1643,7 +1659,7 @@ function draw(){
  gl.uniform4fv(U('fc'),fc);
  const surfTex4 = ((INSCAT_GEN&&_ipValid&&_ipC.cur)?_ipC.cur.tex:null) || CAP_LUT || ((INSCAT_PS&&_psSurfTex) ? _psSurfTex : ((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
  const surfTex4B=(surfTex4===CAP_LUT&&CAP_LUTB)?CAP_LUTB:surfTex4; const t4mix=(surfTex4===CAP_LUT&&CAP_LUTB)?CAP_MIX:0.0;
- bindT(4,'tex4',surfTex4);bindT(9,'tex4b',surfTex4B);gl.uniform1f(U('uT4Mix'),t4mix);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
+ bindT(4,'tex4',surfTex4);bindT(9,'tex4b',surfTex4B);gl.uniform1f(U('uT4Mix'),t4mix);gl.uniform1f(U('uLimbGain2'),limbGainAt());bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
  bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black0||black);
  gl.uniform1f(U('uTiles'),TILES);
  const bindCube=(unit,name,tex)=>{gl.activeTexture(33984+unit);gl.bindTexture(34067,tex);gl.uniform1i(U(name),unit);};
@@ -1679,7 +1695,7 @@ function drawAtmo(){
  // registered to the earth). ATMO_FLIPY stays the orientation-probe knob (default 1.0 -> shipped -1.0).
  gl.uniform1f(U('uFlipY'),-ATMO_FLIPY);
  gl.uniform1f(U('uLinear'),0.0);
- gl.uniform1f(U('uAtmoHdr'),ATMO_HDR);
+ gl.uniform1f(U('uAtmoHdr'),ATMO_HDR);gl.uniform1f(U('uLimbGain'),limbGainAt());
  gl.uniform3fv(U('c5'),c5);gl.uniform3fv(U('c6'),c6);gl.uniform3fv(U('c7'),c7);gl.uniform3fv(U('c8'),c8);
  gl.uniform4fv(U('fc'),atmoFcArray(a));
  // _AtmSpaceIv (TEXUNIT0): per-scene -> picked scene's LIMB lut; eclipse -> atmo draw's own tex0 RT (tex0atmEcl).
