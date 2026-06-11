@@ -861,6 +861,11 @@ let _psFrame=null, _psScat=null, _psSurfTex=null;
 // bins, and while the exact-nearest bin is still in flight HOLD the last LOADED bin of the same
 // scene (else the last loaded of any scene; the dip-to-black scene fade covers that brief hold).
 const LUT_LOOKAHEAD=8;
+let LUT_XFADE=0;   // 0 = use the NEAREST in-scatter bin (no within-scene crossfade). The crossfade BLENDS two
+                   // spatially-offset LUT bins, which SMEARS the bright limb/lighting at mix~0.5 -> a 38% bright<->dim
+                   // OSCILLATION at the bin rate (~6s) = the "day<->night-red flicker" (user 2026-06-11). The bins
+                   // themselves are only ~3% apart within a scene, so nearest is stable AND faithful (a real bin, not
+                   // an interpolation). MPGlobe.lutxfade=1 restores the crossfade.
 let _lutStick={}, _toneStick={};   // SAME-SCENE sticky only: never show another scene's lighting (a cross-scene hold made scene boundaries render a mismatched limb glow). Until the scene's own first bin arrives the in-path static fallback is used (and no limb).
 let SCENE_HAS_TONE=true;           // per-scene faithful-path gate (set in setFC)
 let SCENE_SKIP=new Set();          // degenerate (static-artifact) scene indices, skipped in the cycle
@@ -882,13 +887,15 @@ function capSceneLut(si, t, frOpt){
  const s=SCENES_IDX[si]; const list=CAP_SCENE_LUTS[String(s.scene)];
  if(!list||!list.length) return null;
  const fr=(frOpt!==undefined)?frOpt:(s.frame0 + t*((s.frame1-s.frame0)||1));
- const {ia,ib,mix}=_bracket(list,fr);
+ const br=_bracket(list,fr);
+ // NEAREST bin (no crossfade) by default: blending two spatially-offset bins smears the limb -> bright/dim flicker.
+ const ia=LUT_XFADE?br.ia:_nearestIdx(list,fr), ib=LUT_XFADE?br.ib:ia, mix=LUT_XFADE?br.mix:0;
  for(let k=0;k<=LUT_LOOKAHEAD && ia+k<list.length;k++){ const e=list[ia+k];
    if(!CAP_LUT_CACHE[e.fr]) CAP_LUT_CACHE[e.fr]={surf:texF32(lfsURL(e.surf),256,128,true), limb:texF32(lfsURL(e.limb),256,128,true)}; }
  const A=CAP_LUT_CACHE[list[ia].fr], B=CAP_LUT_CACHE[list[ib].fr];
  if(A&&A.surf.loaded&&A.limb.loaded){
    const r={surf:A.surf,limb:A.limb,surfB:null,limbB:null,mix:0};
-   if(ib>ia&&B&&B.surf.loaded&&B.limb.loaded){ r.surfB=B.surf; r.limbB=B.limb; r.mix=mix; }
+   if(LUT_XFADE&&ib>ia&&B&&B.surf.loaded&&B.limb.loaded){ r.surfB=B.surf; r.limbB=B.limb; r.mix=mix; }
    _lutStick[String(s.scene)]=r; return r;
  }
  return _lutStick[String(s.scene)]||null;
@@ -1782,11 +1789,11 @@ function drawAtmo(){
  let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
  let tl=gl.getAttribLocation(aprog,'in_tc0');gl.bindBuffer(34962,aMesh.tbuf);gl.enableVertexAttribArray(tl);gl.vertexAttribPointer(tl,4,5126,false,0,0);
  gl.bindBuffer(34963,aMesh.ibuf);gl.drawElements(5,aMesh.n,5125,0);
- if(aMesh2&&ATMOBAND&&!ATMO_REAL){   // firmware's SECOND 3f6eeb47 draw (the inner disc-side band, radius 0.982-1.0).
-   // The real GPU DEPTH-OCCLUDES this band behind the earth surface so it only bridges the disc edge; the web
-   // shell forces clip.z=0 (no depth), so the band glows OVER the disc and over-spreads the limb (measured FWHM
-   // 51 vs real 35). With it omitted the limb is tight (FWHM 32) and matches the real's roll-off, no gap under
-   // dst-alpha. So for the real-atmo path, omitting it best approximates the real's occluded-band result.
+ if(aMesh2&&ATMOBAND&&!ATMO_REAL){   // firmware's SECOND 3f6eeb47 draw (inner disc-side band). OMITTED for
+   // ATMO_REAL: re-enabling it under the web's no-depth shell (clip.z=0) brings back the GIANT BAND (user
+   // regression report 2026-06-11) because it glows over the disc un-occluded. The thin dashed seam it would
+   // bridge is a separate main-shell artifact to be fixed by the real screen-space f566cf05 port, NOT by
+   // re-adding this band. Keep it off until depth-occlusion or the f566cf05 port lands.
    gl.bindBuffer(34962,aMesh2.pbuf);gl.vertexAttribPointer(pl,4,5126,false,0,0);
    gl.bindBuffer(34962,aMesh2.tbuf);gl.vertexAttribPointer(tl,4,5126,false,0,0);
    gl.bindBuffer(34963,aMesh2.ibuf);gl.drawElements(5,aMesh2.n,5125,0);
@@ -2269,6 +2276,7 @@ set cull(v){ CULL=v?1:0; },
  set sunnoocc(v){ SUN_NOOCC=v?1:0; }, get sunnoocc(){ return SUN_NOOCC; },     // debug: ignore earth occlusion
  set inscatecl(v){ INSCAT_ECL=v?1:0; }, get inscatecl(){ return INSCAT_ECL; }, // eclipse _AtmSpaceIv in-scatter LUT (surface tex4 + atmosphere scatterTex)
  set inscatps(v){ INSCAT_PS=v?1:0; }, get inscatps(){ return INSCAT_PS; },     // RUNTIME per-scene in-scatter (nearest-LUT selection from the 32-scene manifest)
+ set lutxfade(v){ LUT_XFADE=v?1:0; }, get lutxfade(){ return LUT_XFADE; },       // 1 = within-scene in-scatter crossfade (causes the bright/dim flicker); 0 = nearest bin (stable)
  set caplut(u){ CAP_LUT = u ? texF32(BASE+u,256,128) : null; }, get caplut(){ return !!CAP_LUT; },   // captured per-frame in-scatter LUT override
  set caplimb(u){ CAP_LIMB = u ? texF32(BASE+u,256,128) : null; }, get caplimb(){ return !!CAP_LIMB; }, // captured per-frame limb LUT override
  set surfeclflip(v){ SURF_ECLFLIP=v?1:0; }, get surfeclflip(){ return SURF_ECLFLIP; },  // experiment: invert surface earth viewport-Y for eclipse views (default off; see framing diagnostics)
