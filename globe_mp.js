@@ -156,6 +156,7 @@ let SURF_ECLFLIP=0;                           // DEPRECATED no-op: the surface e
                                               // The old per-eclipse flip experiment is gone; the setter is retained for harness compat.
 let ATMO_VFLIP=0;                             // orientation probe for the atmo shell _AtmSpaceIv LUT
 let ATMO_OVER=0;                              // MPGlobe.atmoover: alpha-OVER atmo compositing (faithful music-globe REPLACE-with-coverage) vs legacy additive (white band)
+let ATMO_HDRC=0;                              // MPGlobe.atmohdrc: FAITHFUL HDR-domain composite -- render surface+atmo as LINEAR HDR, then ONE real dual-LUT tonemap (the limb HDR rolls off smoothly, no additive-LDR white band)
 let ATMO_SOLID=0;                             // debug: bind a solid-warm LUT to test shader math/coord
 let ATMO_FLIPY=1.0;                           // shell uFlipY (orientation probe)
 let ATMO_HDR=7.863;                           // firmware preexpose scale = TEX15/TEX14 LUT (lut15_rgba32f) max 7.863, = the atmo fp's r0 exposure before the scene RT (replaces the rounded 8.0 approximation)
@@ -1360,6 +1361,9 @@ function glareGfc(){   // nearest-t REAL per-scene glare consts (vp c868fd6a row
 }
 function drawGlowFaith(){
  const W=canvas.width,H=canvas.height;
+ // FAITHFUL HDR-domain composite gate: global toggle OR per-scene policy (the close-up band family).
+ // Surface+atmo render as LINEAR HDR -> one real dual-LUT tonemap (no additive-LDR white limb band).
+ const HDRC = ATMO_HDRC || (FAITH_POLICY&&FAITH_POLICY.hdrcScenes&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.hdrcScenes.indexOf(SCENES_IDX[sceneIdx].scene)>=0);
  const Fd=ensureHDR(W,H), Fb=ensureHDR2(W,H);
  if(INSCAT_GEN){ if(seedCap3(sceneIdx, animT)){ genInscatter(); _ipValid=true; } else { _ipValid=false; } }   // verbatim per-frame tex4/limb generation; falls back to the streamed bin while this scene's seeds load
  // ---- 1) F_disp = col0 earth (LDR) + tonemapped limb ----
@@ -1374,7 +1378,7 @@ function drawGlowFaith(){
  const fcsrc=curFC||D.fc; const fc=new Float32Array(23*4);for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
  resolveInscat();
  gl.uniform1f(U('uFlipY'),-1.0);gl.uniform1f(U('uDbg'),0.0);
- gl.uniform1f(U('uMode'),1.0);   // col0
+ gl.uniform1f(U('uMode'),HDRC?5.0:1.0);   // HDRC: emit LINEAR HDR r2 (deferred single tonemap); else col0 LDR
  gl.uniform1f(U('uSlum'),SLUM);
  gl.uniform1f(U('uLutScale'),1.0/128.0);gl.uniform1f(U('uFeedback'),1.0);   // faithful: 1/128 UN-scale + steady-state feedback
  gl.uniform4fv(U('fc'),fc);
@@ -1396,7 +1400,7 @@ function drawGlowFaith(){
    gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
- if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex&&!STARSONLY) drawAtmo();   // tonemapped limb (uLinear=0, LDR) into F_disp
+ if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex&&!STARSONLY){ if(HDRC) drawAtmoLinear(); else drawAtmo(); }   // HDRC: HDR limb added in LINEAR domain into Fd (single deferred tonemap, no LDR-additive white band); else legacy tonemapped LDR limb
  if(FLARESPRE) drawFlares();   // flares INTO the display pre-encode: the real eclipse LOBES = the bloom of this light (test gate)
  // ---- 2) composite F_disp (+BURST) -> canvas. With BURST active the composite goes through a POST
  // texture RT first (the firmware encodes the DISPLAY - earth+limb+burst - into the bloom source, so
@@ -1431,7 +1435,10 @@ function drawGlowFaith(){
  gl.activeTexture(33984+3);gl.bindTexture(3553,CAP_T15||sharedTex.tex15);gl.uniform1i(C('uLut15'),3);
  gl.activeTexture(33984+4);gl.bindTexture(3553,CAP_T14||sharedTex.tex14);gl.uniform1i(C('uLut14'),4);
  gl.uniform3fv(C('uGlowGain'),new Float32Array([0,0,0]));
- gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uLutOn'),0.0);gl.uniform2f(C('uDims'),W,H);
+ if(HDRC){ // FAITHFUL HDR composite: uEarth=Fd is the LINEAR HDR (surface r2 + atmo HDR). Apply the EXACT surface-fp dual-LUT tonemap ONCE (uLutOn path == col0: hc=r2/128, R=t15.ch1,G=t15.ch0,B=t14.ch1). The limb HDR rolls off through the LUT -> 226, no additive white band.
+   gl.uniform1f(C('uPassthru'),0.0);gl.uniform1f(C('uLutOn'),1.0);gl.uniform1f(C('uLutExpo'),1.0/128.0);gl.uniform1f(C('uLutFb'),1.0);
+ } else { gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uLutOn'),0.0); }
+ gl.uniform2f(C('uDims'),W,H);
  // sun-glare: the c868fd6a draw is NOT fullscreen - VERTS f014391_d021 decoded it as the 65-vertex
  // TRIANGLE-FAN disc (radius 5/9, model space) positioned by its OWN MVP (row vc[6..9]); at most
  // (scene,t) it transforms to a tiny spot or fully off-screen (fr82800: every vert at ndc ~3.7).
@@ -2235,6 +2242,7 @@ set cull(v){ CULL=v?1:0; },
  set iefull(v){ IEFULL=v?1:0; }, get iefull(){ return IEFULL; },               // unclamped IE LUT (restores night/dark side)
  set atmovflip(v){ ATMO_VFLIP=v?1:0; }, get atmovflip(){ return ATMO_VFLIP; },  // orientation probe for the atmo shell scatter LUT
  set atmoover(v){ ATMO_OVER=v?1:0; }, get atmoover(){ return ATMO_OVER; },  // alpha-OVER atmo compositing (faithful) vs additive (white band)
+ set atmohdrc(v){ ATMO_HDRC=v?1:0; }, get atmohdrc(){ return ATMO_HDRC; },  // faithful HDR-domain composite (surface+atmo linear HDR -> single dual-LUT tonemap)
  set atmosolid(v){ ATMO_SOLID=v?1:0; }, get atmosolid(){ return ATMO_SOLID; },
  set atmoflipy(v){ ATMO_FLIPY=+v; }, get atmoflipy(){ return ATMO_FLIPY; },     // shell uFlipY orientation probe
  set atmohdr(v){ ATMO_HDR=+v; }, get atmohdr(){ return ATMO_HDR; },             // shell pre-bloom HDR scale probe
