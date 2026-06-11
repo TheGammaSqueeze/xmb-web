@@ -155,7 +155,9 @@ let SURF_ECLFLIP=0;                           // DEPRECATED no-op: the surface e
                                               // (firmware-viewport identity, proven via TF gl_Position vs ecl2/warm2 presents).
                                               // The old per-eclipse flip experiment is gone; the setter is retained for harness compat.
 let ATMO_VFLIP=0;                             // orientation probe for the atmo shell _AtmSpaceIv LUT
-let ATMO_REAL=1;                              // MPGlobe.atmoreal: REAL atmosphere compositing (fp c47472608e740973 = 63d3246d math) + dst-alpha blend (src=773/dst=772, live D21) + sky-alpha=0 clear + camera-guard bypass. Replaces the legacy additive "huge white band". Default ON: the dst-alpha law is the firmware-universal music-globe atmosphere composite.
+let ATMO_REAL=0;                              // EFFECTIVE per-frame value (set in drawGlowFaith from ATMO_REAL_MASTER & the per-scene whitelist). REAL atmosphere compositing (fp c47472608e740973 = 63d3246d math) + dst-alpha blend (src=773/dst=772, live D21) + sky-alpha=0 clear + camera-guard bypass + HDRC off. Replaces the legacy additive "huge white band".
+let ATMO_REAL_MASTER=1;                       // MPGlobe.atmoreal: feature toggle for the real dst-alpha atmosphere.
+let ATMO_REAL_SCENES=[0];                      // scenes validated for the real dst-alpha law (scene 0 proven vs sc0_full presents). Gated per directive "scene 0 only" so other scenes keep their prior path until each is individually re-validated.
 let ATMO_OVER=0;
 let ATMO_DSTA=0;                              // MPGlobe.atmodsta: REAL dst-alpha atmo blend (src=ONE_MINUS_DST_ALPHA,dst=DST_ALPHA) captured live from DRAWCALLS                              // MPGlobe.atmoover: alpha-OVER atmo compositing (faithful music-globe REPLACE-with-coverage) vs legacy additive (white band)
 let ATMO_HDRC=0;                              // MPGlobe.atmohdrc: FAITHFUL HDR-domain composite -- render surface+atmo as LINEAR HDR, then ONE real dual-LUT tonemap (the limb HDR rolls off smoothly, no additive-LDR white band)
@@ -1378,6 +1380,10 @@ function glareGfc(){   // nearest-t REAL per-scene glare consts (vp c868fd6a row
 }
 function drawGlowFaith(){
  const W=canvas.width,H=canvas.height;
+ // Resolve the EFFECTIVE real-atmosphere flag for THIS scene: master toggle AND the validated whitelist.
+ // (Forcing the dst-alpha law + HDRC-off on every scene regressed dark scenes like 5/14 to near-black.)
+ { const sc = (SCENES_IDX&&SCENES_IDX[sceneIdx]) ? SCENES_IDX[sceneIdx].scene : sceneIdx;
+   ATMO_REAL = (ATMO_REAL_MASTER && ATMO_REAL_SCENES.indexOf(sc)>=0) ? 1 : 0; }
  // FAITHFUL HDR-domain composite gate: global toggle OR per-scene policy (the close-up band family).
  // Surface+atmo render as LINEAR HDR -> one real dual-LUT tonemap (no additive-LDR white limb band).
  // ATMO_REAL forces HDRC off: the real firmware composites the surface (LDR display) and the atmosphere
@@ -2268,7 +2274,8 @@ set cull(v){ CULL=v?1:0; },
  _pickScene(sun,attn){ const s=pickScene(sun,attn); return s?s.name:null; },      // diagnostic: pure pickScene by explicit sun/attn
  set iefull(v){ IEFULL=v?1:0; }, get iefull(){ return IEFULL; },               // unclamped IE LUT (restores night/dark side)
  set atmovflip(v){ ATMO_VFLIP=v?1:0; }, get atmovflip(){ return ATMO_VFLIP; },  // orientation probe for the atmo shell scatter LUT
- set atmoreal(v){ ATMO_REAL=v?1:0; }, get atmoreal(){ return ATMO_REAL; },  // REAL f566cf05 whole-earth scatter atmosphere
+ set atmoreal(v){ ATMO_REAL_MASTER=v?1:0; }, get atmoreal(){ return ATMO_REAL_MASTER; },  // master toggle; effective per-scene value (ATMO_REAL) is gated by ATMO_REAL_SCENES in drawGlowFaith
+ set atmorealscenes(v){ ATMO_REAL_SCENES=Array.isArray(v)?v.slice():ATMO_REAL_SCENES; }, get atmorealscenes(){ return ATMO_REAL_SCENES.slice(); },
  set atmoover(v){ ATMO_OVER=v?1:0; }, get atmoover(){ return ATMO_OVER; },  // alpha-OVER atmo compositing (faithful) vs additive (white band)
  set atmodsta(v){ ATMO_DSTA=v?1:0; }, get atmodsta(){ return ATMO_DSTA; },  // real dst-alpha atmo blend
  set atmohdrc(v){ ATMO_HDRC=v?1:0; }, get atmohdrc(){ return ATMO_HDRC; },  // faithful HDR-domain composite (surface+atmo linear HDR -> single dual-LUT tonemap)
