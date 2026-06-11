@@ -10850,10 +10850,16 @@ function drawVisGlobe(ctx2, bands) {
   // VERBATIM firmware globe (globe_mp.js): real 24-patch surface vp+fp + camera.path animation.
   // (The old hand-tuned approximation -- substitute textures, inferred zoom -- is replaced.)
   MPGlobe.start(mpGlobe2Canvas);                   // idempotent (no-op once running)
-  if (mpGlobe2Canvas.width !== cw || mpGlobe2Canvas.height !== ch) { mpGlobe2Canvas.width = cw; mpGlobe2Canvas.height = ch; }
+  // SUPERSAMPLE: render the globe at SSx the display size and downsample on composite.
+  // The real PS3 RSX edges are smooth (MSAA); the web composites the globe from FBOs as a
+  // textured quad, so default-FB MSAA does nothing for the silhouette -> render 2x and let
+  // the 2D downscale anti-alias the round edge + the limb. (cost ~4x fill; fine for one quad.)
+  const SS = 2;
+  if (mpGlobe2Canvas.width !== cw*SS || mpGlobe2Canvas.height !== ch*SS) { mpGlobe2Canvas.width = cw*SS; mpGlobe2Canvas.height = ch*SS; }
   MPGlobe.tick();
   ctx2.setTransform(1,0,0,1,0,0);
   ctx2.fillStyle = '#000002'; ctx2.fillRect(0,0,cw,ch);
+  ctx2.imageSmoothingEnabled = true; ctx2.imageSmoothingQuality = 'high';
   try { if (MPGlobe.ready()) ctx2.drawImage(mpGlobe2Canvas, 0,0,cw,ch); } catch(e){}
   // D-key debug overlay: scene number + animation state, drawn onto the same canvas.
   if (globeDebugOverlay) {
