@@ -175,6 +175,8 @@ let ATMOFC=1;                   // real per-(scene,t) atmo fp consts from rows (
 let STARS_ON=1;                              // MPGlobe.stars
 let TILES=1;                                 // 1 = faithful per-patch tile sampling (firmware 24-patch x 4-tile); 0 = legacy cube map (MPGlobe.tiles)
 let CULL=1;                                   // per-patch back-face cull (MPGlobe.cull); 0 = no cull (rely on depth) - test for grazing-patch triangular gaps
+let PATCH_EXP=1.0;                             // MPGlobe.patchexp: grow patch quads to overlap-close the limb seam gaps (1.0 = off)
+let DESPECKLE=0;                               // MPGlobe.despeckle: fill the thin patch-seam dark gaps at the limb (composite-pass coverage fill; unverified - did not trigger, off by default)
 // All 24 patches' tiles (albedo t00/t01, cloud t02, mask t03) re-captured clean from live RPCS3
 // via the TEXDUMP command (un-swizzled, DXT-decoded BGRA8, cropped to the real 512x128 strip).
 // The old corrupt-t02 workaround is no longer needed - every patch uses its clean per-patch tile.
@@ -189,13 +191,13 @@ const _dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
 
 const VS=`#version 300 es
 precision highp float;
-in vec4 in_pos; uniform vec4 vc[26]; uniform float uFlipY;
+in vec4 in_pos; uniform vec4 vc[26]; uniform float uFlipY; uniform float uPatchExp;
 out vec4 tc0,tc3,tc4,tc5,tc6,tc8,tc9; out vec3 vN; out vec3 vL; out vec3 vSph; out vec4 vClip;
 float fma1(float a,float b,float c){return a*b+c;}
 vec3 fma3(vec3 a,vec3 b,vec3 c){return a*b+c;}
 vec2 fma2(vec2 a,vec2 b,vec2 c){return a*b+c;}
 void main(){
-vec4 ip = in_pos;
+vec4 ip = (in_pos-0.5)*uPatchExp+0.5;   // uPatchExp>1: extrapolate the [0,1] patch grid so adjacent patches OVERLAP, closing the thin limb seam gaps (the real PS3 renders gap-free; the web's exact-quad mapping leaves sub-pixel holes where captured corners don't weld). 1.0 = exact.
   vec4 r0=vec4(0.), r1=vec4(0.), r2=vec4(0.), r3=vec4(0.), r4=vec4(0.), r5=vec4(0.), r6=vec4(0.), r7=vec4(0.), cc0=vec4(0.);
   vec4 d12=vec4(0,0,0,1), d10=vec4(0,0,0,1), d7=vec4(0,0,0,1), d15=vec4(0,0,0,1),
        d11=vec4(0,0,0,1), d8=vec4(0,0,0,1), d9=vec4(0,0,0,1), d0=vec4(0,0,0,1),
@@ -498,20 +500,70 @@ uniform float uLimbGain;   // per-scene ring-ratio calibration vs the real prese
 uniform sampler2D aTex14; uniform sampler2D aTex15; uniform float uALut;   // the per-scene tone LUTs for the VERBATIM display tail (fp 63d3246d)
 uniform float uAtmoReal;   // 1 = REAL music-globe whole-earth scatter (f566cf05 verbatim); 0 = legacy timezone limb math
 uniform vec2 uWposBias; uniform float uWposScale;   // screen-space optical-depth sample (real fp uses gl_FragCoord)
+uniform sampler2D tex1;    // f566cf05 OD LUT (== tex0 RT, the dim in-scatter)
+uniform float uWposH;      // framebuffer height for the get_wpos y-flip (H - fragY)
+uniform float uRcpZero;    // RSX rcp(0) resolution: 1 -> 0 (OD term drops), 0 -> large-finite ramp
+uniform float uF566;       // 1 = use the verbatim f566cf05 branch (TEST/iterating); 0 (default) = the shipped 63d3246d math (no thick band)
 float pc(float x,float a,float b){return (x!=x)?0.:clamp(x,a,b);} float fma1(float a,float b,float c){return a*b+c;}
 float bsqrt(float x){return sqrt(abs(x));}
 vec3 bdivsq3(vec3 a,float b){vec3 t=a/bsqrt(b);return mix(a,t,vec3(greaterThan(abs(a),vec3(0.0))));}
 float bdivsq1(float a,float b){float t=a/bsqrt(b);return (abs(a)>0.0)?t:a;}
 vec4 clamp16f(vec4 v){return vec4(unpackHalf2x16(packHalf2x16(v.xy)),unpackHalf2x16(packHalf2x16(v.zw)));}
 void main(){
- // The REAL music-globe atmosphere fp is c47472608e740973 (live drawcalls D21/D22, vp 3f6eeb47,
- // blend src=773/dst=772). Its microcode decompiles to the 63d3246d math below (NOT f566cf05 =
- // FragmentProgram52, which was a wrong premise): 63d3246d's pc() clamps survive the real D21
- // const[3]/const[7]={inf,...} that would make f566cf05's dot(r1,-fc3) blow up to inf/NaN, and the
- // surface already binds tex1==tex0 to the same RT (so D21's tex1=tex0 is inherited convention, NOT
- // proof the atmosphere samples tex1). uAtmoReal now controls only the JS-side compositing
- // (dst-alpha blend, sky-alpha=0 clear, camera-guard bypass, drawAtmo routing); the shader math is
- // the single 63d3246d path for ALL callers.
+ if(uF566>0.5){
+   // VERBATIM f566cf05 (FragmentProgram52 = the REAL music-globe atmosphere; CONFIRMED via RPCS3 shaderlog:
+   // every 4-sampler atmosphere shader uses get_wpos/screen-space scatter; the old 63d3246d/exp2 path is NOT
+   // in the shaderlog = not what runs). Inputs (RE workflow): tex0==tex1==the DIM in-scatter (CAP_LIMB, ~0.55,
+   // NOT the bright scatterTex), V=the view ray (vRay), wpos=(fragX, H-fragY), scene-0 consts c3=c7=275.837
+   // (finite), c16=2.176. The OD term (tex1 @ screen) is UNIFORM for sc0 (fc6=[1,0,0,0] clamps the coord to a
+   // corner); the whole-earth haze comes from tex0@vTC (dim in-scatter, densest at limb) * the view-ray
+   // coverage R0.w. rcp(0) at the R1.w branch (fc11.y=0): RSX-resolve = 0 so the OD-derived line zeros out
+   // (uRcpZero), leaving scatter*coverage (the sensible, non-blown result); uRcpZero=0 tests the large-finite.
+   vec4 wpos = vec4(gl_FragCoord.x, uWposH - gl_FragCoord.y, gl_FragCoord.z, gl_FragCoord.w);
+   vec3 V = vec3(0.0);   // RE workflow: the real vp 3f6eeb47 (=VP105) outputs tc1=vec4(0,0,0,1) -> V=tc1*w=0. RPCS3 renders correctly with this, so V=0 is faithful; the V-derived coverage terms collapse to constants and the limb-densest falloff comes from tex0(dim in-scatter)@vTC.
+   vec4 R0=vec4(0.),R1=vec4(0.),R2=vec4(0.),H2=vec4(0.);
+   R0.z=dot(V,V);
+   R0.x=1.0/fc[0].x;
+   R1.w=fc[1].w;
+   R1.xyz=bdivsq3(V,R0.z);
+   R1.w=R1.w+fc[2].w;
+   R0.z=dot(R1.xyz,-fc[3].xyz);
+   R0.y=1.0/fc[4].y;
+   R1.xyz=R1.xyz*R0.z+fc[5].xyz;
+   R0.xy=wpos.xy*R0.xy;
+   R1.w=1.0/R1.w;
+   R0.w=dot(R1.xyz,R1.xyz);
+   R0.xy=-R0.xy*fc[6].xy+abs(fc[6].zx);
+   R0.xyz=texture(tex1,R0.xy*vec2(1.0/1920.0,1.0/1080.0)).xyz;   // OD LUT (tex1) @ screen coord (clamp -> uniform corner for sc0)
+   R1.xyz=-R0.xyz+fc[7].xxx;
+   R1.xyz=(-R0.xyz*R1.xyz+R1.xyz)*0.25;
+   R2.w=(R0.y*fc[8].y+R1.y)*4.0;
+   R1.z=(R0.z*fc[9].y+R1.z)*4.0;
+   R2.x=bdivsq1(abs(R0.w),R0.w);
+   R0.w=(R0.x*fc[10].y+R1.x)*4.0;
+   R1.x=bdivsq1(abs(R0.w),R0.w);
+   R0.w=clamp((R2.x*R1.w-R1.w)*2.0,0.0,1.0);
+   R1.y=bdivsq1(abs(R2.w),R2.w);
+   R1.w=fc[11].y;
+   R1.w=R1.w*fc[12].w;
+   R2.xyz=R0.w*(vec3(1.0)-fc[13].xyz);
+   R1.z=bdivsq1(abs(R1.z),R1.z);
+   R0.xyz=R0.xyz+R1.xyz;
+   R0.w=(R1.w!=0.0)?(1.0/R1.w):(uRcpZero>0.5?0.0:3.0e38);   // RSX rcp(0): uRcpZero=1 -> 0 (OD term drops out), else large-finite ramp
+   R0.xyz=clamp16f(vec4(R0.xyz*R0.w-R0.w,0.0)).xyz;
+   R0.xyz=R0.xyz/fc[15].x;
+   R2.xyz=R2.xyz+fc[16].x;
+   R1.xyz=mix(texture(tex0,vTC),texture(tex0b,vTC),uA0Mix).xyz;   // scatter color (dim in-scatter) @ mesh tc
+   R0.xyz=(R1.xyz*R2.xyz+R0.xyz)*8.0;
+   R0.xyz=R0.xyz*uLimbGain;
+   if(uLinear>0.5){ ocol0=vec4(R0.xyz,1.0); return; }
+   H2.z=clamp16f(R0).z;
+   H2.w=max(R0.x,R0.y);
+   vec2 E15=texture(aTex15,R0.xy*(1.0/128.0)).xy;
+   vec2 E14=texture(aTex14,vec2(H2.z,H2.w)*(1.0/128.0)).xy;
+   ocol0=vec4(E15.y,E15.x,E14.y,clamp(fc[14].x,0.0,1.0));   // dual-LUT encode (R=t15.ch1,G=t15.ch0,B=t14.ch1); A=fc14.x
+   return;
+ }
  vec4 tc0=vec4(vTC,0.,1.);vec4 r0=vec4(0.),r1=vec4(0.),r2=vec4(0.),r3=vec4(0.);
  r1.x=fc[0].x;r1.z=fc[0].z;r1.y=1.0/fc[1].z;r0.x=fc[2].w;r0.y=fc[2].z;r0.w=(-r0.y+fc[3].x);r1.xyz=tc0.xyz*r1.xyz;
  r3.y=pc(r0.w/-fc[4].z,0.,1.);r0.w=fc[5].w;r3.x=(-r0.w+fc[6].x);r3.w=r3.y*r3.y;r2.w=r3.y*2.;
@@ -559,6 +611,7 @@ uniform sampler2D uSprite; uniform float uGlow2; uniform vec2 uDims;
 uniform vec4 c260,c261,c262,c263; uniform vec4 gfc[17];
 uniform sampler2D uLut15,uLut14; uniform float uLutOn,uLutExpo,uLutFb;   // real surface-fp LUT tonemap (the gold warmth); uLutFb = backbuffer feedback 1/(1-fc21)
 uniform float uPassthru;   // faithful path: uEarth is ALREADY the LDR display scene (col0 earth + tonemapped limb) -> just add the limb/sun bloom, NO re-tonemap
+uniform float uDespeckle;  // 1 = fill the thin patch-seam dark gaps at the limb (sub-pixel coverage holes)
 uniform float uEarthGain;  // display weight in the faithful composite: out = display*(1-FC1) + bloom*FC0 (fp 59b46122: fma(-disp,FC1,bloom*FC0) additive). 1.0 everywhere else.
 float gdivsq(float a,float b){return a/sqrt(abs(b)+1e-12);}
 vec3 computeGlare(){
@@ -601,6 +654,17 @@ vec3 computeGlare(){
 void main(){
   vec4 e4 = texture(uEarth, vUV);
   vec3 e = e4.xyz;
+  if(uDespeckle>0.5){
+    // Fill the thin DARK SEAM GAPS at the earth-patch boundaries (sub-pixel rasterization holes the real PS3
+    // avoids via shared indexed verts; the web computes each patch's shared edge independently -> float gaps).
+    // A 1px dark pixel bracketed by brighter neighbors on either axis is a gap -> replace with the bracket mean.
+    vec2 px=vec2(1.0/uDims.x,1.0/uDims.y);
+    vec3 eL=texture(uEarth,vUV-vec2(px.x,0.0)).xyz, eR=texture(uEarth,vUV+vec2(px.x,0.0)).xyz;
+    vec3 eU=texture(uEarth,vUV-vec2(0.0,px.y)).xyz, eD=texture(uEarth,vUV+vec2(0.0,px.y)).xyz;
+    float L=dot(e,vec3(0.333)), Lh=min(dot(eL,vec3(0.333)),dot(eR,vec3(0.333))), Lv=min(dot(eU,vec3(0.333)),dot(eD,vec3(0.333)));
+    if(L<Lh*0.6 && Lh>0.06) e=(eL+eR)*0.5;
+    else if(L<Lv*0.6 && Lv>0.06) e=(eU+eD)*0.5;
+  }
   vec3 g = texture(uGlow,  vUV).xyz;
   // Additive bloom in LINEAR HDR, then the firmware globe HDR.mnu tonemap applied PER CHANNEL
   // (extended Reinhard, EXPOSURE 0.789, WHITE 3.40918 -- the same real .mnu params as the surface fp's
@@ -1240,7 +1304,7 @@ function drawGlow(){
  // win-remap in the VS already negates clip.y, so uFlipY=-1 cancels it -> correct, scene-independent). The
  // old default +1 mirrored the disc vertically (only invisible for near-centred daytime discs; glaring for
  // the eclipse, where the earth sits far below the frame). Verified vs TF gl_Position + ecl2/warm2 presents.
- gl.uniform1f(U('uFlipY'),-1.0);
+ gl.uniform1f(U('uFlipY'),-1.0);gl.uniform1f(U('uPatchExp'),PATCH_EXP);
  gl.uniform1f(U('uDbg'),0.0);
  gl.uniform1f(U('uMode'),5.0);          // linear HDR earth scene (r2.xyz)
  gl.uniform1f(U('uSlum'),SLUM);
@@ -1406,13 +1470,13 @@ function drawGlowFaith(){
  // clear alpha = 1.0: the display A channel is the HDR-exponent (present dark sky alpha = 255 = 1.0)
  gl.viewport(0,0,W,H);
  if(DISPRETAIN){ gl.clear(256); }   // REAL pipeline: the display is NEVER color-cleared (no clear pass in the draw list) - the sky temporally accumulates (flare lobes = equilibrium); depth-only clear
- else { gl.clearColor(0,0,0,ATMO_REAL?0.0:1.0); gl.clear(16640); }   // ATMO_REAL: clear sky alpha=0 so the dst-alpha atmosphere shows in the sky (atmo*(1-0)); the atmo shell then writes alpha->1 (matching the present's sky alpha=255). Legacy=1.
+ else { if(typeof window!=='undefined'&&window.__dbgClear){gl.clearColor(1,0,0,ATMO_REAL?0.0:1.0);} else {gl.clearColor(0,0,0,ATMO_REAL?0.0:1.0);} gl.clear(16640); }   // ATMO_REAL: clear sky alpha=0 so the dst-alpha atmosphere shows in the sky (atmo*(1-0)); the atmo shell then writes alpha->1 (matching the present's sky alpha=255). Legacy=1.
  gl.enable(2929);gl.depthFunc(515);
  if(CULL){gl.enable(2884);gl.cullFace(1029);}else{gl.disable(2884);}
  gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
  const fcsrc=curFC||D.fc; const fc=new Float32Array(23*4);for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
  resolveInscat();
- gl.uniform1f(U('uFlipY'),-1.0);gl.uniform1f(U('uDbg'),0.0);
+ gl.uniform1f(U('uFlipY'),-1.0);gl.uniform1f(U('uDbg'),0.0);gl.uniform1f(U('uPatchExp'),PATCH_EXP);
  gl.uniform1f(U('uMode'),HDRC?5.0:1.0);   // HDRC: emit LINEAR HDR r2 (deferred single tonemap); else col0 LDR
  gl.uniform1f(U('uSlum'),SLUM);
  gl.uniform1f(U('uLutScale'),1.0/128.0);gl.uniform1f(U('uFeedback'),1.0);   // faithful: 1/128 UN-scale + steady-state feedback
@@ -1472,7 +1536,7 @@ function drawGlowFaith(){
  gl.uniform3fv(C('uGlowGain'),new Float32Array([0,0,0]));
  if(HDRC){ // FAITHFUL HDR composite: uEarth=Fd is the LINEAR HDR (surface r2 + atmo HDR). Apply the EXACT surface-fp dual-LUT tonemap ONCE (uLutOn path == col0: hc=r2/128, R=t15.ch1,G=t15.ch0,B=t14.ch1). The limb HDR rolls off through the LUT -> 226, no additive white band.
    gl.uniform1f(C('uPassthru'),0.0);gl.uniform1f(C('uLutOn'),1.0);gl.uniform1f(C('uLutExpo'),1.0/128.0);gl.uniform1f(C('uLutFb'),1.0);
- } else { gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uLutOn'),0.0); }
+ } else { gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uDespeckle'),DESPECKLE?1.0:0.0);gl.uniform1f(C('uLutOn'),0.0); }
  gl.uniform2f(C('uDims'),W,H);
  // sun-glare: the c868fd6a draw is NOT fullscreen - VERTS f014391_d021 decoded it as the 65-vertex
  // TRIANGLE-FAN disc (radius 5/9, model space) positioned by its OWN MVP (row vc[6..9]); at most
@@ -1523,7 +1587,7 @@ function drawGlowFaith(){
    gl.useProgram(cprog);
    gl.activeTexture(33984+0);gl.bindTexture(3553,FP.tex);gl.uniform1i(C('uEarth'),0);
    gl.activeTexture(33984+1);gl.bindTexture(3553,black);gl.uniform1i(C('uGlow'),1);
-   gl.uniform1f(C('uPassthru'),1.0);
+   gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uDespeckle'),DESPECKLE?1.0:0.0);
    gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
  }
  if(BLOOMDISP&&encProg&&FP){
@@ -1572,7 +1636,7 @@ function drawGlowFaith(){
      }
    }
    gl.uniform3fv(C('uGlowGain'),new Float32Array([cg,cg,cg]));
-   gl.uniform1f(C('uPassthru'),1.0);
+   gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uDespeckle'),DESPECKLE?1.0:0.0);
    gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
    drawFlares();   // verbatim sun-flare billboards (post-composite, the real draw order)
    if(STARTEX)drawStarsTex();
@@ -1605,7 +1669,7 @@ function drawGlowFaith(){
  gl.activeTexture(33984+0);gl.bindTexture(3553,black);gl.uniform1i(C('uEarth'),0);
  gl.activeTexture(33984+1);gl.bindTexture(3553,glow.tex);gl.uniform1i(C('uGlow'),1);
  gl.uniform3fv(C('uGlowGain'),new Float32Array(GLOW_GAIN));
- gl.uniform1f(C('uPassthru'),1.0);
+ gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uDespeckle'),DESPECKLE?1.0:0.0);
  gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
  gl.disable(3042);
  drawFlares();   // the real pipeline draws the 15 flare billboards EVERY frame (visibility = the FS sun gate)
@@ -1723,7 +1787,7 @@ function draw(){
  const fc=new Float32Array(23*4); for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
  resolveInscat();
  const eclView=isEclipseView();
- gl.uniform1f(U('uFlipY'),-1.0);   // firmware-viewport identity (see the glow path); -1 for ALL scenes
+ gl.uniform1f(U('uFlipY'),-1.0);gl.uniform1f(U('uPatchExp'),PATCH_EXP);   // firmware-viewport identity (see the glow path); -1 for ALL scenes
  gl.uniform1f(U('uDbg'),DBG);
  gl.uniform1f(U('uMode'),ENC);
  gl.uniform1f(U('uSlum'),SLUM);
@@ -1775,6 +1839,7 @@ function drawAtmo(){
  // _AtmSpaceIv (TEXUNIT0): per-scene -> picked scene's LIMB lut; eclipse -> atmo draw's own tex0 RT (tex0atmEcl).
  const aScat=((INSCAT_GEN&&_ipValid&&_ipA.cur)?_ipA.cur.tex:null) || CAP_LIMB || ((INSCAT_PS&&_psScat) ? _psScat : (INSCAT_ECL ? ((ATMO_SOLID&&sharedTex.tex0atmEclSolid)?sharedTex.tex0atmEclSolid:((ATMO_VFLIP&&sharedTex.tex0atmEclFlip)?sharedTex.tex0atmEclFlip:(sharedTex.tex0atmEcl||sharedTex.tex4ecl||scatterTex))) : scatterTex));
  gl.activeTexture(33984);gl.bindTexture(3553,aScat);gl.uniform1i(U('tex0'),0);
+ gl.activeTexture(33984+3);gl.bindTexture(3553,aScat);gl.uniform1i(U('tex1'),3);   // f566cf05 OD LUT == tex0 RT (same dim in-scatter)
  const aScatB=(aScat===CAP_LIMB&&CAP_LIMBB)?CAP_LIMBB:aScat; const a0mix=(aScat===CAP_LIMB&&CAP_LIMBB)?CAP_MIX:0.0;
  gl.activeTexture(33984+9);gl.bindTexture(3553,aScatB);gl.uniform1i(U('tex0b'),9);gl.uniform1f(U('uA0Mix'),a0mix);
  const _t14=CAP_T14||sharedTex.tex14, _t15=CAP_T15||sharedTex.tex15;
@@ -1782,6 +1847,8 @@ function drawAtmo(){
  gl.activeTexture(33986);gl.bindTexture(3553,_t15);gl.uniform1i(U('aTex15'),2);
  gl.uniform1f(U('uALut'),(_t14&&_t15)?1.0:0.0);   // verbatim fp 63d3246d display tail when the per-scene LUTs exist
  gl.uniform1f(U('uAtmoReal'),ATMO_REAL?1.0:0.0); gl.uniform1f(U('uWposScale'),1.0); gl.uniform2f(U('uWposBias'),0.0,0.0);   // real f566cf05 screen-space scatter (wpos defaults match the upright web FB)
+ gl.uniform1f(U('uWposH'),canvas?canvas.height:1080.0); gl.uniform1f(U('uRcpZero'),(typeof window!=='undefined'&&window.__rcpZero!==undefined)?window.__rcpZero:1.0);
+ gl.uniform1f(U('uF566'),(typeof window!=='undefined'&&window.__f566)?1.0:0.0);   // default OFF: the verbatim f566cf05 still renders a too-thick band; iterate behind this flag, ship 63d3246d
  gl.disable(2884); gl.depthMask(false); if(!ATMODEPTH) gl.disable(2929); gl.enable(3042);
  if(ATMO_REAL||ATMO_DSTA){ gl.blendFuncSeparate(773,772,773,772); }   // REAL music-globe atmo blend (live DRAWCALLS: src=ONE_MINUS_DST_ALPHA 773, dst=DST_ALPHA 772): result = atmo*(1-surfA) + surf*surfA, weighted by the surface's HDR-exponent alpha (col0.w). The real compositing law that replaces my additive band.
  else if(ATMO_OVER){ gl.blendFuncSeparate(770,771,1,0); }   // alpha-OVER (atmo*a + surf*(1-a))
@@ -2169,6 +2236,8 @@ const MPGlobe={
  set stars(v){ STARS_ON=v?1:0; },
  get stars(){ return STARS_ON; },
 set cull(v){ CULL=v?1:0; },
+ set patchexp(v){ PATCH_EXP=+v||1.0; }, get patchexp(){ return PATCH_EXP; },
+ set despeckle(v){ DESPECKLE=v?1:0; }, get despeckle(){ return DESPECKLE; },
  set tiles(v){ TILES=v?1:0; },                 // faithful per-patch tile earth (1) vs legacy cube map (0)
  get tiles(){ return TILES; },
  set t2all(v){ T2ALL=v?1:0; },                 // test: all-patch cloud from the cube (uniform cloud)
