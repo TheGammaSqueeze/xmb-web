@@ -340,7 +340,8 @@ uniform sampler2D tex0,tex1,tex2,tex3,tex4,tex5,tex6,tex13,tex14,tex15;
 uniform float uT3Flip;
 uniform sampler2D tex4b; uniform float uT4Mix;   // bracketing in-scatter bin crossfade
 uniform float uLimbGain2;   // surface horizon-band gain (the ring painter; per-scene ratio-calibrated vs presents)
-uniform float uDiscGain;   // per-scene disc/face exposure lift   // tex0-3 = THIS patch's 4 firmware tiles (t00-t03)
+uniform float uDiscGain;   // per-scene disc/face exposure lift
+uniform float uLimbSoft;   // per-scene highlight compression (un-blows the saturated limb into a soft atmospheric band)   // tex0-3 = THIS patch's 4 firmware tiles (t00-t03)
 uniform samplerCube earthCube, cloudsCube, maskCube;   // legacy cube-map path (kept for DBG/fallback)
 uniform vec4 fc[23];
 uniform float uDbg, uMode, uSlum, uTiles, uT2bad;
@@ -436,6 +437,10 @@ void main(){
   col0.y = fma1(r0d.y, fc[21].x, e15.x) * fb21;   // G = tex15.ch0
   col0.z = fma1(r0d.z, fc[22].x, X14) * fb22;     // B = tex14.ch1
   col0.w = fma1(r0d.w, fc[22].x, e14.x) * fb22;   // A = tex14.ch0 (the display HDR-exponent channel: ~1 dark -> ~0 bright; feeds the encode's rgb*a*8)
+  if(uLimbSoft>0.0){   // display-space highlight knee: compress the part above 0.65 so the blown 255 limb wall becomes the real's soft ~0.88 band (atmospheric spread, idx 0); dark interior (<0.65) untouched
+    vec3 ov=max(col0.xyz-0.65,0.0);
+    col0.xyz=0.65 + ov/(1.0+uLimbSoft*ov);
+  }
   if(uDbg>5.5){ ocol0=vec4(gGlint, clamp(h7.z*0.5+0.5,0.,1.), clamp(h7.w,0.,1.), 1.0); return; }  // DBG: glint BRDF sample (R), sun-reflect dot h7.z (G), land mask h7.w (B)
   if(uDbg>4.5){ ocol0=vec4(length(vSph), vClip.w/16.0, vClip.y/16.0+0.5, 1.0); return; }  // DBG: |vSph| (R, should be 1.0), d0.w (G), d0.y (B)
   if(uDbg>3.5){ float ny=vClip.y/vClip.w; ocol0=vec4((ny+8.0)/16.0, vClip.w/16.0, 0.0, 1.0); return; }  // DBG: raw d0 ndc.y (encoded) + w
@@ -1223,7 +1228,7 @@ function drawGlow(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
    gl.uniform1f(U('uT2bad'), (T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
-   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  // (per-scene limb atmo frame is set in resolveInscat -> ATMO_SCENE auto-managed)
@@ -1381,7 +1386,7 @@ function drawGlowFaith(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]);}
    gl.uniform1f(U('uT2bad'),(T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
-   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex&&!STARSONLY) drawAtmo();   // tonemapped limb (uLinear=0, LDR) into F_disp
@@ -1580,6 +1585,11 @@ function atmoCamBad(a,s){
 // the limb ALPHA (r0.w) = the encode bright-pass key at the limb (B7 real eclipse limb alpha ~0.02
 // vs the old default's overshoot = the sc47/40 bloom blowout seed). Falls back to the legacy
 // approximation for rows without harvested fc. ATMOFC-gated for A/B validation.
+function limbSoftAt(){
+ if(!(FAITH_POLICY&&FAITH_POLICY.limbSoft&&SCENES_IDX&&SCENES_IDX[sceneIdx])) return 0.0;
+ const g=FAITH_POLICY.limbSoft[String(SCENES_IDX[sceneIdx].scene)];
+ return (typeof g==='number')?g:0.0;
+}
 function discGainAt(){
  if(!(FAITH_POLICY&&FAITH_POLICY.discGain&&SCENES_IDX&&SCENES_IDX[sceneIdx])) return 1.0;
  const g=FAITH_POLICY.discGain[String(SCENES_IDX[sceneIdx].scene)];
@@ -1683,7 +1693,7 @@ function draw(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
    gl.uniform1f(U('uT2bad'), (T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
-   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex)drawAtmo();
@@ -2114,6 +2124,7 @@ set cull(v){ CULL=v?1:0; },
  set bloomc1(v){ BLOOMC1=v?1:0; }, get bloomc1(){ return BLOOMC1; },
  setBloomGain(sid,g){ if(FAITH_POLICY){ FAITH_POLICY.bloomGain=FAITH_POLICY.bloomGain||{}; FAITH_POLICY.bloomGain[String(sid)]=g; return 1; } return 0; },
  setDiscGain(sid,g){ if(FAITH_POLICY){ FAITH_POLICY.discGain=FAITH_POLICY.discGain||{}; if(g===null)delete FAITH_POLICY.discGain[String(sid)]; else FAITH_POLICY.discGain[String(sid)]=g; return 1; } return 0; },
+ setLimbSoft(sid,g){ if(FAITH_POLICY){ FAITH_POLICY.limbSoft=FAITH_POLICY.limbSoft||{}; if(g===null)delete FAITH_POLICY.limbSoft[String(sid)]; else FAITH_POLICY.limbSoft[String(sid)]=g; return 1; } return 0; },
  _discDbg(sid){ return FAITH_POLICY?JSON.stringify(FAITH_POLICY.discGain||{}):'no pol'; },
  set bias0(v){ BIAS0=+v; }, get bias0(){ return BIAS0; },
  set bias2(v){ BIAS2=+v; }, get bias2(){ return BIAS2; },
