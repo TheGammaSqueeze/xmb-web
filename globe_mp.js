@@ -505,7 +505,7 @@ void main(){
    // VERBATIM f566cf05 (the real music-globe ATMOSPHERE: screen-space optical-depth scatter -> blue
    // haze over the WHOLE disc, densest at the limb; dual-LUT tonemap; composited dst-alpha).
    vec4 wpos = gl_FragCoord*vec4(1.0,uWposScale,1.0,1.0)+vec4(uWposBias,0.0,0.0);
-   vec3 V = vRay.xyz;
+   vec3 V = vec3(0.0);   // VERBATIM: the real atmo vp 3f6eeb47 sets tc1=(0,0,0,1) -> view ray = tc1.xyz*w = 0. The coverage terms collapse to constants (no view-ray spatial variation); the whole-earth glow comes from the in-scatter LUT sampled on the shell (tex0 @ vTC). (vRay reconstruction was a wrong guess.)
    vec4 R0=vec4(0.),R1=vec4(0.),R2=vec4(0.),H2=vec4(0.);
    R0.z=dot(V,V);
    R0.x=1.0/fc[0].x;
