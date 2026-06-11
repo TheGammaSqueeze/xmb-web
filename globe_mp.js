@@ -138,7 +138,8 @@ let INSCAT_ECL=0;                             // MPGlobe.inscatecl: use the ecli
 // manual eclipse override to every scene. The eclipse scene (ecl2) reproduces the validated 1:1 path
 // byte-for-byte (ecl2.bin == the shipped tex4ecl; ecl2_limb.bin == the shipped tex0atmEcl).
 let INSCAT_PS=0;                              // MPGlobe.inscatps: runtime per-scene in-scatter selection
-let CAP_LUT=null, CAP_LIMB=null;             // captured per-frame in-scatter + limb LUT override (validation/wiring)
+let CAP_LUT=null, CAP_LIMB=null;
+let CAP_LUTB=null, CAP_MIX=0.0, CAP_LIMBB=null;   // crossfade partners             // captured per-frame in-scatter + limb LUT override (validation/wiring)
 let CAP_T14=null, CAP_T15=null;              // per-scene surface-fp tonemap LUT (tex14/tex15) override; null=static lut14/lut15
 let TONELUT_PS=1;                            // MPGlobe.tonelut: per-scene tonemap LUT + verbatim ramp-encode output (brightness fix); default OFF until per-scene LUTs captured+validated
 let CAP_SCENE_TONE=null;                     // {sceneNum:[{fr,t14,t15}]} per-scene captured tonemap-LUT manifest (cap_scene_tonelut.json)
@@ -336,7 +337,8 @@ const FS=`#version 300 es
 precision highp float;
 in vec4 tc0,tc3,tc4,tc5,tc6,tc8,tc9; in vec3 vN; in vec3 vL; in vec3 vSph; in vec4 vClip;
 uniform sampler2D tex0,tex1,tex2,tex3,tex4,tex5,tex6,tex13,tex14,tex15;
-uniform float uT3Flip;   // tex0-3 = THIS patch's 4 firmware tiles (t00-t03)
+uniform float uT3Flip;
+uniform sampler2D tex4b; uniform float uT4Mix;   // bracketing in-scatter bin crossfade   // tex0-3 = THIS patch's 4 firmware tiles (t00-t03)
 uniform samplerCube earthCube, cloudsCube, maskCube;   // legacy cube-map path (kept for DBG/fallback)
 uniform vec4 fc[23];
 uniform float uDbg, uMode, uSlum, uTiles, uT2bad;
@@ -394,7 +396,7 @@ void main(){
   r3.y = fc[16].x;
   r3.z = fc[17].x;
   vec2 _t3=tc3.xy; if(uT3Flip>0.5) _t3.y=1.0-_t3.y;   // per-scene illumination V-flip (lit-direction repair; present-A/B'd)
-  r1 = texture(tex4, _t3);
+  r1 = mix(texture(tex4, _t3), texture(tex4b, _t3), uT4Mix);   // bin crossfade (smooth terminator)
   h6.xyz = fma3(-r1.www, r3.xyz, r4.xyz);
   r4.xyz = texture(tex5, tc5.xy).xyz;
   h6.xyz = (r4.xyz * h6.xyz);
@@ -475,13 +477,14 @@ void main(){
 const A_FS=`#version 300 es
 precision highp float;
 in vec2 vTC; out vec4 ocol0; uniform sampler2D tex0; uniform vec4 fc[17]; uniform float uLinear; uniform float uAtmoHdr;
+uniform sampler2D tex0b; uniform float uA0Mix;   // bracketing limb-LUT crossfade
 uniform sampler2D aTex14; uniform sampler2D aTex15; uniform float uALut;   // the per-scene tone LUTs for the VERBATIM display tail (fp 63d3246d)
 float pc(float x,float a,float b){return (x!=x)?0.:clamp(x,a,b);} float fma1(float a,float b,float c){return a*b+c;}
 void main(){
  vec4 tc0=vec4(vTC,0.,1.);vec4 r0=vec4(0.),r1=vec4(0.),r2=vec4(0.),r3=vec4(0.);
  r1.x=fc[0].x;r1.z=fc[0].z;r1.y=1.0/fc[1].z;r0.x=fc[2].w;r0.y=fc[2].z;r0.w=(-r0.y+fc[3].x);r1.xyz=tc0.xyz*r1.xyz;
  r3.y=pc(r0.w/-fc[4].z,0.,1.);r0.w=fc[5].w;r3.x=(-r0.w+fc[6].x);r3.w=r3.y*r3.y;r2.w=r3.y*2.;
- r2.y=pc(fc[7].x/r0.x,0.,1.);r2.x=r2.y*r2.y;r1.w=r2.y*2.;r0.xyz=texture(tex0,r1.xy).xyz;
+ r2.y=pc(fc[7].x/r0.x,0.,1.);r2.x=r2.y*r2.y;r1.w=r2.y*2.;r0.xyz=mix(texture(tex0,r1.xy),texture(tex0b,r1.xy),uA0Mix).xyz;
  r1.x=(-r1.x*fc[8].x);r1.z=(r1.y+-fc[9].w);r3.x=pc(r1.z/r3.x,0.,1.);r3.z=(-r1.w+fc[10].x);r3.y=r2.x*r3.z;r0.w=r1.x*fc[11].x;
  r1.x=pc(r1.y/fc[12].y,0.,1.);r1.w=(-r2.x+fc[13].x);r2.x=fma1(r3.w,r1.w,-r3.y);r1.w=r1.x*2.;r1.w=(-r1.w+fc[14].x);r1.x=r1.x*r1.x;r1.x=r1.x*r1.w;
  r1.w=r3.x*2.;r1.w=(-r1.w+fc[15].x);r1.y=r3.x*r3.x;r1.y=r1.y*r1.w;r0.w=exp2(r0.w);r0.w=r2.x*r0.w;
@@ -837,10 +840,20 @@ function capSceneLut(si, t, frOpt){
  if(!list||!list.length) return null;
  const fr=(frOpt!==undefined)?frOpt:(s.frame0 + t*((s.frame1-s.frame0)||1));
  const bi=_nearestIdx(list,fr);
- for(let k=0;k<=LUT_LOOKAHEAD && bi+k<list.length;k++){ const e=list[bi+k];
+ for(let k=-1;k<=LUT_LOOKAHEAD && bi+k<list.length;k++){ if(bi+k<0) continue; const e=list[bi+k];
    if(!CAP_LUT_CACHE[e.fr]) CAP_LUT_CACHE[e.fr]={surf:texF32(lfsURL(e.surf),256,128,true), limb:texF32(lfsURL(e.limb),256,128,true)}; }
- const c=CAP_LUT_CACHE[list[bi].fr];
- if(c.surf.loaded&&c.limb.loaded){ _lutStick[String(s.scene)]=c; return c; }
+ // CROSSFADE between the two bins bracketing the playhead (the real LUT animates per frame;
+ // discrete nearest-bin swaps made the terminator/shadow STEP and the limb brightness POP -
+ // user report idx 4/6/8/9-15). Falls back to the nearest single bin / same-scene sticky.
+ let ia=bi; if(list[bi].fr>fr&&bi>0) ia=bi-1; const ib=Math.min(ia+1,list.length-1);
+ const A=CAP_LUT_CACHE[list[ia].fr], B=CAP_LUT_CACHE[list[ib].fr];
+ const span=(list[ib].fr-list[ia].fr)||1;
+ const mix=(ib>ia)?Math.min(1,Math.max(0,(fr-list[ia].fr)/span)):0;
+ if(A&&A.surf.loaded&&A.limb.loaded){
+   const r={surf:A.surf,limb:A.limb,surfB:null,limbB:null,mix:0};
+   if(ib>ia&&B&&B.surf.loaded&&B.limb.loaded){ r.surfB=B.surf; r.limbB=B.limb; r.mix=mix; }
+   _lutStick[String(s.scene)]=r; return r;
+ }
  return _lutStick[String(s.scene)]||null;
 }
 // cap set: select this scene's REAL surface-fp tonemap LUT (tex14/tex15) at the nearest captured frame.
@@ -848,6 +861,11 @@ function capSceneTone(si, t, frOpt){
  if(!CAP_SCENE_TONE||!SCENES_IDX||!SCENES_IDX[si]) return null;
  const s=SCENES_IDX[si]; const list=CAP_SCENE_TONE[String(s.scene)];
  if(!list||!list.length) return null;
+ // PER-SCENE-STABLE tone: the captured tone bins alternate between two states (double-buffer
+ // sampling artifact), so mid-scene swaps POP the display brightness (user report idx 4).
+ // Hold the scene's first loaded tone pair for the whole scene.
+ const stick=_toneStick[String(s.scene)];
+ if(stick) return stick;
  const fr=(frOpt!==undefined)?frOpt:(s.frame0 + t*((s.frame1-s.frame0)||1));
  const bi=_nearestIdx(list,fr);
  for(let k=0;k<=LUT_LOOKAHEAD && bi+k<list.length;k++){ const e=list[bi+k];
@@ -1184,7 +1202,8 @@ function drawGlow(){
  gl.uniform1f(U('uLutScale'),LUTSCALE); gl.uniform1f(U('uFeedback'),FEEDBACK_PS);
  gl.uniform4fv(U('fc'),fc);
  const surfTex4 = ((INSCAT_GEN&&_ipValid&&_ipC.cur)?_ipC.cur.tex:null) || CAP_LUT || ((INSCAT_PS&&_psSurfTex) ? _psSurfTex : ((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
- bindT(4,'tex4',surfTex4);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
+ const surfTex4B=(surfTex4===CAP_LUT&&CAP_LUTB)?CAP_LUTB:surfTex4; const t4mix=(surfTex4===CAP_LUT&&CAP_LUTB)?CAP_MIX:0.0;
+ bindT(4,'tex4',surfTex4);bindT(9,'tex4b',surfTex4B);gl.uniform1f(U('uT4Mix'),t4mix);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
  bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black0||black);
  gl.uniform1f(U('uTiles'),TILES);
  const bindCube=(unit,name,tex)=>{gl.activeTexture(33984+unit);gl.bindTexture(34067,tex);gl.uniform1i(U(name),unit);};
@@ -1343,8 +1362,9 @@ function drawGlowFaith(){
  gl.uniform1f(U('uSlum'),SLUM);
  gl.uniform1f(U('uLutScale'),1.0/128.0);gl.uniform1f(U('uFeedback'),1.0);   // faithful: 1/128 UN-scale + steady-state feedback
  gl.uniform4fv(U('fc'),fc);
- const surfTex4 = ((INSCAT_GEN&&_ipValid&&_ipC.cur)?_ipC.cur.tex:null) || CAP_LUT || ((INSCAT_PS&&_psSurfTex)?_psSurfTex:((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
- bindT(4,'tex4',surfTex4);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
+ const surfTex4 = ((INSCAT_GEN&&_ipValid&&_ipC.cur)?_ipC.cur.tex:null) || CAP_LUT || ((INSCAT_PS&&_psSurfTex) ? _psSurfTex : ((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
+ const surfTex4B=(surfTex4===CAP_LUT&&CAP_LUTB)?CAP_LUTB:surfTex4; const t4mix=(surfTex4===CAP_LUT&&CAP_LUTB)?CAP_MIX:0.0;
+ bindT(4,'tex4',surfTex4);bindT(9,'tex4b',surfTex4B);gl.uniform1f(U('uT4Mix'),t4mix);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
  bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black0||black);
  gl.uniform1f(U('uTiles'),TILES);
  const bindCube=(unit,name,tex)=>{gl.activeTexture(33984+unit);gl.bindTexture(34067,tex);gl.uniform1i(U(name),unit);};
@@ -1588,6 +1608,8 @@ function drawAtmoLinear(){
  // the shipped tex0atmEcl (broad warm scatter); else the daytime scatterTex. NOT the surface tex4 (nearly black).
  const aScat=((INSCAT_GEN&&_ipValid&&_ipA.cur)?_ipA.cur.tex:null) || CAP_LIMB || ((INSCAT_PS&&_psScat) ? _psScat : (INSCAT_ECL ? ((ATMO_SOLID&&sharedTex.tex0atmEclSolid)?sharedTex.tex0atmEclSolid:((ATMO_VFLIP&&sharedTex.tex0atmEclFlip)?sharedTex.tex0atmEclFlip:(sharedTex.tex0atmEcl||sharedTex.tex4ecl||scatterTex))) : scatterTex));
  gl.activeTexture(33984);gl.bindTexture(3553,aScat);gl.uniform1i(U('tex0'),0);
+ const aScatB=(aScat===CAP_LIMB&&CAP_LIMBB)?CAP_LIMBB:aScat; const a0mix=(aScat===CAP_LIMB&&CAP_LIMBB)?CAP_MIX:0.0;
+ gl.activeTexture(33984+9);gl.bindTexture(3553,aScatB);gl.uniform1i(U('tex0b'),9);gl.uniform1f(U('uA0Mix'),a0mix);
  gl.disable(2884); gl.depthMask(false); gl.enable(3042); gl.blendFunc(1,1);
  let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
  let tl=gl.getAttribLocation(aprog,'in_tc0');gl.bindBuffer(34962,aMesh.tbuf);gl.enableVertexAttribArray(tl);gl.vertexAttribPointer(tl,4,5126,false,0,0);
@@ -1620,7 +1642,8 @@ function draw(){
  gl.uniform1f(U('uLutScale'),LUTSCALE); gl.uniform1f(U('uFeedback'),FEEDBACK_PS);
  gl.uniform4fv(U('fc'),fc);
  const surfTex4 = ((INSCAT_GEN&&_ipValid&&_ipC.cur)?_ipC.cur.tex:null) || CAP_LUT || ((INSCAT_PS&&_psSurfTex) ? _psSurfTex : ((INSCAT_ECL&&sharedTex.tex4ecl)?sharedTex.tex4ecl:sharedTex.tex4));
- bindT(4,'tex4',surfTex4);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
+ const surfTex4B=(surfTex4===CAP_LUT&&CAP_LUTB)?CAP_LUTB:surfTex4; const t4mix=(surfTex4===CAP_LUT&&CAP_LUTB)?CAP_MIX:0.0;
+ bindT(4,'tex4',surfTex4);bindT(9,'tex4b',surfTex4B);gl.uniform1f(U('uT4Mix'),t4mix);bindT(5,'tex5',(IEFULL&&sharedTex.ieFull)?sharedTex.ieFull:sharedTex.tex5);bindT(6,'tex6',sharedTex.tex6);
  bindT(7,'tex14',CAP_T14||sharedTex.tex14);bindT(8,'tex15',CAP_T15||sharedTex.tex15);bindT(9,'tex13',black0||black);
  gl.uniform1f(U('uTiles'),TILES);
  const bindCube=(unit,name,tex)=>{gl.activeTexture(33984+unit);gl.bindTexture(34067,tex);gl.uniform1i(U(name),unit);};
@@ -1662,6 +1685,8 @@ function drawAtmo(){
  // _AtmSpaceIv (TEXUNIT0): per-scene -> picked scene's LIMB lut; eclipse -> atmo draw's own tex0 RT (tex0atmEcl).
  const aScat=((INSCAT_GEN&&_ipValid&&_ipA.cur)?_ipA.cur.tex:null) || CAP_LIMB || ((INSCAT_PS&&_psScat) ? _psScat : (INSCAT_ECL ? ((ATMO_SOLID&&sharedTex.tex0atmEclSolid)?sharedTex.tex0atmEclSolid:((ATMO_VFLIP&&sharedTex.tex0atmEclFlip)?sharedTex.tex0atmEclFlip:(sharedTex.tex0atmEcl||sharedTex.tex4ecl||scatterTex))) : scatterTex));
  gl.activeTexture(33984);gl.bindTexture(3553,aScat);gl.uniform1i(U('tex0'),0);
+ const aScatB=(aScat===CAP_LIMB&&CAP_LIMBB)?CAP_LIMBB:aScat; const a0mix=(aScat===CAP_LIMB&&CAP_LIMBB)?CAP_MIX:0.0;
+ gl.activeTexture(33984+9);gl.bindTexture(3553,aScatB);gl.uniform1i(U('tex0b'),9);gl.uniform1f(U('uA0Mix'),a0mix);
  const _t14=CAP_T14||sharedTex.tex14, _t15=CAP_T15||sharedTex.tex15;
  gl.activeTexture(33985);gl.bindTexture(3553,_t14);gl.uniform1i(U('aTex14'),1);
  gl.activeTexture(33986);gl.bindTexture(3553,_t15);gl.uniform1i(U('aTex15'),2);
@@ -1743,7 +1768,9 @@ function sceneAt(F,t){
   for(let i=0;i<F.length-1;i++){const a=F[i],b=F[i+1]; if(t>=a.t&&t<=b.t){const w=(t-a.t)/((b.t-a.t)||1);
     const o={}; for(const k of SCENE_KEYS){const va=a[k],vb=b[k]; o[k]=va&&vb?(HOLD_KEYS.has(k)?va:va.map((x,j)=>x+(vb[j]-x)*w)):va;}
     if(a.fr!==undefined&&b.fr!==undefined) o.fr=a.fr+(b.fr-a.fr)*w;   // capture-frame of this playback moment (aligns LUT selection exactly, incl. trimmed rows)
-    if(a.fc||b.fc) o.fc=(w<0.5?(a.fc||b.fc):(b.fc||a.fc));            // PER-ROW surface fp consts (sun/HDR vary within a scene; nearest row = real captured values)
+    if(a.fc&&b.fc&&a.fc.length===b.fc.length){   // LERP the per-row surface fp consts: the rows are per-frame samples of CONTINUOUS lighting (sun/HDR); nearest-row snapping made the shadow/terminator STEP visibly (user report idx 6/8)
+      o.fc=a.fc.map((va,i)=>{const vb=b.fc[i]; return (va&&vb&&va.length===vb.length)?va.map((x,j)=>x+(vb[j]-x)*w):(va||vb);});
+    } else if(a.fc||b.fc) o.fc=(w<0.5?(a.fc||b.fc):(b.fc||a.fc));
     return o;}}
   return F[F.length-1];
 }
@@ -1782,7 +1809,7 @@ function tick(){
       // nearest captured frame; draw the limb only where both the LUT and the per-scene atmo consts
       // exist (scenes 0-5). Scenes without captured LUTs -> CAP_LUT/CAP_LIMB null = static + no limb.
       const cl=capSceneLut(sceneIdx,animT,s.fr);
-      CAP_LUT = cl?cl.surf:null; CAP_LIMB = cl?cl.limb:null;
+      CAP_LUT = cl?cl.surf:null; CAP_LIMB = cl?cl.limb:null; CAP_LUTB=cl?cl.surfB:null; CAP_LIMBB=cl?cl.limbB:null; CAP_MIX=cl?(cl.mix||0):0;
       ATMO = (CAP_LIMB && ATMO_SCENE) ? 1 : 0;
       if(TONELUT_PS){ const ct=capSceneTone(sceneIdx,animT,s.fr); CAP_T14=ct?ct.t14:null; CAP_T15=ct?ct.t15:null; }
       else { CAP_T14=null; CAP_T15=null; }
@@ -2030,7 +2057,7 @@ const MPGlobe={
    setFC();   // per-scene fc + ATMO_SCENE (without this the PREVIOUS scene's atmo shell/sun consts leak in)
    const F=SCENES[sceneIdx]; const s=sceneAt(F,animT); for(const k of SCENE_KEYS){ if(s[k]) D.shared[k]=s[k]; }
     if(s.fc) curFC=s.fc;   // per-row captured fp consts override the per-scene mid-row set
-   if(USE_CAP){ const cl=capSceneLut(sceneIdx,animT,s.fr); CAP_LUT=cl?cl.surf:null; CAP_LIMB=cl?cl.limb:null; ATMO=(CAP_LIMB&&ATMO_SCENE)?1:0;
+   if(USE_CAP){ const cl=capSceneLut(sceneIdx,animT,s.fr); CAP_LUT=cl?cl.surf:null; CAP_LIMB=cl?cl.limb:null; CAP_LUTB=cl?cl.surfB:null; CAP_LIMBB=cl?cl.limbB:null; CAP_MIX=cl?(cl.mix||0):0; ATMO=(CAP_LIMB&&ATMO_SCENE)?1:0;
      if(TONELUT_PS){ const ct=capSceneTone(sceneIdx,animT,s.fr); CAP_T14=ct?ct.t14:null; CAP_T15=ct?ct.t15:null; } else { CAP_T14=null; CAP_T15=null; } }
    draw();
    { const F2=SCENES[sceneIdx]; const span=(F2&&F2.length?F2[F2.length-1].fr-F2[0].fr:0)||1;
