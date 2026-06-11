@@ -10695,6 +10695,7 @@ let mpSunPhase = 0;       // sun orbit -> drives the phase cycle (full disc -> c
 // Offscreen WebGL2 canvas for the VERBATIM firmware globe port (globe_mp.js). Separate context from
 // the WebGL1 Time Zone globe; rendered each frame then composited onto the 2D music canvas.
 let mpGlobe2Canvas = document.createElement('canvas');
+let globeDebugOverlay = false;   // D-key on-screen debug (scene number etc.)
 let mpGlobeProg = null, mpGlobeBuf = null;
 function initMPGlobe() {
   initGlobe(); const gl = globeGL; if (mpGlobeProg) return; if (!gl) return;
@@ -10854,6 +10855,20 @@ function drawVisGlobe(ctx2, bands) {
   ctx2.setTransform(1,0,0,1,0,0);
   ctx2.fillStyle = '#000002'; ctx2.fillRect(0,0,cw,ch);
   try { if (MPGlobe.ready()) ctx2.drawImage(mpGlobe2Canvas, 0,0,cw,ch); } catch(e){}
+  // D-key debug overlay: scene number + animation state, drawn onto the same canvas.
+  if (globeDebugOverlay) {
+    try {
+      const d = MPGlobe.debugState;
+      ctx2.font = '14px monospace'; ctx2.textBaseline = 'top';
+      const lines = ['scene ' + d.scene + '  (idx ' + d.sceneIdx + '/' + d.scenes + ')',
+                     't ' + d.t + '   frame ' + d.frame,
+                     'bloom ' + d.bloom + '  auto ' + d.faithauto + '  atmo ' + d.atmo,
+                     '[F] next scene   [D] hide'];
+      ctx2.fillStyle = 'rgba(0,0,0,0.55)'; ctx2.fillRect(8, 8, 250, 16 * lines.length + 10);
+      ctx2.fillStyle = '#9fef9f';
+      for (let i = 0; i < lines.length; i++) ctx2.fillText(lines[i], 14, 13 + 16 * i);
+    } catch(e){}
+  }
 }
 
 function drawMusicPlayer(ctx2) {
@@ -12234,6 +12249,12 @@ document.addEventListener('keydown', e => {
     maybeSkipBoot();
     e.preventDefault();
     return;
+  }
+  // Globe visualizer hotkeys (music playing, Globe vis active):
+  // F = skip to the next globe scene; D = toggle the on-screen debug overlay (scene number etc.)
+  if (musicPlayer && musicPlayer.vis === 2 && typeof MPGlobe !== 'undefined' && MPGlobe.ready && MPGlobe.ready()) {
+    if (e.key === 'f' || e.key === 'F') { e.preventDefault(); MPGlobe.nextScene(); return; }
+    if (e.key === 'd' || e.key === 'D') { e.preventDefault(); globeDebugOverlay = !globeDebugOverlay; return; }
   }
   // OSK raw typing: printable chars + Backspace fill/edit the field directly.
   if (wizState && wizState.osk && wizOskRawKey(e)) return;

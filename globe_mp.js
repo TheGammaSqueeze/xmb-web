@@ -2008,6 +2008,11 @@ const MPGlobe={
  set fadeSecs(v){ FADE_SECS=+v; },
  get fadeSecs(){ return FADE_SECS; },
  _setScene(i){ if(SCENES){ sceneIdx=((i%SCENES.length)+SCENES.length)%SCENES.length; animT=0; setFC(); } },  // diagnostic: force a scene
+ nextScene(){ if(!SCENES) return -1; let g=0; do{ sceneIdx=(sceneIdx+1)%SCENES.length; }while(SCENE_SKIP&&SCENE_SKIP.has(sceneIdx)&&++g<SCENES.length); animT=0; setFC(); return SCENES_IDX&&SCENES_IDX[sceneIdx]?SCENES_IDX[sceneIdx].scene:sceneIdx; },   // user F-key: skip to the next scene
+ get debugState(){ const si=SCENES_IDX&&SCENES_IDX[sceneIdx]?SCENES_IDX[sceneIdx]:null;
+   return { scene: si?si.scene:null, sceneIdx: sceneIdx, t: +animT.toFixed(3),
+            frame: si?Math.round(si.frame0+animT*((si.frame1-si.frame0)||1)):null,
+            bloom: BLOOMDISP, faithauto: FAITH_AUTO, atmo: ATMO, scenes: SCENES?SCENES.length:0 }; },   // user D-key overlay
  _setT(t){ animT=t; },
  _render(obj){ if(!D)return; running=false;        // inject exact-frame consts + draw (decode/validation)
    for(const k in (obj.shared||{})) D.shared[k]=obj.shared[k];
