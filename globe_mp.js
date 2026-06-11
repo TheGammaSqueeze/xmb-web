@@ -109,6 +109,7 @@ let fadeProg=null;                           // scene-transition black-fade prog
 let FADE_SECS=1.2;                           // dip-to-black duration at each scene end/start (APPROX; MPGlobe.fadeSecs)
 let starCube=null, starTexProg=null, star2D=null;  // FAITHFUL stars: real firmware star texture (face_neg_z_ul.dds)
 let STARTEX=1;                              // 1 = use the real star-texture cube; 0 = legacy catalog points
+let STARTEX_SKIP_SCENES=[0];                // scenes where the real shows NO visible stars (bright low-orbit earth; the dark sky tonemaps to pure black). The web's texture stars are additive in DISPLAY space (not exposure-bound), so they wrongly show in the dark sky; suppress them here. Real sc0 top-sky mean 1.10 (clean) vs web-with-stars 2.93.
 let STAR_WHITE=0.217;                       // EARTH.mnu STARS WHITENESS (per-scene FACTOR folds in later)
 let STAR_POW=2.1493;                        // EARTH.mnu STARS POWSCALE (sparsens the field: pow(tex,POWSCALE))
 let STAR_TILE=6.0;                          // firmware tiles the texture on the cube -> MINIFICATION (crisp 1px stars).
@@ -1104,6 +1105,7 @@ function star2DTex(src){ const t=gl.createTexture(); gl.bindTexture(3553,t);
    got++; }; im.onerror=function(){got++;}; im.src=src; return t; }
 function drawStarsTex(){
  if(!STARTEX||!starTexProg||!starBoxBuf||!star2D||!D) return;
+ { const sc=(SCENES_IDX&&SCENES_IDX[sceneIdx])?SCENES_IDX[sceneIdx].scene:sceneIdx; if(STARTEX_SKIP_SCENES.indexOf(sc)>=0) return; }   // bright scenes where the real sky is star-free
  const s=D.shared; if(!s['260']||!s['263']) return;
  if(gl.bindVertexArray)gl.bindVertexArray(null);   // use the default VAO (don't corrupt glowVAO state)
  gl.useProgram(starTexProg); const U=n=>gl.getUniformLocation(starTexProg,n);
