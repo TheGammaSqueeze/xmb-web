@@ -534,7 +534,7 @@ void main(){
    R2.xyz=R0.w*(vec3(1.0)-fc[13].xyz);
    R1.z=bdivsq1(abs(R1.z),R1.z);
    R0.xyz=R0.xyz+R1.xyz;
-   R0.w=1.0/R1.w;
+   R0.w=(R1.w!=0.0)?1.0/R1.w:3.0e38;   // RSX RCP(0)=large-finite (NOT inf): R0.xyz*R0.w-R0.w must stay a steep finite ramp, not 0*inf=NaN (which blacked out the disc)
    R0.xyz=clamp16f(vec4(R0.xyz*R0.w-R0.w,0.0)).xyz;
    R0.xyz=R0.xyz/fc[15].x;
    R2.xyz=R2.xyz+fc[16].x;
