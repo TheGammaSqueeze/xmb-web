@@ -2100,8 +2100,9 @@ const MPGlobe={
    if(obj.atmo){ const a={t:0}; for(const k in obj.atmo) a[k]=obj.atmo[k]; ATMO_SCENE=[a,Object.assign({},a,{t:1})]; ATMO=1; } else { ATMO=0; }
    animT=0.0; draw(); },
  _redraw(){ if(!D)return; running=false; draw(); return 'ok'; },   // redraw at the CURRENT state (after toggling ATMO etc.) -- isolation validation
- _camKeep(shared){ if(!D)return; running=false;   // override ONLY the camera consts and redraw, keeping the scene state (ATMO/LUT/fc) set up by a prior _frame -- exact-camera structural validation
+ _camKeep(shared){ if(!D)return; running=false;   // override the camera consts (surface AND atmo shell) and redraw, keeping the scene assets (LUT/fc/atmo-scatter) from a prior _frame -- exact-camera 1:1 structural validation
    for(const k in (shared||{})) D.shared[k]=shared[k];
+   if(ATMO_SCENE&&ATMO_SCENE.length){ for(const e of ATMO_SCENE){ for(const k in (shared||{})) e[k]=shared[k]; } }   // keep the atmo shell registered to the same camera as the surface
    animT=animT; draw(); return 'ok'; },
  _renderKeep(obj){ if(!D)return;        // inject exact-frame consts + draw WITHOUT running=false (offscreen-CDP safe)
    for(const k in (obj.shared||{})) D.shared[k]=obj.shared[k];
