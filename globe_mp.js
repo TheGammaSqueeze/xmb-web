@@ -843,21 +843,27 @@ let _lutStick={}, _toneStick={};   // SAME-SCENE sticky only: never show another
 let SCENE_HAS_TONE=true;           // per-scene faithful-path gate (set in setFC)
 let SCENE_SKIP=new Set();          // degenerate (static-artifact) scene indices, skipped in the cycle
 function _nearestIdx(list,fr){ let bi=0; for(let i=1;i<list.length;i++){ if(Math.abs(list[i].fr-fr)<Math.abs(list[bi].fr-fr)) bi=i; } return bi; }
+// CONTINUOUS bin bracket: find ia = the LAST bin with fr<=playhead, ib=ia+1, mix=frac.
+// Guarantees C0 continuity across bin boundaries (at a bin: mix=1 of [ia,ib] == mix=0 of
+// [ib,ib+1] == bin[ib]). The old _nearestIdx+conditional had an off-by-one that left a
+// residual STEP at row boundaries (sc0 t=0.25 brightness/color pop, user 'keeps changing').
+function _bracket(list,fr){
+ let ia=0;
+ for(let i=0;i<list.length;i++){ if(list[i].fr<=fr) ia=i; else break; }
+ const ib=Math.min(ia+1,list.length-1);
+ const span=(list[ib].fr-list[ia].fr)||1;
+ const mix=(ib>ia)?Math.min(1,Math.max(0,(fr-list[ia].fr)/span)):0;
+ return {ia,ib,mix};
+}
 function capSceneLut(si, t, frOpt){
  if(!CAP_SCENE_LUTS||!SCENES_IDX||!SCENES_IDX[si]) return null;
  const s=SCENES_IDX[si]; const list=CAP_SCENE_LUTS[String(s.scene)];
  if(!list||!list.length) return null;
  const fr=(frOpt!==undefined)?frOpt:(s.frame0 + t*((s.frame1-s.frame0)||1));
- const bi=_nearestIdx(list,fr);
- for(let k=-1;k<=LUT_LOOKAHEAD && bi+k<list.length;k++){ if(bi+k<0) continue; const e=list[bi+k];
+ const {ia,ib,mix}=_bracket(list,fr);
+ for(let k=0;k<=LUT_LOOKAHEAD && ia+k<list.length;k++){ const e=list[ia+k];
    if(!CAP_LUT_CACHE[e.fr]) CAP_LUT_CACHE[e.fr]={surf:texF32(lfsURL(e.surf),256,128,true), limb:texF32(lfsURL(e.limb),256,128,true)}; }
- // CROSSFADE between the two bins bracketing the playhead (the real LUT animates per frame;
- // discrete nearest-bin swaps made the terminator/shadow STEP and the limb brightness POP -
- // user report idx 4/6/8/9-15). Falls back to the nearest single bin / same-scene sticky.
- let ia=bi; if(list[bi].fr>fr&&bi>0) ia=bi-1; const ib=Math.min(ia+1,list.length-1);
  const A=CAP_LUT_CACHE[list[ia].fr], B=CAP_LUT_CACHE[list[ib].fr];
- const span=(list[ib].fr-list[ia].fr)||1;
- const mix=(ib>ia)?Math.min(1,Math.max(0,(fr-list[ia].fr)/span)):0;
  if(A&&A.surf.loaded&&A.limb.loaded){
    const r={surf:A.surf,limb:A.limb,surfB:null,limbB:null,mix:0};
    if(ib>ia&&B&&B.surf.loaded&&B.limb.loaded){ r.surfB=B.surf; r.limbB=B.limb; r.mix=mix; }
