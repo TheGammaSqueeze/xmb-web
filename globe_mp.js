@@ -2032,7 +2032,10 @@ const MPGlobe={
     if(s.fc) curFC=s.fc;   // per-row captured fp consts override the per-scene mid-row set
    if(USE_CAP){ const cl=capSceneLut(sceneIdx,animT,s.fr); CAP_LUT=cl?cl.surf:null; CAP_LIMB=cl?cl.limb:null; ATMO=(CAP_LIMB&&ATMO_SCENE)?1:0;
      if(TONELUT_PS){ const ct=capSceneTone(sceneIdx,animT,s.fr); CAP_T14=ct?ct.t14:null; CAP_T15=ct?ct.t15:null; } else { CAP_T14=null; CAP_T15=null; } }
-   draw(); return 'ok'; },
+   draw();
+   { const F2=SCENES[sceneIdx]; const span=(F2&&F2.length?F2[F2.length-1].fr-F2[0].fr:0)||1;
+     drawFade(fadeFactor(animT, span/60)); }   // match LIVE playback: the boundary dip applies in tick(); without it edge-frame parity measures unfaded-vs-dipped (sc25-class harness inflation)
+   return 'ok'; },
  set stars(v){ STARS_ON=v?1:0; },
  get stars(){ return STARS_ON; },
 set cull(v){ CULL=v?1:0; },
