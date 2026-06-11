@@ -155,6 +155,7 @@ let SURF_ECLFLIP=0;                           // DEPRECATED no-op: the surface e
                                               // (firmware-viewport identity, proven via TF gl_Position vs ecl2/warm2 presents).
                                               // The old per-eclipse flip experiment is gone; the setter is retained for harness compat.
 let ATMO_VFLIP=0;                             // orientation probe for the atmo shell _AtmSpaceIv LUT
+let ATMO_OVER=0;                              // MPGlobe.atmoover: alpha-OVER atmo compositing (faithful music-globe REPLACE-with-coverage) vs legacy additive (white band)
 let ATMO_SOLID=0;                             // debug: bind a solid-warm LUT to test shader math/coord
 let ATMO_FLIPY=1.0;                           // shell uFlipY (orientation probe)
 let ATMO_HDR=7.863;                           // firmware preexpose scale = TEX15/TEX14 LUT (lut15_rgba32f) max 7.863, = the atmo fp's r0 exposure before the scene RT (replaces the rounded 8.0 approximation)
@@ -1734,7 +1735,9 @@ function drawAtmo(){
  gl.activeTexture(33985);gl.bindTexture(3553,_t14);gl.uniform1i(U('aTex14'),1);
  gl.activeTexture(33986);gl.bindTexture(3553,_t15);gl.uniform1i(U('aTex15'),2);
  gl.uniform1f(U('uALut'),(_t14&&_t15)?1.0:0.0);   // verbatim fp 63d3246d display tail when the per-scene LUTs exist
- gl.disable(2884); gl.depthMask(false); if(!ATMODEPTH) gl.disable(2929); gl.enable(3042); gl.blendFuncSeparate(1,1,1,0);   // ONE,ONE additive color; alpha REPLACED by the atmo scatter term (measured: real limb ring α≈0.2 < sky α, so not additive). NOTE: the live music-globe atmo (fp 7fcca1e2 variant) runs blend=0 REPLACE - tested 2026-06-10: full REPLACE regresses the daytime limb (sc24 45->101); that variant's fp likely composites the under-content itself. Keep additive until ITS decompile is ported.
+ gl.disable(2884); gl.depthMask(false); if(!ATMODEPTH) gl.disable(2929); gl.enable(3042);
+ if(ATMO_OVER){ gl.blendFuncSeparate(770,771,1,0); }   // alpha-OVER (atmo*a + surf*(1-a)): the real music-globe atmo (fp 7fcca1e2) composites the under-content (REPLACE-with-coverage), NOT additive. The additive ONE,ONE path ADDS the limb HDR onto the lit surface -> the limb clamps to a white BAND (the surface limb is faithful; the band is purely this composite). alpha=the scatter coverage term r0.w.
+ else gl.blendFuncSeparate(1,1,1,0);   // legacy ONE,ONE additive color; alpha REPLACED by the atmo scatter term (measured: real limb ring α≈0.2 < sky α, so not additive). NOTE: the live music-globe atmo (fp 7fcca1e2 variant) runs blend=0 REPLACE - tested 2026-06-10: full REPLACE regresses the daytime limb (sc24 45->101); that variant's fp likely composites the under-content itself. Keep additive until ITS decompile is ported.
  let pl=gl.getAttribLocation(aprog,'in_pos');gl.bindBuffer(34962,aMesh.pbuf);gl.enableVertexAttribArray(pl);gl.vertexAttribPointer(pl,4,5126,false,0,0);
  let tl=gl.getAttribLocation(aprog,'in_tc0');gl.bindBuffer(34962,aMesh.tbuf);gl.enableVertexAttribArray(tl);gl.vertexAttribPointer(tl,4,5126,false,0,0);
  gl.bindBuffer(34963,aMesh.ibuf);gl.drawElements(5,aMesh.n,5125,0);
@@ -2089,6 +2092,10 @@ const MPGlobe={
    if(obj.fc) curFC=obj.fc;
    if(obj.atmo){ const a={t:0}; for(const k in obj.atmo) a[k]=obj.atmo[k]; ATMO_SCENE=[a,Object.assign({},a,{t:1})]; ATMO=1; } else { ATMO=0; }
    animT=0.0; draw(); },
+ _redraw(){ if(!D)return; running=false; draw(); return 'ok'; },   // redraw at the CURRENT state (after toggling ATMO etc.) -- isolation validation
+ _camKeep(shared){ if(!D)return; running=false;   // override ONLY the camera consts and redraw, keeping the scene state (ATMO/LUT/fc) set up by a prior _frame -- exact-camera structural validation
+   for(const k in (shared||{})) D.shared[k]=shared[k];
+   animT=animT; draw(); return 'ok'; },
  _renderKeep(obj){ if(!D)return;        // inject exact-frame consts + draw WITHOUT running=false (offscreen-CDP safe)
    for(const k in (obj.shared||{})) D.shared[k]=obj.shared[k];
    if(obj.fc) curFC=obj.fc;
@@ -2227,6 +2234,7 @@ set cull(v){ CULL=v?1:0; },
  _pickScene(sun,attn){ const s=pickScene(sun,attn); return s?s.name:null; },      // diagnostic: pure pickScene by explicit sun/attn
  set iefull(v){ IEFULL=v?1:0; }, get iefull(){ return IEFULL; },               // unclamped IE LUT (restores night/dark side)
  set atmovflip(v){ ATMO_VFLIP=v?1:0; }, get atmovflip(){ return ATMO_VFLIP; },  // orientation probe for the atmo shell scatter LUT
+ set atmoover(v){ ATMO_OVER=v?1:0; }, get atmoover(){ return ATMO_OVER; },  // alpha-OVER atmo compositing (faithful) vs additive (white band)
  set atmosolid(v){ ATMO_SOLID=v?1:0; }, get atmosolid(){ return ATMO_SOLID; },
  set atmoflipy(v){ ATMO_FLIPY=+v; }, get atmoflipy(){ return ATMO_FLIPY; },     // shell uFlipY orientation probe
  set atmohdr(v){ ATMO_HDR=+v; }, get atmohdr(){ return ATMO_HDR; },             // shell pre-bloom HDR scale probe

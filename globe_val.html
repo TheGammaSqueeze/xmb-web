@@ -1,0 +1,13 @@
+<!doctype html><html><head><meta charset="utf-8"><title>globe val</title>
+<style>html,body{margin:0;background:#000}</style></head>
+<body><canvas id="mp" width="1920" height="1080"></canvas>
+<script src="globe_glow.js"></script><script src="globe_burst.js"></script><script src="globe_flare.js"></script><script src="globe_mp.js"></script>
+<script>
+const cv=document.getElementById('mp');
+MPGlobe.assetBase='globe_cap3test/';
+MPGlobe.usecap=true; MPGlobe.start(cv);
+// warm: tick a few times to load scene-0 assets, then stop (frozen-frame validation)
+let warm=0;
+function loop(){ MPGlobe.tick(); warm++; if(warm<60) requestAnimationFrame(loop); else window.__warm=1; }
+loop();
+</script></body></html>
