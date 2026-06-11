@@ -119,6 +119,10 @@ let STARSONLY=0;                            // debug: render only the star field
 // ECLIPSE SUN BURST (the "huge light burst from behind the globe"). SunDisc_FP (decompiled verbatim):
 // uv=quadUV-0.5; w=|uv.x|*SCALE_X - |uv.y|*SCALE_Y; glow=exp(w); col=glow*Color; occluded by the earth (ray-sphere).
 // Rendered bright into the HDR FBO so the bloom pyramid makes the corona (validated 3-Gaussian sigma 41/117/304 px).
+let baseProg=null, baseMesh=null;            // continuous unit-sphere EARTH BASE layer (limb-notch backfill, drawn before patches)
+let BASE_FILL=1;                              // MPGlobe.basefill: fill the grazing-angle limb notches with a continuous base sphere (ATMO_REAL/scene-0 path). Patches overdraw it; only notches reveal it.
+let BASE_GAIN=1.0;                            // base-layer brightness scale (rough match to the patch display tone; MPGlobe.basegain)
+let BASE_SCALE=1.0;                           // base-sphere radius scale = the true ideal limb (no ring past the patch limb). The dense base tessellation (256x128) makes its own silhouette solid, so it fills the patches' inward notches up to the ideal limb without overshoot. MPGlobe.basescale
 let sunDiscProg=null;                        // procedural sun-disc program (no texture)
 let SUNDISC=1;                               // MPGlobe.sundisc: render the burst
 let SUN_BRI=3.4;                             // SUN.mnu BRIGHTNESS 3.4 (the disc's HDR intensity scale)
@@ -353,7 +357,7 @@ uniform float uDiscGain;   // per-scene disc/face exposure lift
 uniform float uLimbSoft;   // per-scene highlight compression (un-blows the saturated limb into a soft atmospheric band)   // tex0-3 = THIS patch's 4 firmware tiles (t00-t03)
 uniform samplerCube earthCube, cloudsCube, maskCube;   // legacy cube-map path (kept for DBG/fallback)
 uniform vec4 fc[23];
-uniform float uDbg, uMode, uSlum, uTiles, uT2bad;
+uniform float uDbg, uMode, uSlum, uTiles, uT2bad; uniform float uCovAlpha;
 uniform float uBias0; uniform float uBias2;   // REAL RSX LOD biases (-8.0 / -0.1562), runtime-tunable for sampling A/B   // uTiles=1 -> per-patch tiles; uT2bad=1 -> this patch's t02 detail tile is corrupt, sample cloud from the cube instead
 uniform float uLutScale, uFeedback;   // firmware LUT COORD_SCALE2 (tex14/15 are UNNORMALIZED: scale=1/128). default 1.0 (legacy). r2 is sampled at r2*uLutScale.
 out vec4 ocol0;
@@ -475,10 +479,41 @@ void main(){
     ocol0 = vec4(clamp(disp,0.0,1.0),1.0); return;
   }
   if(uMode>1.5){ ocol0 = vec4(clamp(log2(max(r2.xyz,0.0)+1.0)/6.0,0.0,1.0), 1.0); return; }  // raw HDR r2 (log-encoded for readback): r2=2^(v*6)-1
-  if(uMode>0.5){ ocol0 = vec4(col0.xyz, clamp(col0.w,0.0,1.0)); return; }      // verbatim ramp-encoded output incl. the A exponent channel (UNORM-clamped like the real 8-bit display write; the LUT ch0 has fp16 negatives)
+  if(uMode>0.5){ ocol0 = vec4(col0.xyz, (uCovAlpha>0.5)?1.0:clamp(col0.w,0.0,1.0)); return; }      // uCovAlpha: write COVERAGE=1 over the earth (dst-alpha mask) instead of the HDR exponent; A exponent otherwise
   ocol0 = vec4(clamp(tc,0.0,1.0), 1.0);
 }`;
 // ---- VERBATIM ATMOSPHERE SHELL (vp 3f6eeb47 + fp 63d3246d), ported 1:1 from globe_atmo_real.html ----
+// ---- BASE EARTH LAYER (limb-notch backfill) ----
+// At a grazing camera (scene-0 late timeline) the outer ring of each per-patch spline mesh foreshortens to
+// sub-pixel screen height and rasterizes no fragments, leaving ragged BLACK notches cut into the earth's
+// silhouette (the patches only tile the near hemisphere; cull/depth/despeckle cannot fill a hole that opens
+// to the sky). This draws ONE continuous unit sphere FIRST, using the IDENTICAL c260..c263 MVP the patches
+// project with, so its silhouette aligns exactly (no halo). The patches draw on top and fully cover it on
+// non-grazing frames (zero regression); only the notches reveal it. Color = earthCube albedo * sun day/night
+// (fc8, object space) -> a smooth earth-toned fill instead of black. (Approximation allowed for this gap.)
+const BASE_VS=`#version 300 es
+precision highp float;
+in vec3 in_dir;
+uniform vec4 c260,c261,c262,c263; uniform float uFlipY; uniform float uDbgProj; uniform float uBaseScale;
+out vec3 vDir;
+void main(){
+  vDir=in_dir;
+  if(uDbgProj>0.5){ gl_Position=vec4(in_dir.xy*0.9, 0.0, 1.0); return; }   // DBG: raw sphere dirs as clip xy (disc at screen center)
+  vec4 p=vec4(in_dir*uBaseScale,1.0);   // uBaseScale slightly >1 grows the base silhouette past the patch limb to catch edge notches
+  vec4 clip=vec4(dot(p,c260),dot(p,c261),dot(p,c262),dot(p,c263));
+  vec2 ndc=clip.xy/clip.w; vec2 win=ndc*vec2(960.0,-540.0)+vec2(960.0,540.0);
+  clip.xy=((win/vec2(960.0,540.0))-1.0)*clip.w; clip.z=clip.z*2.0-clip.w; clip.y*=uFlipY;
+  gl_Position=clip;
+}`;
+const BASE_FS=`#version 300 es
+precision highp float;
+in vec3 vDir; out vec4 ocol0;
+uniform samplerCube uEarthCube; uniform vec3 uSun; uniform float uBaseGain;
+void main(){
+  vec3 alb=texture(uEarthCube, normalize(vDir)).xyz;
+  float nl=clamp(dot(normalize(vDir), normalize(uSun))*0.85+0.30, 0.04, 1.0);  // day/night terminator (fc8 sun)
+  ocol0=vec4(alb*nl*uBaseGain, 1.0);
+}`;
 const A_VS=`#version 300 es
 precision highp float;
 in vec4 in_pos; in vec4 in_tc0;
@@ -549,7 +584,7 @@ void main(){
    R2.xyz=R0.w*(vec3(1.0)-fc[13].xyz);
    R1.z=bdivsq1(abs(R1.z),R1.z);
    R0.xyz=R0.xyz+R1.xyz;
-   R0.w=(R1.w!=0.0)?(1.0/R1.w):(uRcpZero>0.5?0.0:3.0e38);   // RSX rcp(0): uRcpZero=1 -> 0 (OD term drops out), else large-finite ramp
+   R0.w=(R1.w!=0.0)?(1.0/R1.w):uRcpZero;   // RSX rcp(0) effective value (the OD-term scatter scale; fit to the real limb falloff)
    R0.xyz=clamp16f(vec4(R0.xyz*R0.w-R0.w,0.0)).xyz;
    R0.xyz=R0.xyz/fc[15].x;
    R2.xyz=R2.xyz+fc[16].x;
@@ -1317,7 +1352,7 @@ function drawGlow(){
  // win-remap in the VS already negates clip.y, so uFlipY=-1 cancels it -> correct, scene-independent). The
  // old default +1 mirrored the disc vertically (only invisible for near-centred daytime discs; glaring for
  // the eclipse, where the earth sits far below the frame). Verified vs TF gl_Position + ecl2/warm2 presents.
- gl.uniform1f(U('uFlipY'),-1.0);gl.uniform1f(U('uPatchExp'),PATCH_EXP);
+ gl.uniform1f(U('uFlipY'),-1.0);gl.uniform1f(U('uPatchExp'),PATCH_EXP);gl.uniform1f(U('uCovAlpha'),(typeof window!=='undefined'&&window.__covAlpha)?1.0:0.0);
  gl.uniform1f(U('uDbg'),0.0);
  gl.uniform1f(U('uMode'),5.0);          // linear HDR earth scene (r2.xyz)
  gl.uniform1f(U('uSlum'),SLUM);
@@ -1464,6 +1499,31 @@ function glareGfc(){   // nearest-t REAL per-scene glare consts (vp c868fd6a row
  const gf=new Float32Array(17*4);for(let i=0;i<17;i++){const v=gsrc[i]||[0,0,0,0];gf[i*4]=v[0];gf[i*4+1]=v[1];gf[i*4+2]=v[2];gf[i*4+3]=v[3];}
  return gf;
 }
+// BASE EARTH LAYER: continuous unit sphere drawn BEFORE the per-patch tiles, using the IDENTICAL c260..c263
+// MVP, so its silhouette aligns exactly. Patches overdraw it everywhere they rasterize (zero regression on
+// non-grazing frames); only the grazing-angle silhouette notches reveal it as smooth earth instead of black.
+// Self-gates to the ATMO_REAL scene set (scene 0). Caller must have the target FBO bound; restores depth/cull.
+function drawBaseEarth(){
+ const sc=(SCENES_IDX&&SCENES_IDX[sceneIdx])?SCENES_IDX[sceneIdx].scene:sceneIdx;
+ const areal=(ATMO_REAL_MASTER && ATMO_REAL_SCENES.indexOf(sc)>=0);
+ if(!(BASE_FILL && areal && baseProg && baseMesh && D && D.shared && D.shared['260'] && D.shared['263'])) return;
+ const sb=D.shared; const fcb=curFC||D.fc; const sun=(fcb&&fcb[8])?fcb[8]:[0,0,1];
+ gl.useProgram(baseProg); const Ub=n=>gl.getUniformLocation(baseProg,n);
+ gl.uniform4fv(Ub('c260'),sb['260']);gl.uniform4fv(Ub('c261'),sb['261']);gl.uniform4fv(Ub('c262'),sb['262']);gl.uniform4fv(Ub('c263'),sb['263']);
+ gl.uniform1f(Ub('uFlipY'),-1.0); gl.uniform3f(Ub('uSun'),sun[0],sun[1],sun[2]); gl.uniform1f(Ub('uBaseGain'),BASE_GAIN);
+ gl.uniform1f(Ub('uDbgProj'),(typeof window!=='undefined'&&window.__baseDbgProj)?1.0:0.0);
+ gl.uniform1f(Ub('uBaseScale'),(typeof window!=='undefined'&&window.__baseScale)?window.__baseScale:BASE_SCALE);
+ gl.activeTexture(33984+10);gl.bindTexture(34067,sharedTex.earthCube);gl.uniform1i(Ub('uEarthCube'),10);
+ gl.bindVertexArray(null);   // clean default-VAO attribute setup (a stale glowVAO would mis-route the attribs)
+ gl.disable(2929); gl.depthMask(false);
+ if(typeof window!=='undefined'&&window.__baseNoCull){ gl.disable(2884); } else { gl.enable(2884); gl.cullFace(1029); gl.frontFace((typeof window!=='undefined'&&window.__baseWind)?2304:2305); }
+ const bl=gl.getAttribLocation(baseProg,'in_dir');
+ gl.bindBuffer(34962,baseMesh.pb); gl.enableVertexAttribArray(bl); gl.vertexAttribPointer(bl,3,5126,false,0,0);
+ gl.bindBuffer(34963,baseMesh.ib); gl.drawElements(4,baseMesh.n,5123,0);
+ gl.disableVertexAttribArray(bl);
+ gl.depthMask(true); gl.enable(2929); gl.depthFunc(515);   // restore for the patch pass
+ if(CULL){gl.enable(2884);gl.cullFace(1029);}else{gl.disable(2884);}
+}
 function drawGlowFaith(){
  const W=canvas.width,H=canvas.height;
  // Resolve the EFFECTIVE real-atmosphere flag for THIS scene: master toggle AND the validated whitelist.
@@ -1486,10 +1546,11 @@ function drawGlowFaith(){
  else { if(typeof window!=='undefined'&&window.__dbgClear){gl.clearColor(1,0,0,ATMO_REAL?0.0:1.0);} else {gl.clearColor(0,0,0,ATMO_REAL?0.0:1.0);} gl.clear(16640); }   // ATMO_REAL: clear sky alpha=0 so the dst-alpha atmosphere shows in the sky (atmo*(1-0)); the atmo shell then writes alpha->1 (matching the present's sky alpha=255). Legacy=1.
  gl.enable(2929);gl.depthFunc(515);
  if(CULL){gl.enable(2884);gl.cullFace(1029);}else{gl.disable(2884);}
+ drawBaseEarth();   // pre-fill the grazing-angle limb notches (before the patches cover the disc)
  gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
  const fcsrc=curFC||D.fc; const fc=new Float32Array(23*4);for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
  resolveInscat();
- gl.uniform1f(U('uFlipY'),-1.0);gl.uniform1f(U('uDbg'),0.0);gl.uniform1f(U('uPatchExp'),PATCH_EXP);
+ gl.uniform1f(U('uFlipY'),-1.0);gl.uniform1f(U('uDbg'),0.0);gl.uniform1f(U('uPatchExp'),PATCH_EXP);gl.uniform1f(U('uCovAlpha'),(typeof window!=='undefined'&&window.__covAlpha)?1.0:0.0);
  gl.uniform1f(U('uMode'),HDRC?5.0:1.0);   // HDRC: emit LINEAR HDR r2 (deferred single tonemap); else col0 LDR
  gl.uniform1f(U('uSlum'),SLUM);
  gl.uniform1f(U('uLutScale'),1.0/128.0);gl.uniform1f(U('uFeedback'),1.0);   // faithful: 1/128 UN-scale + steady-state feedback
@@ -1744,6 +1805,8 @@ function atmoFcArray(a){
  if(ATMOFC&&a&&a.fc&&a.fc.length>=17){
    const fa=new Float32Array(17*4);
    for(let i=0;i<17;i++){const v=a.fc[i]||[0,0,0,0];fa[i*4]=v[0];fa[i*4+1]=v[1];fa[i*4+2]=v[2];fa[i*4+3]=v[3];}
+   if(typeof window!=='undefined'&&window.__c16!==undefined) fa[16*4]=window.__c16;   // f566 RE: test scene-0 c16 (cap2=2.176 vs live D21=1.485)
+   if(typeof window!=='undefined'&&window.__fc6){ fa[6*4]=window.__fc6[0];fa[6*4+1]=window.__fc6[1];fa[6*4+2]=window.__fc6[2];fa[6*4+3]=window.__fc6[3]; }   // f566 RE: test the OD-coord scale (cap2=[1,0,0,0] uniform vs {-1,1,0,0} screen-varying)
    return fa;
  }
  if(curFC&&curFC[4]&&!FCATMO_OVR)fcAtmo[16*4]=curFC[4][1];   // legacy per-scene intensity approximation
@@ -1795,12 +1858,13 @@ function draw(){
  gl.viewport(0,0,W,H);gl.clearColor(0,0,0,1);gl.clear(16640);gl.enable(2929);gl.depthFunc(515);
  if(!STARTEX)drawStars();             // catalog stars (legacy); texture stars added post-composite (display space)
  if(CULL){gl.enable(2884);gl.cullFace(1029);}else{gl.disable(2884);}   // back-face cull (per-patch frontFace)
+ drawBaseEarth();   // pre-fill the grazing-angle limb notches (before the patches cover the disc)
  gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
  const fcsrc=curFC||D.fc;  // per-scene captured fragment constants when cycling, else baked
  const fc=new Float32Array(23*4); for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
  resolveInscat();
  const eclView=isEclipseView();
- gl.uniform1f(U('uFlipY'),-1.0);gl.uniform1f(U('uPatchExp'),PATCH_EXP);   // firmware-viewport identity (see the glow path); -1 for ALL scenes
+ gl.uniform1f(U('uFlipY'),-1.0);gl.uniform1f(U('uPatchExp'),PATCH_EXP);gl.uniform1f(U('uCovAlpha'),(typeof window!=='undefined'&&window.__covAlpha)?1.0:0.0);   // firmware-viewport identity (see the glow path); -1 for ALL scenes
  gl.uniform1f(U('uDbg'),DBG);
  gl.uniform1f(U('uMode'),ENC);
  gl.uniform1f(U('uSlum'),SLUM);
@@ -2073,6 +2137,15 @@ async function load(){
  const pb=gl.createBuffer();gl.bindBuffer(34962,pb);gl.bufferData(34962,new Float32Array(xyz),35044);
  const ib=gl.createBuffer();gl.bindBuffer(34963,ib);gl.bufferData(34963,new Uint16Array(idx),35044);
  eMesh={pb,ib,n:idx.length};
+ // BASE EARTH LAYER mesh: a continuous unit UV-sphere (notch backfill behind the per-patch tiles).
+ { const sU=256,sV=128,dirs=[],bi=[];
+   for(let v=0;v<=sV;v++){ const phi=Math.PI*v/sV;
+     for(let u=0;u<=sU;u++){ const th=2*Math.PI*u/sU;
+       dirs.push(Math.sin(phi)*Math.cos(th), Math.cos(phi), Math.sin(phi)*Math.sin(th)); } }
+   for(let v=0;v<sV;v++)for(let u=0;u<sU;u++){ const a=v*(sU+1)+u,b=a+sU+1; bi.push(a,b,a+1, a+1,b,b+1); }
+   const bpb=gl.createBuffer();gl.bindBuffer(34962,bpb);gl.bufferData(34962,new Float32Array(dirs),35044);
+   const bib=gl.createBuffer();gl.bindBuffer(34963,bib);gl.bufferData(34963,new Uint16Array(bi),35044);
+   baseMesh={pb:bpb,ib:bib,n:bi.length}; }
  // verbatim atmosphere shell: mesh c0 (pos.w + tc0.zw drive the shell), scatter LUT, captured fc_atmo
  try{
    const [apb,atb,aib]=await Promise.all([
@@ -2171,6 +2244,8 @@ const MPGlobe={
    if(!gl.getProgramParameter(prog,gl.LINK_STATUS)){errlog+=gl.getProgramInfoLog(prog);console.warn('MPGlobe link:',errlog);}
    aprog=gl.createProgram();gl.attachShader(aprog,sh(35633,A_VS));gl.attachShader(aprog,sh(35632,A_FS));gl.linkProgram(aprog);
    if(!gl.getProgramParameter(aprog,gl.LINK_STATUS)){errlog+=gl.getProgramInfoLog(aprog);}
+   baseProg=gl.createProgram();gl.attachShader(baseProg,sh(35633,BASE_VS));gl.attachShader(baseProg,sh(35632,BASE_FS));gl.linkProgram(baseProg);
+   if(!gl.getProgramParameter(baseProg,gl.LINK_STATUS)){errlog+=gl.getProgramInfoLog(baseProg);}
    // GLOW composite program + fullscreen VAO (gated path; harmless if GLOW stays off)
    cprog=gl.createProgram();gl.attachShader(cprog,sh(35633,C_VS));gl.attachShader(cprog,sh(35632,C_FS));gl.linkProgram(cprog);
    if(!gl.getProgramParameter(cprog,gl.LINK_STATUS)){errlog+=' composite link: '+gl.getProgramInfoLog(cprog);}
@@ -2249,6 +2324,9 @@ const MPGlobe={
  set stars(v){ STARS_ON=v?1:0; },
  get stars(){ return STARS_ON; },
 set cull(v){ CULL=v?1:0; },
+ set basefill(v){ BASE_FILL=v?1:0; }, get basefill(){ return BASE_FILL; },
+ set basegain(v){ BASE_GAIN=+v||1.0; }, get basegain(){ return BASE_GAIN; },
+ set basescale(v){ BASE_SCALE=+v||1.0; }, get basescale(){ return BASE_SCALE; },
  set patchexp(v){ PATCH_EXP=+v||1.0; }, get patchexp(){ return PATCH_EXP; },
  set despeckle(v){ DESPECKLE=+v||0; }, get despeckle(){ return DESPECKLE; },
  set tiles(v){ TILES=v?1:0; },                 // faithful per-patch tile earth (1) vs legacy cube map (0)
