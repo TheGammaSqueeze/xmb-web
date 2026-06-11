@@ -176,7 +176,7 @@ let STARS_ON=1;                              // MPGlobe.stars
 let TILES=1;                                 // 1 = faithful per-patch tile sampling (firmware 24-patch x 4-tile); 0 = legacy cube map (MPGlobe.tiles)
 let CULL=1;                                   // per-patch back-face cull (MPGlobe.cull); 0 = no cull (rely on depth) - test for grazing-patch triangular gaps
 let PATCH_EXP=1.0;                             // MPGlobe.patchexp: grow patch quads to overlap-close the limb seam gaps (1.0 = off)
-let DESPECKLE=0;                               // MPGlobe.despeckle: fill the thin patch-seam dark gaps at the limb (composite-pass coverage fill; unverified - did not trigger, off by default)
+let DESPECKLE=1;                               // MPGlobe.despeckle: fill the thin patch-seam dark gaps at the limb (composite-pass coverage fill, 1..4px bracket). Validated: crest dark px 346->6, mean unchanged.
 // All 24 patches' tiles (albedo t00/t01, cloud t02, mask t03) re-captured clean from live RPCS3
 // via the TEXDUMP command (un-swizzled, DXT-decoded BGRA8, cropped to the real 512x128 strip).
 // The old corrupt-t02 workaround is no longer needed - every patch uses its clean per-patch tile.
@@ -657,13 +657,26 @@ void main(){
   if(uDespeckle>0.5){
     // Fill the thin DARK SEAM GAPS at the earth-patch boundaries (sub-pixel rasterization holes the real PS3
     // avoids via shared indexed verts; the web computes each patch's shared edge independently -> float gaps).
-    // A 1px dark pixel bracketed by brighter neighbors on either axis is a gap -> replace with the bracket mean.
+    // The gaps are 1-5px wide, so bracket at increasing distance (1..4 px); the moment a dark center is
+    // straddled by BRIGHT pixels on both sides of one axis, fill from that bracket. Bright-on-both-sides is the
+    // gap signature; real dark features (terminator, clouds) are not bright-bracketed at these short distances.
     vec2 px=vec2(1.0/uDims.x,1.0/uDims.y);
-    vec3 eL=texture(uEarth,vUV-vec2(px.x,0.0)).xyz, eR=texture(uEarth,vUV+vec2(px.x,0.0)).xyz;
-    vec3 eU=texture(uEarth,vUV-vec2(0.0,px.y)).xyz, eD=texture(uEarth,vUV+vec2(0.0,px.y)).xyz;
-    float L=dot(e,vec3(0.333)), Lh=min(dot(eL,vec3(0.333)),dot(eR,vec3(0.333))), Lv=min(dot(eU,vec3(0.333)),dot(eD,vec3(0.333)));
-    if(L<Lh*0.6 && Lh>0.06) e=(eL+eR)*0.5;
-    else if(L<Lv*0.6 && Lv>0.06) e=(eU+eD)*0.5;
+    float L=dot(e,vec3(0.333)); bool filled=false;
+    // Only NEAR-BLACK centers (the seam gap = the black FBO clear, L~0) - never dim clouds/terminator (L>0.06).
+    if(L<0.05){
+      for(int d=1; d<=4; d++){
+        if(filled) break;
+        vec3 eL=texture(uEarth,vUV-vec2(px.x*float(d),0.0)).xyz, eR=texture(uEarth,vUV+vec2(px.x*float(d),0.0)).xyz;
+        float Lh=min(dot(eL,vec3(0.333)),dot(eR,vec3(0.333)));
+        if(Lh>0.10){ e=(eL+eR)*0.5; filled=true; }
+      }
+      for(int d=1; d<=4; d++){
+        if(filled) break;
+        vec3 eU=texture(uEarth,vUV-vec2(0.0,px.y*float(d))).xyz, eD=texture(uEarth,vUV+vec2(0.0,px.y*float(d))).xyz;
+        float Lv=min(dot(eU,vec3(0.333)),dot(eD,vec3(0.333)));
+        if(Lv>0.10){ e=(eU+eD)*0.5; filled=true; }
+      }
+    }
   }
   vec3 g = texture(uGlow,  vUV).xyz;
   // Additive bloom in LINEAR HDR, then the firmware globe HDR.mnu tonemap applied PER CHANNEL
@@ -1536,7 +1549,7 @@ function drawGlowFaith(){
  gl.uniform3fv(C('uGlowGain'),new Float32Array([0,0,0]));
  if(HDRC){ // FAITHFUL HDR composite: uEarth=Fd is the LINEAR HDR (surface r2 + atmo HDR). Apply the EXACT surface-fp dual-LUT tonemap ONCE (uLutOn path == col0: hc=r2/128, R=t15.ch1,G=t15.ch0,B=t14.ch1). The limb HDR rolls off through the LUT -> 226, no additive white band.
    gl.uniform1f(C('uPassthru'),0.0);gl.uniform1f(C('uLutOn'),1.0);gl.uniform1f(C('uLutExpo'),1.0/128.0);gl.uniform1f(C('uLutFb'),1.0);
- } else { gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uDespeckle'),DESPECKLE?1.0:0.0);gl.uniform1f(C('uLutOn'),0.0); }
+ } else { gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uDespeckle'),DESPECKLE);gl.uniform1f(C('uLutOn'),0.0); }
  gl.uniform2f(C('uDims'),W,H);
  // sun-glare: the c868fd6a draw is NOT fullscreen - VERTS f014391_d021 decoded it as the 65-vertex
  // TRIANGLE-FAN disc (radius 5/9, model space) positioned by its OWN MVP (row vc[6..9]); at most
@@ -1587,7 +1600,7 @@ function drawGlowFaith(){
    gl.useProgram(cprog);
    gl.activeTexture(33984+0);gl.bindTexture(3553,FP.tex);gl.uniform1i(C('uEarth'),0);
    gl.activeTexture(33984+1);gl.bindTexture(3553,black);gl.uniform1i(C('uGlow'),1);
-   gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uDespeckle'),DESPECKLE?1.0:0.0);
+   gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uDespeckle'),DESPECKLE);
    gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
  }
  if(BLOOMDISP&&encProg&&FP){
@@ -1636,7 +1649,7 @@ function drawGlowFaith(){
      }
    }
    gl.uniform3fv(C('uGlowGain'),new Float32Array([cg,cg,cg]));
-   gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uDespeckle'),DESPECKLE?1.0:0.0);
+   gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uDespeckle'),DESPECKLE);
    gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
    drawFlares();   // verbatim sun-flare billboards (post-composite, the real draw order)
    if(STARTEX)drawStarsTex();
@@ -1669,7 +1682,7 @@ function drawGlowFaith(){
  gl.activeTexture(33984+0);gl.bindTexture(3553,black);gl.uniform1i(C('uEarth'),0);
  gl.activeTexture(33984+1);gl.bindTexture(3553,glow.tex);gl.uniform1i(C('uGlow'),1);
  gl.uniform3fv(C('uGlowGain'),new Float32Array(GLOW_GAIN));
- gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uDespeckle'),DESPECKLE?1.0:0.0);
+ gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uDespeckle'),DESPECKLE);
  gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
  gl.disable(3042);
  drawFlares();   // the real pipeline draws the 15 flare billboards EVERY frame (visibility = the FS sun gate)
@@ -2237,7 +2250,7 @@ const MPGlobe={
  get stars(){ return STARS_ON; },
 set cull(v){ CULL=v?1:0; },
  set patchexp(v){ PATCH_EXP=+v||1.0; }, get patchexp(){ return PATCH_EXP; },
- set despeckle(v){ DESPECKLE=v?1:0; }, get despeckle(){ return DESPECKLE; },
+ set despeckle(v){ DESPECKLE=+v||0; }, get despeckle(){ return DESPECKLE; },
  set tiles(v){ TILES=v?1:0; },                 // faithful per-patch tile earth (1) vs legacy cube map (0)
  get tiles(){ return TILES; },
  set t2all(v){ T2ALL=v?1:0; },                 // test: all-patch cloud from the cube (uniform cloud)
