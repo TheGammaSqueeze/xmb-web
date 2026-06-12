@@ -162,10 +162,14 @@ let SURF_ECLFLIP=0;                           // DEPRECATED no-op: the surface e
 let ATMO_VFLIP=0;                             // orientation probe for the atmo shell _AtmSpaceIv LUT
 let ATMO_REAL=0;                              // EFFECTIVE per-frame value (set in drawGlowFaith from ATMO_REAL_MASTER & the per-scene whitelist). REAL atmosphere compositing (fp c47472608e740973 = 63d3246d math) + dst-alpha blend (src=773/dst=772, live D21) + sky-alpha=0 clear + camera-guard bypass + HDRC off. Replaces the legacy additive "huge white band".
 let ATMO_REAL_MASTER=1;                       // MPGlobe.atmoreal: feature toggle for the real dst-alpha atmosphere.
-let ATMO_REAL_SCENES=[0];                      // scenes validated for the real dst-alpha law (scene 0 proven vs sc0_full presents). Gated per directive "scene 0 only" so other scenes keep their prior path until each is individually re-validated.
+let ATMO_REAL_SCENES=[0,1];                    // scenes validated for the real dst-alpha law + bloom-of-display glow. Scene 0 proven vs sc0_full presents; scene 1 (lit-earth closeup) proven vs cycle present f1203240 (camera-matched): the firmware bloom-of-display glow restores the soft limb halo (base limb-apex fell to ~2 by 30px up, real holds ~24->8; glow holds ~20->15 = near-field match). Other scenes keep their prior path until each is individually re-validated.
 let SCENE0_LOOP=1;                             // MPGlobe.scene0loop: scene 0 PING-PONGS over its clean LIT range [S0_T0,S0_T1] instead of sweeping into the dark/grazing/notched night back-half (which is a cross-playthrough camera mismatch vs the all-daytime sc0_full ground truth). Removes the black patches, the slow-to-black, and the sudden band-on-loop. No fade dip (animT stays away from 0/1). Scene-0 only.
 let S0_T0=0.10, S0_T1=0.50;                    // scene-0 clean lit animT range (mean ~42, no night, no grazing notches; validated zero interior dark-notches + smooth limb across [0.10,0.50]). MPGlobe.s0range([a,b]).
 let s0dir=1;                                   // ping-pong direction
+let SCENE0_DWELL=1080;                          // MPGlobe.scene0dwell: frames scene 0 ping-pongs (~18s @60fps) before it dips to black and advances to scene 1. Scene 0 then re-enters at the cycle wrap. <=0 = loop forever (legacy).
+let s0frames=0;                                // frames spent in scene 0 this visit
+let s0exit=0;                                  // 1 = scene 0 is fading out toward the scene-1 cut
+let s0exitF=1.0;                               // scene-0 exit dip multiplier (1=lit, 0=black); drives drawFade, then advances
 let COV_ALPHA=0;                               // MPGlobe.covalpha: surface writes a COVERAGE=1 dst-alpha mask over the disc. PROVEN NO-OP in the warm faith path (0 changed px): the 63d3246d atmo over the disc is already negligible, so masking it off the disc changes nothing. Kept as a toggle. The real limb-concentrated "whole-earth glow" is the SURFACE falloff (real B-R peaks 66@+40 -> 28; web flat 49->43), NOT the atmosphere - next gap, RE-able from sc0_full.
 let FP16=1;                                    // MPGlobe.fp16: faithfully truncate the surface fp's half-register writes to fp16 (real RSX runs the fragment shader in half-float; FragmentProgram50 has clamp16() at exactly these sites). The web previously computed r2 in fp32, diverging slightly at the bright limb. Default ON = faithful port.
 let ATMO_OVER=0;
@@ -816,6 +820,7 @@ uniform vec4 uEFC[8];               // the encode draw's REAL per-frame const[0.
 in vec2 vUV; out vec4 ocol0;
 void main(){
   vec4 r1 = texture(uDisp, vUV);
+  r1 = clamp(mix(vec4(0.0), r1, equal(r1,r1)), 0.0, 64.0);   // NaN-scrub (NaN!=NaN -> pick 0) + clamp Inf: a stray NaN in the HALF_FLOAT display (f566 atmo rcp(0) / surface div) would bilinearly spread through the bloom pyramid to a full-frame white-out. The real RSX fp16 emits finite values; sanitize to match.
   vec3 c  = r1.rgb;
   vec3 q  = (vec3(uEFC[0].x) - c);                      // FC0 - r1
   q = (q - c*q) / 4.0;                                  // (FC0-c)*(1-c)/4
@@ -1557,6 +1562,14 @@ function drawGlowFaith(){
  // (dst-alpha) in the SAME LDR/display domain. The HDRC deferred-tonemap path renders the surface as
  // linear HDR (uMode=5) which does NOT compose with the LDR dst-alpha atmosphere (2nd-half blacks out).
  const HDRC = ATMO_REAL ? false : ((typeof window!=='undefined'&&window.__noHDRC) ? false : (ATMO_HDRC || (FAITH_POLICY&&FAITH_POLICY.hdrcScenes&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.hdrcScenes.indexOf(SCENES_IDX[sceneIdx].scene)>=0)));
+ if(ATMO_REAL && hdrFBO && hdrFBO.w===W && hdrFBO.h===H && (typeof window==='undefined'||!window.__noRespec)){
+   // ATMO_REAL (bloom-of-display glow) is unstable on some drivers: a stray NaN/Inf in the HALF_FLOAT
+   // display FBO is NOT scrubbed by gl.clear/clearBufferfv, nor by re-speccing the color texture - the
+   // bloom pyramid then bilinearly spreads it to a full-frame white-out within a few frames (scene 1 etc).
+   // Only DESTROYING the whole FBO (color tex + depth renderbuffer) and recreating it yields a clean buffer.
+   // Force ensureHDR to rebuild a fresh display FBO each glow frame. Glow scenes only (0,1); negligible cost.
+   gl.deleteFramebuffer(hdrFBO.fbo); gl.deleteTexture(hdrFBO.tex); gl.deleteRenderbuffer(hdrFBO.depth); hdrFBO=null;
+ }
  const Fd=ensureHDR(W,H), Fb=ensureHDR2(W,H);
  if(INSCAT_GEN){ if(seedCap3(sceneIdx, animT)){ genInscatter(); _ipValid=true; } else { _ipValid=false; } }   // verbatim per-frame tex4/limb generation; falls back to the streamed bin while this scene's seeds load
  // ---- 1) F_disp = col0 earth (LDR) + tonemapped limb ----
@@ -2080,22 +2093,35 @@ function tick(){
       else { CAP_T14=null; CAP_T15=null; }
     }
     draw();
-    drawFade(fadeFactor(animT, span/60));   // dip-to-black at scene boundaries (fade length = FADE_SECS of THIS scene's real duration)
-    if(USE_CAP && animT>0.8){   // prefetch the NEXT scene's first bins during this scene's tail/fade so its limb+tonemap are ready at the cut
+    const _scN=(SCENES_IDX&&SCENES_IDX[sceneIdx])?SCENES_IDX[sceneIdx].scene:sceneIdx;
+    let _fade=fadeFactor(animT, span/60);   // dip-to-black at scene boundaries (fade length = FADE_SECS of THIS scene's real duration)
+    if(SCENE0_LOOP && _scN===0 && s0exit) _fade=Math.min(_fade, s0exitF);   // scene-0 exit dip (held lit view fades to black, then we advance)
+    drawFade(_fade);
+    if(USE_CAP && (animT>0.8 || (SCENE0_LOOP&&_scN===0&&s0exit))){   // prefetch the NEXT scene's first bins during this scene's tail/fade (incl. scene 0's exit dip) so its limb+tonemap are ready at the cut
       let ns=sceneIdx,g=0; do{ ns=(ns+1)%SCENES.length; }while(SCENE_SKIP&&SCENE_SKIP.has(ns)&&++g<SCENES.length);
       capSceneLut(ns,0); if(TONELUT_PS) capSceneTone(ns,0);
     }
-    const _scN=(SCENES_IDX&&SCENES_IDX[sceneIdx])?SCENES_IDX[sceneIdx].scene:sceneIdx;
     if(SCENE0_LOOP && _scN===0){
-      // PING-PONG over the clean lit range: forward to S0_T1, reverse to S0_T0, repeat. Never advance to the
-      // dark/grazing night back-half, never dip to black. = a stable, continuously-lit scene 0.
-      animT += s0dir*(1/span);
-      if(animT>=S0_T1){ animT=S0_T1; s0dir=-1; }
-      else if(animT<=S0_T0){ animT=S0_T0; s0dir=1; }
+      if(!s0exit){
+        // PING-PONG over the clean lit range: forward to S0_T1, reverse to S0_T0. After SCENE0_DWELL frames,
+        // begin the exit dip at the NEXT calm turnaround (a bound) so the held view never jumps the camera.
+        animT += s0dir*(1/span);
+        let atBound=false;
+        if(animT>=S0_T1){ animT=S0_T1; s0dir=-1; atBound=true; }
+        else if(animT<=S0_T0){ animT=S0_T0; s0dir=1; atBound=true; }
+        s0frames++;
+        if(SCENE0_DWELL>0 && s0frames>=SCENE0_DWELL && atBound){ s0exit=1; }   // hold animT at this bound through the dip
+      } else {
+        // hold the lit view (already at a bound) and ramp the dip to black over FADE_SECS, then advance to
+        // scene 1 (its own fadeFactor fades it IN from black = a smooth dip-to-black cut, the firmware style).
+        s0exitF -= 1/Math.max(1,FADE_SECS*60);
+        if(s0exitF<=0){ s0exitF=1.0; s0exit=0; s0frames=0;
+          let g=0; do{ sceneIdx=(sceneIdx+1)%SCENES.length; }while(SCENE_SKIP&&SCENE_SKIP.has(sceneIdx)&&++g<SCENES.length); setFC(); animT=0; s0dir=1; }
+      }
     } else {
       animT += 1/span;
       if(animT>1){ animT=0; let g=0; do{ sceneIdx=(sceneIdx+1)%SCENES.length; }while(SCENE_SKIP&&SCENE_SKIP.has(sceneIdx)&&++g<SCENES.length); setFC();
-        if(SCENE0_LOOP && SCENES_IDX&&SCENES_IDX[sceneIdx]&&SCENES_IDX[sceneIdx].scene===0){ animT=S0_T0; s0dir=1; } }   // enter scene 0 already lit (skip the from-black fade-in)
+        if(SCENE0_LOOP && SCENES_IDX&&SCENES_IDX[sceneIdx]&&SCENES_IDX[sceneIdx].scene===0){ animT=S0_T0; s0dir=1; s0frames=0; s0exit=0; s0exitF=1.0; } }   // enter scene 0 already lit (skip the from-black fade-in), reset the dwell timer
     }
     return true;
   }
@@ -2364,6 +2390,7 @@ set cull(v){ CULL=v?1:0; },
  set fp16(v){ FP16=v?1:0; }, get fp16(){ return FP16; },   // faithful fp16 half-register truncation in the surface fp
  set scene0loop(v){ SCENE0_LOOP=v?1:0; }, get scene0loop(){ return SCENE0_LOOP; },
  set s0range(v){ if(Array.isArray(v)&&v.length>=2){ S0_T0=+v[0]; S0_T1=+v[1]; } }, get s0range(){ return [S0_T0,S0_T1]; },
+ set scene0dwell(v){ SCENE0_DWELL=+v; }, get scene0dwell(){ return SCENE0_DWELL; },
  set patchexp(v){ PATCH_EXP=+v||1.0; }, get patchexp(){ return PATCH_EXP; },
  set despeckle(v){ DESPECKLE=+v||0; }, get despeckle(){ return DESPECKLE; },
  set tiles(v){ TILES=v?1:0; },                 // faithful per-patch tile earth (1) vs legacy cube map (0)
