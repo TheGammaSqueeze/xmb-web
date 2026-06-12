@@ -167,6 +167,7 @@ let SCENE0_LOOP=1;                             // MPGlobe.scene0loop: scene 0 PI
 let S0_T0=0.10, S0_T1=0.50;                    // scene-0 clean lit animT range (mean ~42, no night, no grazing notches; validated zero interior dark-notches + smooth limb across [0.10,0.50]). MPGlobe.s0range([a,b]).
 let s0dir=1;                                   // ping-pong direction
 let COV_ALPHA=0;                               // MPGlobe.covalpha: surface writes a COVERAGE=1 dst-alpha mask over the disc. PROVEN NO-OP in the warm faith path (0 changed px): the 63d3246d atmo over the disc is already negligible, so masking it off the disc changes nothing. Kept as a toggle. The real limb-concentrated "whole-earth glow" is the SURFACE falloff (real B-R peaks 66@+40 -> 28; web flat 49->43), NOT the atmosphere - next gap, RE-able from sc0_full.
+let FP16=1;                                    // MPGlobe.fp16: faithfully truncate the surface fp's half-register writes to fp16 (real RSX runs the fragment shader in half-float; FragmentProgram50 has clamp16() at exactly these sites). The web previously computed r2 in fp32, diverging slightly at the bright limb. Default ON = faithful port.
 let ATMO_OVER=0;
 let ATMO_DSTA=0;                              // MPGlobe.atmodsta: REAL dst-alpha atmo blend (src=ONE_MINUS_DST_ALPHA,dst=DST_ALPHA) captured live from DRAWCALLS                              // MPGlobe.atmoover: alpha-OVER atmo compositing (faithful music-globe REPLACE-with-coverage) vs legacy additive (white band)
 let ATMO_HDRC=0;                              // MPGlobe.atmohdrc: FAITHFUL HDR-domain composite -- render surface+atmo as LINEAR HDR, then ONE real dual-LUT tonemap (the limb HDR rolls off smoothly, no additive-LDR white band)
@@ -364,12 +365,17 @@ uniform vec4 fc[23];
 uniform float uDbg, uMode, uSlum, uTiles, uT2bad; uniform float uCovAlpha;
 uniform float uBias0; uniform float uBias2;   // REAL RSX LOD biases (-8.0 / -0.1562), runtime-tunable for sampling A/B   // uTiles=1 -> per-patch tiles; uT2bad=1 -> this patch's t02 detail tile is corrupt, sample cloud from the cube instead
 uniform float uLutScale, uFeedback;   // firmware LUT COORD_SCALE2 (tex14/15 are UNNORMALIZED: scale=1/128). default 1.0 (legacy). r2 is sampled at r2*uLutScale.
+uniform float uFp16;   // 1 = faithfully truncate the half-register writes to fp16 (real RSX runs the fp in half-float; FragmentProgram50 has clamp16() at these exact sites). 0 = legacy fp32.
 out vec4 ocol0;
 vec3 nrm(vec3 v){return length(v)>0.0?normalize(v):v;}
 vec3 fma3(vec3 a,vec3 b,vec3 c){return a*b+c;}
 vec2 fma2(vec2 a,vec2 b,vec2 c){return a*b+c;}
 float fma1(float a,float b,float c){return a*b+c;}
 vec3 pc3(vec3 x,float a,float b){return clamp(x,a,b);}
+// fp16 half-register truncation (RSX runs the fragment shader in half-float; emulates FragmentProgram50's clamp16()).
+float T1(float v){ return uFp16>0.5 ? unpackHalf2x16(packHalf2x16(vec2(v,0.0))).x : v; }
+vec2  T2(vec2  v){ return uFp16>0.5 ? unpackHalf2x16(packHalf2x16(v)) : v; }
+vec3  T3(vec3  v){ return uFp16>0.5 ? vec3(unpackHalf2x16(packHalf2x16(v.xy)), unpackHalf2x16(packHalf2x16(vec2(v.z,0.0))).x) : v; }
 void main(){
   vec4 tc1=vec4(vL,1.0), tc7=vec4(vN,1.0);
   vec3 sd = normalize(vSph);   // seamless cube-map sample direction (replaces per-patch tile UVs)
@@ -381,14 +387,14 @@ void main(){
   r3.xyz = (r3.xyz + -r2.xyz);
   r4.xyz = fma3(tc4.xxx, r3.xyz, r2.xyz);
   h0.xyz = nrm(tc1.xyz);
-  h3.z = (dot(h2.xyz,h0.xyz)/2.0);
+  h3.z = T1(dot(h2.xyz,h0.xyz)/2.0);   // fp 696: clamp16
   r0.z = (dot(-h2.xyz,h0.xyz)*2.0);
   r1.w = (h3.z + fc[0].x);
   r0.xyz = fma3(-h0.xyz, r0.zzz, -h2.xyz);
-  h1.zw = tc8.zw;
+  h1.zw = T2(tc8.zw);   // fp 700: clamp16
   r3.xyz = (-r4.xyz + fc[1].xyz);
   r2.x = ((uTiles>0.5 && uT2bad<0.5) ? texture(tex2, tc8.zw, uBias2).x : texture(cloudsCube, sd).x);   // fp: TEX2D(2, tc8.zw); REAL RSX bias -0.1562
-  h7.w = fma1(r2.x, fc[2].x, fc[2].y);
+  h7.w = T1(fma1(r2.x, fc[2].x, fc[2].y));   // fp 703: clamp16
   r2.x = (uTiles>0.5 ? texture(tex3, tc8.xy).x : texture(maskCube, sd).x);     // fp: TEX2D(3, tc8.xy)
   r1.xyz = fma3(r2.xxx, r3.xyz, r4.xyz);
   r4.zw = tc9.xy;
@@ -398,15 +404,15 @@ void main(){
   r4.x = fc[5].y;
   r1.xy = fma2(r3.xy, h7.ww, h1.zw);
   r1.xyz = ((uTiles>0.5 && uT2bad<0.5) ? texture(tex2, r1.xy, uBias2).xyz : texture(cloudsCube, sd).xyz);   // fp: TEX2D(2, r1.xy); REAL RSX bias -0.1562
-  h7.xyz = (r1.xyz * fc[6].z);
-  h7.w = r2.x;
-  h6.xyz = (-h5.xyz + fc[7].w);
-  h5.xyz = fma3(h7.xyz, h6.xyz, h5.xyz);
+  h7.xyz = T3(r1.xyz * fc[6].z);   // fp 713: clamp16
+  h7.w = T1(r2.x);   // fp 714: clamp16
+  h6.xyz = T3(-h5.xyz + fc[7].w);   // fp 715: clamp16
+  h5.xyz = T3(fma3(h7.xyz, h6.xyz, h5.xyz));   // fp 716: clamp16
   h7.z = dot(r0.xyz, fc[8].xyz);
   r0.xy = fma2(r4.zw, fc[9].xx, h1.zw);
   r0.xyz = ((uTiles>0.5 && uT2bad<0.5) ? texture(tex2, r0.xy, uBias2).xyz : texture(cloudsCube, sd).xyz);   // fp: TEX2D(2, r0.xy); REAL RSX bias -0.1562
   h0.xyz = pc3(fma3(-r1.xyz, fc[10].xxx, r0.xyz), 0.,1.);
-  h0.w = fc[11].y;
+  h0.w = T1(fc[11].y);   // fp 721: clamp16
   r0.zw = fc[12].xy;
   r2.x = texture(tex6, h7.zw).y;   // fp: TEX2D(6).x = env/specular BRDF LUT (ocean sun-glint). TEXDUMP of the 0xbf format stores its single channel in G (R/B all-zero, verified); the firmware's RSX remap reads it via .x -> sample .y here. Reading .x was all-zero => the glint never rendered.
   float gGlint=r2.x;   // DEBUG: the glint BRDF sample (uDbg>5.5 isolates it)
@@ -419,10 +425,10 @@ void main(){
   r1 = mix(texture(tex4, _t3), texture(tex4b, _t3), uT4Mix);   // bin crossfade (smooth terminator)
   h6.xyz = fma3(-r1.www, r3.xyz, r4.xyz);
   r4.xyz = texture(tex5, tc5.xy).xyz;
-  h6.xyz = (r4.xyz * h6.xyz);
-  h2.xyz = (r1.xyz * fc[18].y);   // (rim-painter isolation PROVED the bright rim is NOT the in-scatter: whole-h2 scaling moved the ring ratio the WRONG way; the rim lives in the IE/cloud/tone grazing terms - task #44)
-  h4.xyz = fma3(h1.xyz, r2.xxx, h5.xyz);
-  h3.xyz = fma3(-h0.xyz, h0.www, fc[19].xxx);
+  h6.xyz = T3(r4.xyz * h6.xyz);   // fp 733: clamp16
+  h2.xyz = T3(r1.xyz * fc[18].y);   // fp 734: clamp16   (rim-painter isolation PROVED the bright rim is NOT the in-scatter: whole-h2 scaling moved the ring ratio the WRONG way; the rim lives in the IE/cloud/tone grazing terms - task #44)
+  h4.xyz = T3(fma3(h1.xyz, r2.xxx, h5.xyz));   // fp 735: clamp16
+  h3.xyz = T3(fma3(-h0.xyz, h0.www, fc[19].xxx));   // fp 736: clamp16
   r3.xyz = max(h6.xyz, fc[20].xxx);
   r2.xyz = (h4.xyz * r3.xyz);
   r2.xyz = (fma3(r2.xyz, h3.xyz, h2.xyz) * 8.0);   // VERBATIM: firmware surface fp 506ad546 has this *8 ("* 8.")
@@ -434,7 +440,7 @@ void main(){
   tc = (tc*(1.0 + tc/(W*W)))/(1.0 + tc);
   // VERBATIM ramp encode = the firmware surface fp's actual output (its HDR tonemap LUT, tex14/tex15;
   // the UV clamp on r2 rolls off highlights -> bright close scenes stay dark, not blown white).
-  float maxlum = max(r2.x, r2.y);
+  float maxlum = T1(max(r2.x, r2.y));   // fp 741: h3.w (half)
   vec4 r0d = texture(tex13, gl_FragCoord.xy/32.0);   // backbuffer/dither (black -> 0)
   // VERBATIM firmware: tex14/tex15 are Y16_X16_FLOAT which CANNOT be remapped on real hw -> RPCS3 forces
   // remap to YXXX (captured remap=0x0000aae4 -> low byte 0x66). So texture().rgb = X (all three), .a = Y.
@@ -443,7 +449,7 @@ void main(){
   // remap 0x0000aae4 -> channel_map (2,1,2,1) with native (ch0=Y,ch1=X): fp reads tex15.xy=(R,G)=(ch1,ch0),
   // tex14.zw=(B,A)=(ch1,ch0). So R=tex15.ch1(.y), G=tex15.ch0(.x), B=tex14.ch1(.y). Validated R<G<B vs presents.
   vec2 e15 = texture(tex15, r2.xy*uLutScale).xy;                 // (.x=ch0, .y=ch1)
-  vec2 e14 = texture(tex14, vec2(r2.z, maxlum)*uLutScale).xy;    // (.x=ch0 -> A, .y=ch1 -> B)
+  vec2 e14 = texture(tex14, vec2(T1(r2.z), maxlum)*uLutScale).xy;    // fp 742/745: tex14 sampled at (clamp16(r2.z), h3.w); tex15 (above) uses full r2.xy   // (.x=ch0 -> A, .y=ch1 -> B)
   float X14 = e14.y;                                             // ch1 -> B
   // firmware: col0 = backbuffer(tex13)*fc21 + LUT. The web has no prev-frame feedback (tex13~0), so apply the
   // STEADY-STATE fixed point col0 = LUT/(1-fc21) (exact for a static frame; fc21=fc22=0.125 real). uFeedback toggles it.
@@ -1382,7 +1388,7 @@ function drawGlow(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
    gl.uniform1f(U('uT2bad'), (T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
-   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());gl.uniform1f(U('uFp16'),FP16);
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  // (per-scene limb atmo frame is set in resolveInscat -> ATMO_SCENE auto-managed)
@@ -1583,7 +1589,7 @@ function drawGlowFaith(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]);}
    gl.uniform1f(U('uT2bad'),(T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
-   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());gl.uniform1f(U('uFp16'),FP16);
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex&&!STARSONLY){ if(ATMO_REAL) drawAtmo(); else if(HDRC) drawAtmoLinear(); else drawAtmo(); }   // ATMO_REAL: the real music-globe fp f566cf05 is a SELF-CONTAINED LDR shader (own dual-LUT tonemap + dst-alpha composite); never route it through the HDR-additive linear path (= blown-out white). HDRC: HDR limb added in LINEAR domain into Fd; else legacy tonemapped LDR limb
@@ -1898,7 +1904,7 @@ function draw(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
    gl.uniform1f(U('uT2bad'), (T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
-   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());gl.uniform1f(U('uFp16'),FP16);
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex)drawAtmo();
@@ -2351,6 +2357,7 @@ set cull(v){ CULL=v?1:0; },
  set basegain(v){ BASE_GAIN=+v||1.0; }, get basegain(){ return BASE_GAIN; },
  set basescale(v){ BASE_SCALE=+v||1.0; }, get basescale(){ return BASE_SCALE; },
  set covalpha(v){ COV_ALPHA=v?1:0; }, get covalpha(){ return COV_ALPHA; },
+ set fp16(v){ FP16=v?1:0; }, get fp16(){ return FP16; },   // faithful fp16 half-register truncation in the surface fp
  set scene0loop(v){ SCENE0_LOOP=v?1:0; }, get scene0loop(){ return SCENE0_LOOP; },
  set s0range(v){ if(Array.isArray(v)&&v.length>=2){ S0_T0=+v[0]; S0_T1=+v[1]; } }, get s0range(){ return [S0_T0,S0_T1]; },
  set patchexp(v){ PATCH_EXP=+v||1.0; }, get patchexp(){ return PATCH_EXP; },
