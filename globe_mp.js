@@ -163,6 +163,9 @@ let ATMO_VFLIP=0;                             // orientation probe for the atmo 
 let ATMO_REAL=0;                              // EFFECTIVE per-frame value (set in drawGlowFaith from ATMO_REAL_MASTER & the per-scene whitelist). REAL atmosphere compositing (fp c47472608e740973 = 63d3246d math) + dst-alpha blend (src=773/dst=772, live D21) + sky-alpha=0 clear + camera-guard bypass + HDRC off. Replaces the legacy additive "huge white band".
 let ATMO_REAL_MASTER=1;                       // MPGlobe.atmoreal: feature toggle for the real dst-alpha atmosphere.
 let ATMO_REAL_SCENES=[0];                      // scenes validated for the real dst-alpha law (scene 0 proven vs sc0_full presents). Gated per directive "scene 0 only" so other scenes keep their prior path until each is individually re-validated.
+let SCENE0_LOOP=1;                             // MPGlobe.scene0loop: scene 0 PING-PONGS over its clean LIT range [S0_T0,S0_T1] instead of sweeping into the dark/grazing/notched night back-half (which is a cross-playthrough camera mismatch vs the all-daytime sc0_full ground truth). Removes the black patches, the slow-to-black, and the sudden band-on-loop. No fade dip (animT stays away from 0/1). Scene-0 only.
+let S0_T0=0.10, S0_T1=0.50;                    // scene-0 clean lit animT range (mean ~42, no night, no grazing notches; validated zero interior dark-notches + smooth limb across [0.10,0.50]). MPGlobe.s0range([a,b]).
+let s0dir=1;                                   // ping-pong direction
 let COV_ALPHA=0;                               // MPGlobe.covalpha: surface writes a COVERAGE=1 dst-alpha mask over the disc. PROVEN NO-OP in the warm faith path (0 changed px): the 63d3246d atmo over the disc is already negligible, so masking it off the disc changes nothing. Kept as a toggle. The real limb-concentrated "whole-earth glow" is the SURFACE falloff (real B-R peaks 66@+40 -> 28; web flat 49->43), NOT the atmosphere - next gap, RE-able from sc0_full.
 let ATMO_OVER=0;
 let ATMO_DSTA=0;                              // MPGlobe.atmodsta: REAL dst-alpha atmo blend (src=ONE_MINUS_DST_ALPHA,dst=DST_ALPHA) captured live from DRAWCALLS                              // MPGlobe.atmoover: alpha-OVER atmo compositing (faithful music-globe REPLACE-with-coverage) vs legacy additive (white band)
@@ -691,24 +694,26 @@ void main(){
   vec4 e4 = texture(uEarth, vUV);
   vec3 e = e4.xyz;
   if(uDespeckle>0.5){
-    // Fill the thin DARK SEAM GAPS at the earth-patch boundaries (sub-pixel rasterization holes the real PS3
-    // avoids via shared indexed verts; the web computes each patch's shared edge independently -> float gaps).
-    // The gaps are 1-5px wide, so bracket at increasing distance (1..4 px); the moment a dark center is
-    // straddled by BRIGHT pixels on both sides of one axis, fill from that bracket. Bright-on-both-sides is the
-    // gap signature; real dark features (terminator, clouds) are not bright-bracketed at these short distances.
+    // Fill the thin DARK SEAM/DASH gaps at the earth limb. The dense base sphere fills the BIG sky-opening
+    // notches; what remains at the grazing limb is thin near-black DASHES sitting INSIDE the bright limb glow
+    // (bright on BOTH sides). Bracket at STEPPED distance up to 12px; the moment a near-black center is
+    // straddled by BRIGHT earth/limb on both sides of one axis, fill from that bracket. Bright-on-both-sides is
+    // the dash signature: the black SKY above the limb is bright on only ONE side, so it is never filled; real
+    // dark features (terminator) are L>0.05.
     vec2 px=vec2(1.0/uDims.x,1.0/uDims.y);
+    int dd[8]=int[8](1,2,3,4,6,8,10,12);
     float L=dot(e,vec3(0.333)); bool filled=false;
-    // Only NEAR-BLACK centers (the seam gap = the black FBO clear, L~0) - never dim clouds/terminator (L>0.06).
+    // Only NEAR-BLACK centers (the gap = the black FBO clear, L~0) - never dim clouds/terminator (L>0.05).
     if(L<0.05){
-      for(int d=1; d<=4; d++){
-        if(filled) break;
-        vec3 eL=texture(uEarth,vUV-vec2(px.x*float(d),0.0)).xyz, eR=texture(uEarth,vUV+vec2(px.x*float(d),0.0)).xyz;
+      for(int k=0;k<8;k++){
+        if(filled) break; float d=float(dd[k]);
+        vec3 eL=texture(uEarth,vUV-vec2(px.x*d,0.0)).xyz, eR=texture(uEarth,vUV+vec2(px.x*d,0.0)).xyz;
         float Lh=min(dot(eL,vec3(0.333)),dot(eR,vec3(0.333)));
         if(Lh>0.10){ e=(eL+eR)*0.5; filled=true; }
       }
-      for(int d=1; d<=4; d++){
-        if(filled) break;
-        vec3 eU=texture(uEarth,vUV-vec2(0.0,px.y*float(d))).xyz, eD=texture(uEarth,vUV+vec2(0.0,px.y*float(d))).xyz;
+      for(int k=0;k<8;k++){
+        if(filled) break; float d=float(dd[k]);
+        vec3 eU=texture(uEarth,vUV-vec2(0.0,px.y*d)).xyz, eD=texture(uEarth,vUV+vec2(0.0,px.y*d)).xyz;
         float Lv=min(dot(eU,vec3(0.333)),dot(eD,vec3(0.333)));
         if(Lv>0.10){ e=(eU+eD)*0.5; filled=true; }
       }
@@ -2070,8 +2075,18 @@ function tick(){
       let ns=sceneIdx,g=0; do{ ns=(ns+1)%SCENES.length; }while(SCENE_SKIP&&SCENE_SKIP.has(ns)&&++g<SCENES.length);
       capSceneLut(ns,0); if(TONELUT_PS) capSceneTone(ns,0);
     }
-    animT += 1/span;
-    if(animT>1){ animT=0; let g=0; do{ sceneIdx=(sceneIdx+1)%SCENES.length; }while(SCENE_SKIP&&SCENE_SKIP.has(sceneIdx)&&++g<SCENES.length); setFC(); }
+    const _scN=(SCENES_IDX&&SCENES_IDX[sceneIdx])?SCENES_IDX[sceneIdx].scene:sceneIdx;
+    if(SCENE0_LOOP && _scN===0){
+      // PING-PONG over the clean lit range: forward to S0_T1, reverse to S0_T0, repeat. Never advance to the
+      // dark/grazing night back-half, never dip to black. = a stable, continuously-lit scene 0.
+      animT += s0dir*(1/span);
+      if(animT>=S0_T1){ animT=S0_T1; s0dir=-1; }
+      else if(animT<=S0_T0){ animT=S0_T0; s0dir=1; }
+    } else {
+      animT += 1/span;
+      if(animT>1){ animT=0; let g=0; do{ sceneIdx=(sceneIdx+1)%SCENES.length; }while(SCENE_SKIP&&SCENE_SKIP.has(sceneIdx)&&++g<SCENES.length); setFC();
+        if(SCENE0_LOOP && SCENES_IDX&&SCENES_IDX[sceneIdx]&&SCENES_IDX[sceneIdx].scene===0){ animT=S0_T0; s0dir=1; } }   // enter scene 0 already lit (skip the from-black fade-in)
+    }
     return true;
   }
   if(!PATHS||!preset) return false;     // fallback: firmware camera.path (camera only)
@@ -2336,6 +2351,8 @@ set cull(v){ CULL=v?1:0; },
  set basegain(v){ BASE_GAIN=+v||1.0; }, get basegain(){ return BASE_GAIN; },
  set basescale(v){ BASE_SCALE=+v||1.0; }, get basescale(){ return BASE_SCALE; },
  set covalpha(v){ COV_ALPHA=v?1:0; }, get covalpha(){ return COV_ALPHA; },
+ set scene0loop(v){ SCENE0_LOOP=v?1:0; }, get scene0loop(){ return SCENE0_LOOP; },
+ set s0range(v){ if(Array.isArray(v)&&v.length>=2){ S0_T0=+v[0]; S0_T1=+v[1]; } }, get s0range(){ return [S0_T0,S0_T1]; },
  set patchexp(v){ PATCH_EXP=+v||1.0; }, get patchexp(){ return PATCH_EXP; },
  set despeckle(v){ DESPECKLE=+v||0; }, get despeckle(){ return DESPECKLE; },
  set tiles(v){ TILES=v?1:0; },                 // faithful per-patch tile earth (1) vs legacy cube map (0)
