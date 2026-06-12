@@ -366,6 +366,7 @@ uniform float uDbg, uMode, uSlum, uTiles, uT2bad; uniform float uCovAlpha;
 uniform float uBias0; uniform float uBias2;   // REAL RSX LOD biases (-8.0 / -0.1562), runtime-tunable for sampling A/B   // uTiles=1 -> per-patch tiles; uT2bad=1 -> this patch's t02 detail tile is corrupt, sample cloud from the cube instead
 uniform float uLutScale, uFeedback;   // firmware LUT COORD_SCALE2 (tex14/15 are UNNORMALIZED: scale=1/128). default 1.0 (legacy). r2 is sampled at r2*uLutScale.
 uniform float uFp16;   // 1 = faithfully truncate the half-register writes to fp16 (real RSX runs the fp in half-float; FragmentProgram50 has clamp16() at these exact sites). 0 = legacy fp32.
+uniform float uExpFix; // SCENE-0 GLOW: compute col0.w (the bloom-encode key / display HDR-exponent) from a=1-HDR/(display*8) (the captured tone LUT lacks this channel)
 out vec4 ocol0;
 vec3 nrm(vec3 v){return length(v)>0.0?normalize(v):v;}
 vec3 fma3(vec3 a,vec3 b,vec3 c){return a*b+c;}
@@ -460,6 +461,7 @@ void main(){
   col0.y = fma1(r0d.y, fc[21].x, e15.x) * fb21;   // G = tex15.ch0
   col0.z = fma1(r0d.z, fc[22].x, X14) * fb22;     // B = tex14.ch1
   col0.w = fma1(r0d.w, fc[22].x, e14.x) * fb22;   // A = tex14.ch0 (the display HDR-exponent channel: ~1 dark -> ~0 bright; feeds the encode's rgb*a*8)
+  if(uExpFix>0.5){ float dmag=max(max(col0.x,col0.y),col0.z); float hmag=max(maxlum, max(r2.x,max(r2.y,r2.z))); col0.w = clamp(1.0 - hmag/(dmag*8.0+1e-3), 0.0, 1.0); }  // a=1-HDR/(display*8); matches real acdc80000.A to <0.02
   if(uLimbSoft>0.0){   // display-space highlight knee: compress the part above 0.65 so the blown 255 limb wall becomes the real's soft ~0.88 band (atmospheric spread, idx 0); dark interior (<0.65) untouched
     vec3 ov=max(col0.xyz-0.65,0.0);
     col0.xyz=0.65 + ov/(1.0+uLimbSoft*ov);
@@ -1388,7 +1390,7 @@ function drawGlow(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
    gl.uniform1f(U('uT2bad'), (T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
-   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());gl.uniform1f(U('uFp16'),FP16);
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());gl.uniform1f(U('uFp16'),FP16);gl.uniform1f(U('uExpFix'),(ATMO_REAL||(typeof window!=='undefined'&&window.__expfix))?1.0:0.0);
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  // (per-scene limb atmo frame is set in resolveInscat -> ATMO_SCENE auto-managed)
@@ -1589,7 +1591,7 @@ function drawGlowFaith(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]);}
    gl.uniform1f(U('uT2bad'),(T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
-   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());gl.uniform1f(U('uFp16'),FP16);
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());gl.uniform1f(U('uFp16'),FP16);gl.uniform1f(U('uExpFix'),(ATMO_REAL||(typeof window!=='undefined'&&window.__expfix))?1.0:0.0);
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex&&!STARSONLY){ if(ATMO_REAL) drawAtmo(); else if(HDRC) drawAtmoLinear(); else drawAtmo(); }   // ATMO_REAL: the real music-globe fp f566cf05 is a SELF-CONTAINED LDR shader (own dual-LUT tonemap + dst-alpha composite); never route it through the HDR-additive linear path (= blown-out white). HDRC: HDR limb added in LINEAR domain into Fd; else legacy tonemapped LDR limb
@@ -1605,6 +1607,7 @@ function drawGlowFaith(){
    if(ww){ BLOOMDISP=ww.some(w=>animT>=w[0]&&animT<=w[1])?1:0; }  // per-(scene,t-window) winners (clean warmed 12-pt protocol; tertiles damaged scene tails - sc24 t=0.94 was 53 vs 17)
    else if(tw){ BLOOMDISP=tw[Math.min(2,Math.floor(animT*3))]?1:0; }   // per-(scene,t-tertile): restores the sc24 burst corona while keeping early-scene legacy
    else { BLOOMDISP=(FAITH_POLICY.bloomScenes&&FAITH_POLICY.bloomScenes.indexOf(scid)>=0)?1:0; } }
+ if(!FAITH_AUTO) BLOOMDISP = ATMO_REAL ? 1 : 0;   // SCENE-0 GLOW gate: bloom-of-display ON for scene 0 (ATMO_REAL), OFF for all others (must RESET to 0 - BLOOMDISP is a persistent global; else scene 0's =1 leaks into the next scene and blows it white)
  const burstRows=(BURST && BURST_FAN && FLARE_SCENES && typeof GlobeBurst!=='undefined' && SCENES_IDX && SCENES_IDX[sceneIdx]) ? (FLARE_SCENES[String(SCENES_IDX[sceneIdx].scene)]||null) : null;
  // live-harvested glare rows can drive the same verbatim fan: vc window captured at c[256..272]
  // (VS FC(0) = c257 -> shift one), fp consts = the 17 glare rows. GLOW2-gated.
@@ -1710,13 +1713,14 @@ function drawGlowFaith(){
    const glow=GlobeGlow.buildGlow(gl,ENC.tex,512,512,{blurWeights:blurW,upWeights:upW});_lastGlow=glow;
    // final composite: write-graph proven NET = display*1.0 + bloom*FC0 (d062 adds bloom*FC0
    // - display*FC1; the star tile pass d064+ adds stars + display*FC1 back; no temporal EMA).
-   const c0=(BLOOMC1&&row&&row.comp)?row.comp[1]:(row&&row.comp?row.comp[0]:1.0);   // BLOOMC1: add bloom at FC1 (0.125, display-units) instead of FC0 (1.0) - the two firmware-derived interpretations of the d053 composite, A/B vs presents
+   const c0 = ATMO_REAL ? ((row&&row.comp?row.comp[0]:1.0)*0.5)   // SCENE-0 GLOW: firmware composite weight FC0 * 0.5 (reproduces the MEASURED real bloom +3.9, validated limb-profile err 5.4; the 0.5 compensates for the uncaptured ENC_UP_W combine weights, sum 13.25 ~2x). Stable scalar, not per-frame.
+              : ((BLOOMC1&&row&&row.comp)?row.comp[1]:(row&&row.comp?row.comp[0]:1.0));   // BLOOMC1: add bloom at FC1 (0.125, display-units) instead of FC0 (1.0) - the two firmware-derived interpretations of the d053 composite, A/B vs presents
    gl.bindFramebuffer(36160,null);gl.viewport(0,0,W,H);gl.disable(2929);gl.disable(2884);gl.disable(3042);
    gl.useProgram(cprog);
    gl.activeTexture(33984+0);gl.bindTexture(3553,FP.tex);gl.uniform1i(C('uEarth'),0);
    gl.activeTexture(33984+1);gl.bindTexture(3553,glow.tex);gl.uniform1i(C('uGlow'),1);
    let cg=c0;
-   if(FAITH_POLICY&&FAITH_POLICY.bloomGain&&SCENES_IDX&&SCENES_IDX[sceneIdx]){
+   if(!ATMO_REAL && FAITH_POLICY&&FAITH_POLICY.bloomGain&&SCENES_IDX&&SCENES_IDX[sceneIdx]){   // SCENE-0 GLOW: skip the per-frame bloomGain envelope for scene 0 (the directive's "remove the per-frame bloom-gain flicker hack") - it was fitted to 0 to suppress the OLD broken-alpha encode and would zero the now-correct bloom
      const g=FAITH_POLICY.bloomGain[String(SCENES_IDX[sceneIdx].scene)];
      if(typeof g==='number') cg=c0*g;   // per-scene present-fitted gain (approximation pass, user-approved 2026-06-11)
      else if(Array.isArray(g)&&g.length){   // per-(scene,t) ENVELOPE [[t,gain],...] - piecewise linear (the real bloom animates per frame; fitted per t vs the presents)
@@ -1904,7 +1908,7 @@ function draw(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
    gl.uniform1f(U('uT2bad'), (T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
-   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());gl.uniform1f(U('uFp16'),FP16);
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());gl.uniform1f(U('uFp16'),FP16);gl.uniform1f(U('uExpFix'),(ATMO_REAL||(typeof window!=='undefined'&&window.__expfix))?1.0:0.0);
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex)drawAtmo();
