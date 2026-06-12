@@ -170,6 +170,10 @@ let SCENE0_DWELL=1080;                          // MPGlobe.scene0dwell: frames s
 let s0frames=0;                                // frames spent in scene 0 this visit
 let s0exit=0;                                  // 1 = scene 0 is fading out toward the scene-1 cut
 let s0exitF=1.0;                               // scene-0 exit dip multiplier (1=lit, 0=black); drives drawFade, then advances
+let XFADE_SECS=10;                              // MPGlobe.xfadeSecs: slow dip-to-black duration EACH side of a scene cut (10s out + 10s in)
+let SCENE_MIN_SECS=60;                          // MPGlobe.sceneMinSecs: each scene's visible forward roll plays for AT LEAST this many seconds (playback slowed to fit; camera path unchanged)
+let transState=0;                              // 0=play (roll), 1=fade-out (dip to black), 2=fade-in (new scene rolls up from black)
+let transF=1.0;                                // unified transition fade multiplier (1=full scene, 0=black)
 let COV_ALPHA=0;                               // MPGlobe.covalpha: surface writes a COVERAGE=1 dst-alpha mask over the disc. PROVEN NO-OP in the warm faith path (0 changed px): the 63d3246d atmo over the disc is already negligible, so masking it off the disc changes nothing. Kept as a toggle. The real limb-concentrated "whole-earth glow" is the SURFACE falloff (real B-R peaks 66@+40 -> 28; web flat 49->43), NOT the atmosphere - next gap, RE-able from sc0_full.
 let FP16=1;                                    // MPGlobe.fp16: faithfully truncate the surface fp's half-register writes to fp16 (real RSX runs the fragment shader in half-float; FragmentProgram50 has clamp16() at exactly these sites). The web previously computed r2 in fp32, diverging slightly at the bright limb. Default ON = faithful port.
 let ATMO_OVER=0;
@@ -2079,7 +2083,10 @@ function tick(){
     // slowed the short ones). *2 = 30fps-real -> 60fps-web ticks. Falls back to SCENE_SECS otherwise.
     const F=SCENES[sceneIdx];
     const _si=(REALDUR&&SCENES_IDX&&SCENES_IDX[sceneIdx])?SCENES_IDX[sceneIdx]:null;
-    const span=_si?Math.min(SCENE_CAP*60,Math.max(600,(_si.frame1-_si.frame0)*2)):SCENE_SECS*60;   // clamp to [10s, SCENE_CAP s] (camera path faithful; only time-scaling normalized so it is never frozen)
+    let span=_si?Math.min(SCENE_CAP*60,Math.max(600,(_si.frame1-_si.frame0)*2)):SCENE_SECS*60;   // clamp to [10s, SCENE_CAP s] (camera path faithful; only time-scaling normalized so it is never frozen)
+    const _scN0=(SCENES_IDX&&SCENES_IDX[sceneIdx])?SCENES_IDX[sceneIdx].scene:sceneIdx;
+    { const startT=(SCENE0_LOOP&&_scN0===0)?S0_T0:0.0, endT=(SCENE0_LOOP&&_scN0===0)?S0_T1:1.0;
+      span=Math.max(span, (SCENE_MIN_SECS*60)/Math.max(0.05,endT-startT)); }   // each scene's VISIBLE roll plays >= SCENE_MIN_SECS (slow the playback to fit; camera path unchanged)
     const s=sceneAt(F,animT); for(const k of SCENE_KEYS){ if(s[k]) D.shared[k]=s[k]; }
     if(s.fc) curFC=s.fc;   // per-row captured fp consts override the per-scene mid-row set
     if(USE_CAP){
@@ -2094,34 +2101,28 @@ function tick(){
     }
     draw();
     const _scN=(SCENES_IDX&&SCENES_IDX[sceneIdx])?SCENES_IDX[sceneIdx].scene:sceneIdx;
-    let _fade=fadeFactor(animT, span/60);   // dip-to-black at scene boundaries (fade length = FADE_SECS of THIS scene's real duration)
-    if(SCENE0_LOOP && _scN===0 && s0exit) _fade=Math.min(_fade, s0exitF);   // scene-0 exit dip (held lit view fades to black, then we advance)
-    drawFade(_fade);
-    if(USE_CAP && (animT>0.8 || (SCENE0_LOOP&&_scN===0&&s0exit))){   // prefetch the NEXT scene's first bins during this scene's tail/fade (incl. scene 0's exit dip) so its limb+tonemap are ready at the cut
+    drawFade(transF);   // unified slow transition fade (10s dip out + 10s fade in); transF=1 during play = no-op
+    if(USE_CAP && transState!==0){   // prefetch the NEXT scene's first bins during the fade so its limb+tonemap are ready at the cut
       let ns=sceneIdx,g=0; do{ ns=(ns+1)%SCENES.length; }while(SCENE_SKIP&&SCENE_SKIP.has(ns)&&++g<SCENES.length);
       capSceneLut(ns,0); if(TONELUT_PS) capSceneTone(ns,0);
     }
-    if(SCENE0_LOOP && _scN===0){
-      if(!s0exit){
-        // PING-PONG over the clean lit range: forward to S0_T1, reverse to S0_T0. After SCENE0_DWELL frames,
-        // begin the exit dip at the NEXT calm turnaround (a bound) so the held view never jumps the camera.
-        animT += s0dir*(1/span);
-        let atBound=false;
-        if(animT>=S0_T1){ animT=S0_T1; s0dir=-1; atBound=true; }
-        else if(animT<=S0_T0){ animT=S0_T0; s0dir=1; atBound=true; }
-        s0frames++;
-        if(SCENE0_DWELL>0 && s0frames>=SCENE0_DWELL && atBound){ s0exit=1; }   // hold animT at this bound through the dip
-      } else {
-        // hold the lit view (already at a bound) and ramp the dip to black over FADE_SECS, then advance to
-        // scene 1 (its own fadeFactor fades it IN from black = a smooth dip-to-black cut, the firmware style).
-        s0exitF -= 1/Math.max(1,FADE_SECS*60);
-        if(s0exitF<=0){ s0exitF=1.0; s0exit=0; s0frames=0;
-          let g=0; do{ sceneIdx=(sceneIdx+1)%SCENES.length; }while(SCENE_SKIP&&SCENE_SKIP.has(sceneIdx)&&++g<SCENES.length); setFC(); animT=0; s0dir=1; }
-      }
-    } else {
+    // ---- continuous-roll cycle with slow dip-to-black cuts: play (roll >= SCENE_MIN_SECS) -> fade out (XFADE_SECS)
+    //      -> advance scene -> fade in (XFADE_SECS, new scene rolling) -> play. Scene 0 rolls its clean lit range
+    //      [S0_T0,S0_T1] forward only (no bounce, night back-half skipped); other scenes roll [0,1].
+    const _endT=(SCENE0_LOOP&&_scN===0)?S0_T1:1.0;
+    if(transState===0){
       animT += 1/span;
-      if(animT>1){ animT=0; let g=0; do{ sceneIdx=(sceneIdx+1)%SCENES.length; }while(SCENE_SKIP&&SCENE_SKIP.has(sceneIdx)&&++g<SCENES.length); setFC();
-        if(SCENE0_LOOP && SCENES_IDX&&SCENES_IDX[sceneIdx]&&SCENES_IDX[sceneIdx].scene===0){ animT=S0_T0; s0dir=1; s0frames=0; s0exit=0; s0exitF=1.0; } }   // enter scene 0 already lit (skip the from-black fade-in), reset the dwell timer
+      if(animT>=_endT){ animT=_endT; transState=1; }   // reached the end of the roll -> begin the slow dip to black
+    } else if(transState===1){
+      transF -= 1/Math.max(1,XFADE_SECS*60);            // FADE OUT over XFADE_SECS (hold the end frame)
+      if(transF<=0){ transF=0; transState=2;
+        let g=0; do{ sceneIdx=(sceneIdx+1)%SCENES.length; }while(SCENE_SKIP&&SCENE_SKIP.has(sceneIdx)&&++g<SCENES.length); setFC();
+        animT=(SCENES_IDX&&SCENES_IDX[sceneIdx]&&SCENES_IDX[sceneIdx].scene===0)?S0_T0:0.0; }
+    } else {
+      animT += 1/span;                                  // FADE IN over XFADE_SECS while the new scene rolls up from black
+      const eT=(SCENE0_LOOP&&_scN===0)?S0_T1:1.0; if(animT>=eT) animT=eT;
+      transF += 1/Math.max(1,XFADE_SECS*60);
+      if(transF>=1){ transF=1; transState=0; }
     }
     return true;
   }
@@ -2249,6 +2250,7 @@ async function load(){
    SCENE_SKIP=new Set(); SCENES.forEach((F,i)=>{ if(!F||F.length<3||motionOf(F)<1.0) SCENE_SKIP.add(i); });
    if(SCENE_SKIP.size>=SCENES.length) SCENE_SKIP.clear();
    while(SCENE_SKIP.has(sceneIdx)) sceneIdx=(sceneIdx+1)%SCENES.length;   // start on the first real scene
+   { const sc0=(SCENES_IDX&&SCENES_IDX[sceneIdx]&&SCENES_IDX[sceneIdx].scene===0); animT=(SCENE0_LOOP&&sc0)?S0_T0:0.0; transState=2; transF=0.0; }   // first scene fades IN from black, scene 0 starts at the clean range start
    try{ SCENE_FC=await fetch(BASE+'scene_fc'+SUF+'.json').then(r=>r.json()); }catch(e){ SCENE_FC=null; }
    if(USE_COH && !USE_CAP){ ATMO_SCENES=await Promise.all(idx.map(s=>fetch(BASE+'atmo_scene_'+String(s.scene).padStart(2,'0')+'_coh.json').then(r=>r.ok?r.json():null).catch(()=>null))); ATMO=1; }
    else if(USE_CAP){
@@ -2391,6 +2393,8 @@ set cull(v){ CULL=v?1:0; },
  set scene0loop(v){ SCENE0_LOOP=v?1:0; }, get scene0loop(){ return SCENE0_LOOP; },
  set s0range(v){ if(Array.isArray(v)&&v.length>=2){ S0_T0=+v[0]; S0_T1=+v[1]; } }, get s0range(){ return [S0_T0,S0_T1]; },
  set scene0dwell(v){ SCENE0_DWELL=+v; }, get scene0dwell(){ return SCENE0_DWELL; },
+ set xfadeSecs(v){ XFADE_SECS=Math.max(0.1,+v); }, get xfadeSecs(){ return XFADE_SECS; },        // dip-to-black duration each side of a scene cut
+ set sceneMinSecs(v){ SCENE_MIN_SECS=Math.max(1,+v); }, get sceneMinSecs(){ return SCENE_MIN_SECS; }, // min visible roll per scene
  set patchexp(v){ PATCH_EXP=+v||1.0; }, get patchexp(){ return PATCH_EXP; },
  set despeckle(v){ DESPECKLE=+v||0; }, get despeckle(){ return DESPECKLE; },
  set tiles(v){ TILES=v?1:0; },                 // faithful per-patch tile earth (1) vs legacy cube map (0)
