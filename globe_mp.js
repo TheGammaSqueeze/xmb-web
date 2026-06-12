@@ -163,6 +163,7 @@ let ATMO_VFLIP=0;                             // orientation probe for the atmo 
 let ATMO_REAL=0;                              // EFFECTIVE per-frame value (set in drawGlowFaith from ATMO_REAL_MASTER & the per-scene whitelist). REAL atmosphere compositing (fp c47472608e740973 = 63d3246d math) + dst-alpha blend (src=773/dst=772, live D21) + sky-alpha=0 clear + camera-guard bypass + HDRC off. Replaces the legacy additive "huge white band".
 let ATMO_REAL_MASTER=1;                       // MPGlobe.atmoreal: feature toggle for the real dst-alpha atmosphere.
 let ATMO_REAL_SCENES=[0];                      // scenes validated for the real dst-alpha law (scene 0 proven vs sc0_full presents). Gated per directive "scene 0 only" so other scenes keep their prior path until each is individually re-validated.
+let COV_ALPHA=0;                               // MPGlobe.covalpha: surface writes a COVERAGE=1 dst-alpha mask over the disc. PROVEN NO-OP in the warm faith path (0 changed px): the 63d3246d atmo over the disc is already negligible, so masking it off the disc changes nothing. Kept as a toggle. The real limb-concentrated "whole-earth glow" is the SURFACE falloff (real B-R peaks 66@+40 -> 28; web flat 49->43), NOT the atmosphere - next gap, RE-able from sc0_full.
 let ATMO_OVER=0;
 let ATMO_DSTA=0;                              // MPGlobe.atmodsta: REAL dst-alpha atmo blend (src=ONE_MINUS_DST_ALPHA,dst=DST_ALPHA) captured live from DRAWCALLS                              // MPGlobe.atmoover: alpha-OVER atmo compositing (faithful music-globe REPLACE-with-coverage) vs legacy additive (white band)
 let ATMO_HDRC=0;                              // MPGlobe.atmohdrc: FAITHFUL HDR-domain composite -- render surface+atmo as LINEAR HDR, then ONE real dual-LUT tonemap (the limb HDR rolls off smoothly, no additive-LDR white band)
@@ -1352,7 +1353,7 @@ function drawGlow(){
  // win-remap in the VS already negates clip.y, so uFlipY=-1 cancels it -> correct, scene-independent). The
  // old default +1 mirrored the disc vertically (only invisible for near-centred daytime discs; glaring for
  // the eclipse, where the earth sits far below the frame). Verified vs TF gl_Position + ecl2/warm2 presents.
- gl.uniform1f(U('uFlipY'),-1.0);gl.uniform1f(U('uPatchExp'),PATCH_EXP);gl.uniform1f(U('uCovAlpha'),(typeof window!=='undefined'&&window.__covAlpha)?1.0:0.0);
+ gl.uniform1f(U('uFlipY'),-1.0);gl.uniform1f(U('uPatchExp'),PATCH_EXP);gl.uniform1f(U('uCovAlpha'),covAlphaOn());
  gl.uniform1f(U('uDbg'),0.0);
  gl.uniform1f(U('uMode'),5.0);          // linear HDR earth scene (r2.xyz)
  gl.uniform1f(U('uSlum'),SLUM);
@@ -1503,6 +1504,13 @@ function glareGfc(){   // nearest-t REAL per-scene glare consts (vp c868fd6a row
 // MVP, so its silhouette aligns exactly. Patches overdraw it everywhere they rasterize (zero regression on
 // non-grazing frames); only the grazing-angle silhouette notches reveal it as smooth earth instead of black.
 // Self-gates to the ATMO_REAL scene set (scene 0). Caller must have the target FBO bound; restores depth/cull.
+// COVERAGE dst-alpha mask: 1 over the disc for the ATMO_REAL scene set (so the dst-alpha atmosphere is
+// masked off the lit disc and concentrates at the limb/sky). window.__covAlpha forces it for testing.
+function covAlphaOn(){
+ if(typeof window!=='undefined'&&window.__covAlpha) return 1.0;
+ const sc=(SCENES_IDX&&SCENES_IDX[sceneIdx])?SCENES_IDX[sceneIdx].scene:sceneIdx;
+ return (COV_ALPHA && ATMO_REAL_MASTER && ATMO_REAL_SCENES.indexOf(sc)>=0) ? 1.0 : 0.0;
+}
 function drawBaseEarth(){
  const sc=(SCENES_IDX&&SCENES_IDX[sceneIdx])?SCENES_IDX[sceneIdx].scene:sceneIdx;
  const areal=(ATMO_REAL_MASTER && ATMO_REAL_SCENES.indexOf(sc)>=0);
@@ -1550,7 +1558,7 @@ function drawGlowFaith(){
  gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
  const fcsrc=curFC||D.fc; const fc=new Float32Array(23*4);for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
  resolveInscat();
- gl.uniform1f(U('uFlipY'),-1.0);gl.uniform1f(U('uDbg'),0.0);gl.uniform1f(U('uPatchExp'),PATCH_EXP);gl.uniform1f(U('uCovAlpha'),(typeof window!=='undefined'&&window.__covAlpha)?1.0:0.0);
+ gl.uniform1f(U('uFlipY'),-1.0);gl.uniform1f(U('uDbg'),0.0);gl.uniform1f(U('uPatchExp'),PATCH_EXP);gl.uniform1f(U('uCovAlpha'),covAlphaOn());
  gl.uniform1f(U('uMode'),HDRC?5.0:1.0);   // HDRC: emit LINEAR HDR r2 (deferred single tonemap); else col0 LDR
  gl.uniform1f(U('uSlum'),SLUM);
  gl.uniform1f(U('uLutScale'),1.0/128.0);gl.uniform1f(U('uFeedback'),1.0);   // faithful: 1/128 UN-scale + steady-state feedback
@@ -1864,7 +1872,7 @@ function draw(){
  const fc=new Float32Array(23*4); for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
  resolveInscat();
  const eclView=isEclipseView();
- gl.uniform1f(U('uFlipY'),-1.0);gl.uniform1f(U('uPatchExp'),PATCH_EXP);gl.uniform1f(U('uCovAlpha'),(typeof window!=='undefined'&&window.__covAlpha)?1.0:0.0);   // firmware-viewport identity (see the glow path); -1 for ALL scenes
+ gl.uniform1f(U('uFlipY'),-1.0);gl.uniform1f(U('uPatchExp'),PATCH_EXP);gl.uniform1f(U('uCovAlpha'),covAlphaOn());   // firmware-viewport identity (see the glow path); -1 for ALL scenes
  gl.uniform1f(U('uDbg'),DBG);
  gl.uniform1f(U('uMode'),ENC);
  gl.uniform1f(U('uSlum'),SLUM);
@@ -2327,6 +2335,7 @@ set cull(v){ CULL=v?1:0; },
  set basefill(v){ BASE_FILL=v?1:0; }, get basefill(){ return BASE_FILL; },
  set basegain(v){ BASE_GAIN=+v||1.0; }, get basegain(){ return BASE_GAIN; },
  set basescale(v){ BASE_SCALE=+v||1.0; }, get basescale(){ return BASE_SCALE; },
+ set covalpha(v){ COV_ALPHA=v?1:0; }, get covalpha(){ return COV_ALPHA; },
  set patchexp(v){ PATCH_EXP=+v||1.0; }, get patchexp(){ return PATCH_EXP; },
  set despeckle(v){ DESPECKLE=+v||0; }, get despeckle(){ return DESPECKLE; },
  set tiles(v){ TILES=v?1:0; },                 // faithful per-patch tile earth (1) vs legacy cube map (0)
