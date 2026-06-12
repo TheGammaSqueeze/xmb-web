@@ -148,6 +148,7 @@ let CAP_LUTB=null, CAP_MIX=0.0, CAP_LIMBB=null;   // crossfade partners         
 let CAP_T14=null, CAP_T15=null;              // per-scene surface-fp tonemap LUT (tex14/tex15) override; null=static lut14/lut15
 let TONELUT_PS=1;                            // MPGlobe.tonelut: per-scene tonemap LUT + verbatim ramp-encode output (brightness fix); default OFF until per-scene LUTs captured+validated
 let CAP_SCENE_TONE=null;                     // {sceneNum:[{fr,t14,t15}]} per-scene captured tonemap-LUT manifest (cap_scene_tonelut.json)
+let TONE_STICK=null;                          // {sceneNum:frame} per-scene STABLE tonemap frame (tone_stick.json). The captured tone LUT double-buffers, so per-frame bins alternate between the real settled tonemap and a half-written artifact (negative-mean, crushes to BLACK). The artifact often lands on frame0 -> _toneStick held it -> the WHOLE scene rendered black (scene-2-black bug). Stick the scene's MODAL/settled bin instead.
 let CAP_TONE_CACHE={};                        // frame -> {t14:tex, t15:tex} preloaded per-scene tonemap LUT textures
 let CAPLIB=null, CAPLIB_ON=0;                // captured LUT library {scenes:[{sun,c263,eye,name,limb}]} + nearest-pick
 let CAP_SCENE_LUTS=null;                     // cap set: {sceneNum:[{fr,surf,limb}]} per-scene captured in-scatter+limb LUT manifest
@@ -1042,10 +1043,13 @@ function capSceneTone(si, t, frOpt){
  if(!list||!list.length) return null;
  // PER-SCENE-STABLE tone: the captured tone bins alternate between two states (double-buffer
  // sampling artifact), so mid-scene swaps POP the display brightness (user report idx 4).
- // Hold the scene's first loaded tone pair for the whole scene.
+ // Hold ONE settled tone pair for the whole scene. The artifact buffer has a negative-mean LUT that
+ // crushes the display to BLACK; it frequently lands on frame0, so sticking the nearest-to-start bin
+ // turned the whole scene black (scene-2-black bug). Pin to the scene's MODAL/settled frame instead.
  const stick=_toneStick[String(s.scene)];
  if(stick) return stick;
- const fr=(frOpt!==undefined)?frOpt:(s.frame0 + t*((s.frame1-s.frame0)||1));
+ const stableFr=(TONE_STICK&&TONE_STICK[String(s.scene)]!==undefined)?TONE_STICK[String(s.scene)]:undefined;
+ const fr=(stableFr!==undefined)?stableFr:((frOpt!==undefined)?frOpt:(s.frame0 + t*((s.frame1-s.frame0)||1)));
  const bi=_nearestIdx(list,fr);
  for(let k=0;k<=LUT_LOOKAHEAD && bi+k<list.length;k++){ const e=list[bi+k];
    if(!CAP_TONE_CACHE[e.fr]) CAP_TONE_CACHE[e.fr]={t14:texF16(lfsURL(e.t14),128,128,true), t15:texF16(lfsURL(e.t15),128,128,true)}; }
@@ -2261,6 +2265,7 @@ async function load(){
      try{
        CAP_SCENE_LUTS=await fetch(BASE+'cap_scene_luts2.json').then(r=>r.ok?r.json():null).catch(()=>null);
        if(CAP_SCENE_LUTS) CAP_LUT_CACHE={};   // lazy: capSceneLut() loads each scene's nearest bin on demand (non-blocking; avoids preloading ~345MB)
+       TONE_STICK=await fetch(BASE+'tone_stick.json').then(r=>r.ok?r.json():null).catch(()=>null);   // per-scene settled-tonemap frame (avoids the double-buffer artifact bins, esp. frame0 -> scene-2-black)
      }catch(e){ CAP_SCENE_LUTS=null; }
      // per-scene surface-fp tonemap LUTs (brightness fix); loaded if present, gated by TONELUT_PS. 128x128 rgba32f (ch0/ch1).
      try{
