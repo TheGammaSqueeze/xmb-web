@@ -115,6 +115,9 @@ let STAR_POW=2.1493;                        // EARTH.mnu STARS POWSCALE (sparsen
 let STAR_TILE=6.0;                          // firmware tiles the texture on the cube -> MINIFICATION (crisp 1px stars).
                                             // 1-tile/face = magnification blobs+streaks (the "snow"). tile=6 matches the
                                             // real s15 present: size 1px, density 605 vs 598/MP, peak 14 vs 12 (score 0.12).
+                                            // KEEP tile=6: the sc12 "star grid" was the REPEAT seams (non-seamless texture),
+                                            // not the tiling itself - fixed by MIRRORED_REPEAT wrap in drawStarsTex (polish
+                                            // scenes only). Do NOT drop to tile=1 to "fix the grid" - that brings back the snow.
 let STARSONLY=0;                            // debug: render only the star field (skip earth) for validation
 // ECLIPSE SUN BURST (the "huge light burst from behind the globe"). SunDisc_FP (decompiled verbatim):
 // uv=quadUV-0.5; w=|uv.x|*SCALE_X - |uv.y|*SCALE_Y; glow=exp(w); col=glow*Color; occluded by the earth (ray-sphere).
@@ -123,6 +126,22 @@ let baseProg=null, baseMesh=null;            // continuous unit-sphere EARTH BAS
 let BASE_FILL=1;                              // MPGlobe.basefill: fill the grazing-angle limb notches with a continuous base sphere (ATMO_REAL/scene-0 path). Patches overdraw it; only notches reveal it.
 let BASE_GAIN=1.0;                            // base-layer brightness scale (rough match to the patch display tone; MPGlobe.basegain)
 let BASE_SCALE=1.0;                           // base-sphere radius scale = the true ideal limb (no ring past the patch limb). The dense base tessellation (256x128) makes its own silhouette solid, so it fills the patches' inward notches up to the ideal limb without overshoot. MPGlobe.basescale
+let BASE_POLISH=1;                            // POLISH 2026-06-13: draw the FULL base earth sphere behind the patches on polish scenes 2-49 too (not just ATMO_REAL 0/1). The closeup cameras only have high-res patch geometry for the lit cap; beyond it was pure black ("abruptly cut off"). The base sphere fills the rest of the globe silhouette with a dim day/night earth so you see a WHOLE sphere. MPGlobe.basepolish.
+let BASE_POLISH_GAIN=0.62;                     // brightness of the polish-scene base backdrop (dim night-earth, cool-tinted to match the surface night-lift). MPGlobe.basepolishgain.
+let BASE_DAY_K=1.5;                            // base day-side albedo gain (closes the bright/dim step at the patch->base boundary on scenes where the cap cuts through lit terrain). MPGlobe.basedayk.
+let BASE_CLOUD=0.9;                            // POLISH: cloud-layer strength on the base (the patches carry clouds; without them the base looks bare/flat = the seam). MPGlobe.basecloud.
+let BASE_NIGHT_MATCH=0.45;                     // POLISH: base night brightness as a fraction of the patch night-lift magnitude (1.0 = exact match = smallest step; 0.45 = gentle softening while the night stays dark-moody - big-night scenes don't flatten to bright blue). MPGlobe.basenightmatch.
+let BASE_RIM=0.7;                              // POLISH: soft atmosphere rim glow on the base silhouette (the whole globe limb glows; the night-side limb otherwise met space with a harder edge). MPGlobe.baserim.
+let BASE_RIM_POW=12.0;                          // POLISH: rim tightness (higher = thinner ring hugging the limb; lower = broad inner glow). Raised 6->12 (user review #3: atmosphere ring too thick on 9/10/12/23). MPGlobe.baserimpow.
+let BASE_RIM_D0=3.0, BASE_RIM_D1=4.5;          // POLISH: camera-distance fade for the rim (eye <D0 = close-up, no rim; >D1 = full thin ring). Close-ups already have the day-side shell. MPGlobe.baserimd0/d1.
+let BASE_LOD=0.0;                               // POLISH 2026-06-13 (REVISED after user review): Design-1 "crispen the base" was REJECTED - sharpening a 1024-cube earth behind razor patches still read as "badly textured" and the unsharp added high-freq noise = MORE shimmer. Disabled (0 = natural mip, soft, no aliasing). The base is now flattened to a HAZE instead (BASE_FLAT). MPGlobe.baselod.
+let BASE_DETAIL=0.0;                            // POLISH 2026-06-13 (REVISED): unsharp detail-restore disabled (it added the high-freq crawl the user saw as flicker). MPGlobe.basedetail.
+let BASE_FLAT=0.72;                             // POLISH 2026-06-13 (Design-2, user review): crush the soft-cube albedo contrast toward a dim cool HAZE so the base stops reading as a low-detail "second earth" -> the patch->base SEAM dissolves into a gradient and the texture motion-shimmer ("flicker") is gone. 0=full soft texture, 1=flat. MPGlobe.baseflat.
+let BASE_GLOW_K=0.4;                            // POLISH 2026-06-13 (Design-2): multiplier from BASE_RIM to the ALWAYS-ON atmospheric limb glow. Lowered 1.35->0.4 (user review #3: ring too thick on 9/10/12/23); now a thin subtle limb on top of the real atmosphere shell. MPGlobe.baseglowk.
+let BASE_DARK_SKIP=0.30;                        // POLISH 2026-06-13 (Design-2): SKIP the base draw entirely when the camera-facing hemisphere is this unlit (eclipse/back-lit, e.g. idx46) - drawing even a dim base muddied the clean atmosphere-only limb (idx46 base ON 11.5 vs OFF 23.2). litFrac below this -> no base = the nicer dark-crescent look is preserved. MPGlobe.basedarkskip.
+let BASE_DARK_SKIP_DIST=3.3;                    // POLISH 2026-06-13 (user review #3): only dark-SKIP when the camera is THIS close (crescent fills frame, e.g. idx46 el=2.14). FAR dark scenes (whole disc in frame, idx8/10/19 el=4-8) must FILL or you get "half the earth black at the bottom". MPGlobe.basedarkskipdist.
+let BASE_DARK_GAMMA=1.0;                         // POLISH 2026-06-13: shapes the per-scene darkness attenuation curve (att = pow(litFrac, gamma)). 1 = linear. MPGlobe.basedarkgamma.
+let _baseHdrK=1.0;                               // POLISH FIX 2026-06-13: brightness convention multiplier for drawBaseEarth's output. The two LDR paths (drawGlowFaith Fd, legacy draw) keep 1.0 (base already outputs display tone). The drawGlow HDR path renders the patches as LINEAR HDR (uMode=5 = display*~8) and the composite re-exposes by GLOW_SLUM*0.125 (~0.0986); set this to ~8 there so the base lands at the same display tone as the patches (else the base would be ~8x too dim through that exposure). drawGlow sets it around the base call and resets to 1.0.
 let sunDiscProg=null;                        // procedural sun-disc program (no texture)
 let SUNDISC=1;                               // MPGlobe.sundisc: render the burst
 let SUN_BRI=3.4;                             // SUN.mnu BRIGHTNESS 3.4 (the disc's HDR intensity scale)
@@ -163,7 +182,8 @@ let SURF_ECLFLIP=0;                           // DEPRECATED no-op: the surface e
 let ATMO_VFLIP=0;                             // orientation probe for the atmo shell _AtmSpaceIv LUT
 let ATMO_REAL=0;                              // EFFECTIVE per-frame value (set in drawGlowFaith from ATMO_REAL_MASTER & the per-scene whitelist). REAL atmosphere compositing (fp c47472608e740973 = 63d3246d math) + dst-alpha blend (src=773/dst=772, live D21) + sky-alpha=0 clear + camera-guard bypass + HDRC off. Replaces the legacy additive "huge white band".
 let ATMO_REAL_MASTER=1;                       // MPGlobe.atmoreal: feature toggle for the real dst-alpha atmosphere.
-let ATMO_REAL_SCENES=[0,1];                    // scenes validated for the real dst-alpha law + bloom-of-display glow. Scene 0 proven vs sc0_full presents; scene 1 (lit-earth closeup) proven vs cycle present f1203240 (camera-matched): the firmware bloom-of-display glow restores the soft limb halo (base limb-apex fell to ~2 by 30px up, real holds ~24->8; glow holds ~20->15 = near-field match). Other scenes keep their prior path until each is individually re-validated.
+let ATMO_REAL_SCENES=[0,1];                    // scenes validated for the real dst-alpha law + bloom-of-display glow. Scene 0/1 proven. Scene 2 atmosphere TESTED 2026-06-14: enabling the dst-alpha shell on the surface camera DESATURATED the dark face to grey (2.5,3.3,3.8) vs real blue (3.3,7.6,8.8) - the web's surface already provides the dark-face blue (1.1,6.5,7.5) in the warm path; the atmo over-paints grey. NOT the fix. Scene 2's real gap is the ~18% dim LUT + stars.
+let ATMO_SURFCAM_SCENES=null;                  // (kept as a gated hook; scene-2 atmo surfcam tested + rejected, see above)
 let SCENE0_LOOP=1;                             // MPGlobe.scene0loop: scene 0 PING-PONGS over its clean LIT range [S0_T0,S0_T1] instead of sweeping into the dark/grazing/notched night back-half (which is a cross-playthrough camera mismatch vs the all-daytime sc0_full ground truth). Removes the black patches, the slow-to-black, and the sudden band-on-loop. No fade dip (animT stays away from 0/1). Scene-0 only.
 let S0_T0=0.10, S0_T1=0.50;                    // scene-0 clean lit animT range (mean ~42, no night, no grazing notches; validated zero interior dark-notches + smooth limb across [0.10,0.50]). MPGlobe.s0range([a,b]).
 let s0dir=1;                                   // ping-pong direction
@@ -201,6 +221,16 @@ let DESPECKLE=1;                               // MPGlobe.despeckle: fill the th
 const BADT2 = new Set([]);
 let T2ALL=0;   // test: 1 = sample ALL patches' cloud detail from the clouds cube (uniform/seamless cloud), albedo still per-patch tiles
 let STAR_BRI=4.0;                            // star HDR brightness into the scene (calibrated through the GLOW tonemap so stars read faint, like the present; MPGlobe.starBri)
+let NIGHT_LIFT=2.5, NIGHT_LIFT_ON=1;         // POLISH 2026-06-13 (approx OK): soft night-side atmospheric fill strength (reveals the WHOLE globe - no black clipping on the night half). Tuned on scene 2 (sweep NL=2.5 = full globe visible, still reads dark). MPGlobe.nightLift / MPGlobe.nightLiftOn.
+let GLOW_POLISH_ON=1, GLOW_POLISH_GAIN=0.45, GLOW_POLISH_CAP=0.28;  // POLISH 2026-06-13: bounded soft bloom glow, gated per-scene (only the SCENE_POLISH scenes). For DARK scenes (e.g. scene 2) the bloom catches only the bright limb = a nice limb glow, no blow-out. Do NOT add BRIGHT scenes to SCENE_POLISH with this on (the bloom over-blooms a lit earth - use a limb-only bright-pass for those). MPGlobe.glowPolish / glowPolishGain / glowPolishCap.
+let SCENE_POLISH=[2];                         // POLISH 2026-06-13: explicit per-scene polish set (used when SCENE_POLISH_ALL=0). 0/1 never. MPGlobe.scenePolish.
+let SCENE_POLISH_ALL=1;                        // POLISH 2026-06-13: the SELF-LIMITING night-lift is the SAFE baseline (fixes the night-half black-clipping the user reported on ALL the other scenes; validated no blow-out). Applied to all 2-49. The risky GLOW is done scene-by-scene via GLOW_SCENES. 0/1 always excluded. MPGlobe.scenePolishAll.
+let GLOW_SCENES=[2,3,28,36];                           // POLISH 2026-06-13: SCENE-BY-SCENE glow - only these (DARK) scenes get the bounded bloom limb-glow (validated one at a time; bright scenes over-bloom so they stay night-lift-only until a limb-only bright-pass exists). MPGlobe.glowScenes.
+let HALO_STR=0.22, HALO_ON=1;                          // POLISH 2026-06-13: atmosphere limb HALO strength for scenes 2-49 (soft blue glow outside the silhouette). Lowered 0.8->0.22 + tighter sample radii (user review #3: ring too thick on 9/10/12/23). MPGlobe.halo / haloOn.
+let SPEC_STR=0.6, SPEC_ON=0, SPEC_POW=200.0;                           // POLISH 2026-06-13: ocean specular sun-glint strength (the "nice reflection") for the polish scenes. Bounded. MPGlobe.spec / specOn.
+function specAt(){ return (SPEC_ON && isPolishScene()) ? SPEC_STR : 0.0; }
+function isPolishScene(){ const sc=(SCENES_IDX&&SCENES_IDX[sceneIdx])?SCENES_IDX[sceneIdx].scene:sceneIdx; if(sc===0||sc===1) return false; return SCENE_POLISH_ALL?true:(SCENE_POLISH.indexOf(sc)>=0); }
+function isGlowScene(){ const sc=(SCENES_IDX&&SCENES_IDX[sceneIdx])?SCENES_IDX[sceneIdx].scene:sceneIdx; if(sc===0||sc===1) return false; return GLOW_SCENES.indexOf(sc)>=0; }
 
 const _sub=(a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
 const _cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
@@ -368,6 +398,10 @@ uniform float uT3Flip;
 uniform sampler2D tex4b; uniform float uT4Mix;   // bracketing in-scatter bin crossfade
 uniform float uLimbGain2;   // surface horizon-band gain (the ring painter; per-scene ratio-calibrated vs presents)
 uniform float uDiscGain;   // per-scene disc/face exposure lift
+uniform float uNightLift;  // 2026-06-13 polish (approx OK): soft atmospheric fill on the night hemisphere to kill the HARD black day/night shadow; smooth across the terminator. gated to scenes 2-49.
+uniform float uSpec;       // 2026-06-13 polish: ocean sun-glint strength (the "nice reflection") - a true view-dependent specular highlight. gated to polish scenes.
+uniform float uSpecPow;    // 2026-06-13 polish: sun-glint tightness (pow exponent on N.halfVec); higher = tighter spot.
+uniform vec3  uEye;        // 2026-06-13 polish: camera eye in the globe's world space (for the specular view direction)
 uniform float uLimbSoft;   // per-scene highlight compression (un-blows the saturated limb into a soft atmospheric band)   // tex0-3 = THIS patch's 4 firmware tiles (t00-t03)
 uniform samplerCube earthCube, cloudsCube, maskCube;   // legacy cube-map path (kept for DBG/fallback)
 uniform vec4 fc[23];
@@ -471,6 +505,28 @@ void main(){
   col0.z = fma1(r0d.z, fc[22].x, X14) * fb22;     // B = tex14.ch1
   col0.w = fma1(r0d.w, fc[22].x, e14.x) * fb22;   // A = tex14.ch0 (the display HDR-exponent channel: ~1 dark -> ~0 bright; feeds the encode's rgb*a*8)
   if(uExpFix>0.5){ float dmag=max(max(col0.x,col0.y),col0.z); float hmag=max(maxlum, max(r2.x,max(r2.y,r2.z))); col0.w = clamp(1.0 - hmag/(dmag*8.0+1e-3), 0.0, 1.0); }  // a=1-HDR/(display*8); matches real acdc80000.A to <0.02
+  if(uNightLift>0.0){    // POLISH 2026-06-13 (display space): reveal the WHOLE globe as a SMOOTH sphere - NO abrupt dark band / cut-off at the terminator.
+    float ndl = dot(nrm(tc7.xyz), nrm(tc1.xyz));         // N.sun: +1 day, -1 deep night
+    float cur = max(col0.x, max(col0.y, col0.z));        // current display brightness of this pixel
+    float dark = 1.0 - smoothstep(0.02, 0.50, cur);      // 1 where dark (incl. the dark terminator band), -> 0 as it gets lit (never over-lights a lit scene)
+    float night = smoothstep(0.62, -0.30, ndl);          // ramps in EARLY (from the LIT side of the terminator) so the dark terminator band fills too = no abrupt cut
+    vec3 nAmb = vec3(0.055, 0.115, 0.205);               // cool atmospheric night ambient (blue>green>red)
+    vec3 nTex = texture(earthCube, sd).xyz;              // faint earth texture so continents read on the night side
+    vec3 nFill = nAmb + nTex*vec3(0.040,0.058,0.082);
+    vec3 termGlow = vec3(0.11,0.06,0.035) * (smoothstep(0.32,-0.02,ndl)*(1.0-smoothstep(-0.02,-0.42,ndl))); // soft warm twilight band at the terminator
+    col0.xyz += uNightLift * (night*dark*nFill + termGlow*dark*0.7);
+  }
+  if(uSpec>0.0){   // POLISH: TRUE view-dependent ocean sun-glint - the actual reflection of the sun off the water toward the camera (localized, generalizes across cameras). Bounded, can't blow out.
+    vec3 N = nrm(vSph);                                    // world-space surface normal (unit sphere position)
+    vec3 V = nrm(uEye - vSph);                             // fragment -> eye
+    vec3 Lh = nrm(tc1.xyz);                                // sun dir
+    vec3 H = nrm(V + Lh);                                  // half vector
+    float water = 1.0 - clamp(h7.w, 0.0, 1.0);            // 1 on ocean, 0 on land
+    float front = clamp(dot(N, V)*3.0, 0.0, 1.0);         // only the camera-facing hemisphere
+    float glint = pow(max(dot(N, H), 0.0), uSpecPow) * water * front * clamp(dot(N,Lh)+0.1,0.0,1.0);   // sun must be up
+    float spec = clamp(uSpec * glint, 0.0, 0.5);          // bounded warm highlight
+    col0.xyz += spec * vec3(1.0, 0.95, 0.82);
+  }
   if(uLimbSoft>0.0){   // display-space highlight knee: compress the part above 0.65 so the blown 255 limb wall becomes the real's soft ~0.88 band (atmospheric spread, idx 0); dark interior (<0.65) untouched
     vec3 ov=max(col0.xyz-0.65,0.0);
     col0.xyz=0.65 + ov/(1.0+uLimbSoft*ov);
@@ -529,10 +585,55 @@ void main(){
 const BASE_FS=`#version 300 es
 precision highp float;
 in vec3 vDir; out vec4 ocol0;
-uniform samplerCube uEarthCube; uniform vec3 uSun; uniform float uBaseGain;
+uniform samplerCube uEarthCube; uniform samplerCube uCloudsCube; uniform vec3 uSun; uniform float uBaseGain; uniform float uPolish; uniform float uBaseDayK; uniform float uBaseCloud; uniform float uBaseNight; uniform float uBaseRim; uniform float uBaseRimPow; uniform float uBaseRimD0; uniform float uBaseRimD1; uniform vec3 uBaseEye;
+uniform float uBaseLod;      // 2026-06-13 polish: negative cube-map LOD bias = crispen the base (it was natural-mip SOFT vs the patches' bias -8 sharp tiles). Moderate (not -8) so the minified base sphere doesn't ALIAS/shimmer.
+uniform float uBaseDetail;   // 2026-06-13 polish: unsharp-mask detail-restore strength (sharp sample - blurred sample) so continents/coastlines read on the base = no soft/flat hemisphere under the seam.
+uniform float uBaseDarkAtt;  // 2026-06-13 polish: per-scene darkness attenuation (1 = lit scene shows the full base; ->0 on dark/eclipse scenes so the base does NOT overpaint/muddy the clean atmospheric limb (idx46: base ON was dimmer/muddier than base OFF)).
+uniform float uBaseFlat;     // 2026-06-13 (Design-2): crush albedo contrast toward a dim cool haze (hide low detail, dissolve the seam, kill texture shimmer).
+uniform float uBaseGlow;     // 2026-06-13 (Design-2): always-on soft atmospheric limb-glow strength (no close-up distance gate).
 void main(){
-  vec3 alb=texture(uEarthCube, normalize(vDir)).xyz;
-  float nl=clamp(dot(normalize(vDir), normalize(uSun))*0.85+0.30, 0.04, 1.0);  // day/night terminator (fc8 sun)
+  vec3 dir=normalize(vDir);
+  vec3 alb=texture(uEarthCube, dir, uBaseLod).xyz;           // crispened albedo (negative LOD bias toward mip0; patches are razor-sharp)
+  float ndl=dot(dir, normalize(uSun));
+  if(uPolish>0.5){
+    // POLISH backdrop (scenes 2-49): the full globe silhouette behind the lit patch cap, so the closeup
+    // scenes read as a WHOLE sphere instead of an abrupt black cut. Colour + SHARPNESS match the high-res
+    // patches (negative LOD bias + unsharp detail-restore) and the surface FS night-lift terminator so there
+    // is no seam where the patches end. The patches carry a CLOUD layer (cloudsCube) sampled the same way.
+    // UNSHARP detail-restore: high-freq = (crisp albedo) - (blurred albedo). Adding it back sharpens the
+    // continents/coastlines so the base reads as a continuation of the sharp tiles, without raising aliasing
+    // (the high-freq is bounded by uBaseDetail). Done in albedo space so it survives the day/night mix.
+    // ATMOSPHERIC-FADE BASE (Design-2, 2026-06-13 user review). Crispening the base was rejected; instead
+    // crush the soft-cube albedo contrast toward a dim COOL HAZE so the base no longer reads as a low-detail
+    // "second earth". The patch->base boundary then dissolves into a brightness gradient (no hard seam) and
+    // the high-frequency texture crawl the user saw as "flicker" is gone (a flat haze has nothing to shimmer).
+    // smoothstep(0.62,-0.30,ndl) == the surface FS night-lift terminator so the day/night boundary coincides.
+    float day=1.0 - smoothstep(0.62, -0.30, ndl);            // 0 night .. 1 day
+    float cov=clamp(texture(uCloudsCube, dir).x, 0.0, 1.0);  // cloud coverage (same cube the patches use)
+    float albL=dot(alb, vec3(0.299,0.587,0.114));            // luminance of the soft albedo
+    vec3 albFlat=mix(alb, vec3(albL)*vec3(0.84,0.93,1.06), uBaseFlat);  // crush contrast -> cool-biased flat haze
+    vec3 surf=mix(albFlat, vec3(1.0), cov*uBaseCloud*0.5);   // gentle clouds (haze, not crisp white)
+    vec3 nAmb=vec3(0.055,0.115,0.205);                        // cool ambient (== surface night-lift nFill base)
+    vec3 night=(nAmb + albFlat*vec3(0.040,0.058,0.082) + cov*uBaseCloud*vec3(0.018,0.024,0.032)) * uBaseNight; // faint moonlit haze at night
+    vec3 dayc=surf*uBaseDayK;                                 // lit haze; uBaseDayK tracks the patch brightness so the boundary has no bright/dim step
+    vec3 termGlow=vec3(0.11,0.06,0.035)*(smoothstep(0.30,-0.04,ndl)*(1.0-smoothstep(-0.04,-0.40,ndl)));
+    vec3 c=mix(night, dayc, day) + termGlow*0.6;
+    vec3 outc=c*uBaseGain;
+    // ALWAYS-ON soft atmospheric limb glow (no close-up distance gate - the broad soft glow IS the haze look,
+    // matching scenes 0/1). Fresnel grazing term, cool blue, biased to the night/terminator limb.
+    {
+      vec3 V=normalize(uBaseEye - dir);                       // dir = unit-sphere position = normal
+      float graze=1.0 - clamp(dot(dir, V), 0.0, 1.0);
+      float rim=pow(clamp(graze,0.0,1.0), uBaseRimPow);
+      float nightlimb=1.0 - day*0.45;                         // mostly on the night/terminator limb (day limb has the shell)
+      outc += uBaseGlow * rim * nightlimb * vec3(0.16,0.34,0.58);
+    }
+    // uBaseDarkAtt is a continuous fade (drawBaseEarth); the darkest/back-lit scenes SKIP the base entirely
+    // there (BASE_DARK_SKIP) so the clean atmosphere-only limb is preserved (idx46).
+    ocol0=vec4(outc*uBaseDarkAtt, 1.0);
+    return;
+  }
+  float nl=clamp(ndl*0.85+0.30, 0.04, 1.0);  // day/night terminator (fc8 sun)
   ocol0=vec4(alb*nl*uBaseGain, 1.0);
 }`;
 const A_VS=`#version 300 es
@@ -662,6 +763,9 @@ uniform sampler2D uEarth;   // linear-HDR earth+atmo scene (FS r2.xyz, blue)
 uniform sampler2D uGlow;    // bloom pyramid result from GlobeGlow.buildGlow
 uniform float uSlum;        // exposure into the tonemap (firmware HDR.mnu EXPOSURE 0.789)
 uniform vec3  uGlowGain;    // per-channel additive bloom gain (sun glint / limb halo)
+uniform float uGlowCap;     // POLISH 2026-06-13: hard CAP on the glow contribution (bounded soft glow that can't blow out a bright scene). large (no cap) for the faithful 0/1 path.
+uniform float uHalo;        // POLISH 2026-06-13: atmosphere limb HALO strength - soft blue glow just OUTSIDE the earth silhouette (works on bright AND dark scenes, bounded by the local earth brightness). 0 = off (0/1 + faithful path).
+uniform vec2  uHaloPx;      // 1/resolution for the halo ring sample radii
 in vec2 vUV; out vec4 ocol0;
 uniform sampler2D uSprite; uniform float uGlow2; uniform vec2 uDims;
 uniform vec4 c260,c261,c262,c263; uniform vec4 gfc[17];
@@ -745,7 +849,7 @@ void main(){
   // VERBATIM firmware composite (RSX fp 316de80a): out = scene*0.125 + bloom(full weight),
   // then *0.789 decode exposure (HDR.mnu). scene*0.125*0.789 = scene*0.0986 -> surface stays at
   // the validated 0.65/255; bloom restored to FULL weight (the dominant haze the firmware adds).
-  if(uPassthru>0.5){ float eg=(abs(uEarthGain)<1e-6)?1.0:uEarthGain; vec3 base=e*eg + g*uGlowGain;
+  if(uPassthru>0.5){ float eg=(abs(uEarthGain)<1e-6)?1.0:uEarthGain; vec3 gAdd=min(g*uGlowGain, vec3((uGlowCap>0.0)?uGlowCap:1e9)); vec3 base=e*eg + gAdd;
     if(uGlow2>0.5){
       // verbatim sun-glare ADD (the real c868fd6a draw blends ONE,ONE into the display): the fp's
       // linear output goes through the same dual tone-LUT display encode as every display writer.
@@ -753,6 +857,17 @@ void main(){
       vec2 s15=texture(uLut15, r8.xy*(1.0/128.0)).xy;
       vec2 s14=texture(uLut14, vec2(r8.z,max(r8.x,r8.y))*(1.0/128.0)).xy;
       base += vec3(s15.y,s15.x,s14.y);
+    }
+    if(uHalo>0.0){   // POLISH: bounded atmosphere limb HALO - soft blue glow just OUTSIDE the earth silhouette
+      float cur=max(base.x,max(base.y,base.z));
+      if(cur<0.45){  // sky / outer limb region only
+        float ring=0.0;
+        for(int i=0;i<8;i++){ float a=float(i)*0.7853981634; vec2 o=vec2(cos(a),sin(a));
+          vec3 s1=texture(uEarth,vUV+o*uHaloPx*4.0).xyz; vec3 s2=texture(uEarth,vUV+o*uHaloPx*9.0).xyz;   // tighter radii (user review #3: ring too thick) - thin limb halo, not a fat ring
+          ring=max(ring, max(s1.x,max(s1.y,s1.z))); ring=max(ring, 0.55*max(s2.x,max(s2.y,s2.z))); }
+        float halo=ring*(1.0-smoothstep(0.0,0.45,cur));   // strongest where the sky meets the bright limb, fades inward
+        base += uHalo*halo*vec3(0.16,0.34,0.58);          // cool atmospheric blue glow
+      }
     }
     ocol0 = vec4(clamp(base, 0.0, 1.0), clamp(e4.w,0.0,1.0)); return; }   // faithful: LDR scene + limb/sun bloom; α carries the display exponent through to the encode. Unset (0) uEarthGain behaves as 1 so legacy sites need no change.
   if(uGlow2>0.5) e = e + computeGlare();   // legacy path: linear add pre-tonemap (fp 727d0242), gated
@@ -1004,7 +1119,9 @@ let LUT_XFADE=0;   // 0 = use the NEAREST in-scatter bin (no within-scene crossf
                    // an interpolation). MPGlobe.lutxfade=1 restores the crossfade.
 let _lutStick={}, _toneStick={};   // SAME-SCENE sticky only: never show another scene's lighting (a cross-scene hold made scene boundaries render a mismatched limb glow). Until the scene's own first bin arrives the in-path static fallback is used (and no limb).
 let SCENE_HAS_TONE=true;           // per-scene faithful-path gate (set in setFC)
+let TONE_FAITH_FALLBACK=1;         // 2026-06-13: route scenes WITHOUT a captured per-scene tone LUT (only scene 31 of 50) through the FAITH path anyway (drawGlowFaith degrades to sharedTex.tex14/15) instead of drawGlow, which never showed the base fill -> scene 31 "incomplete texture mapping". The faith path is per-SCENE stable (no mid-scene pipeline flip). MPGlobe.tonefaithfallback (set 0 to revert scene 31 to drawGlow).
 let SCENE_SKIP=new Set();          // degenerate (static-artifact) scene indices, skipped in the cycle
+let EXCLUDE_SCENES=[3,4,5,6,11,24,25,26,28,29,30,31,33,35,36,46];   // 2026-06-13 user review: drop these scenes from the cycle entirely (by scene NUMBER). MPGlobe.excludeScenes.
 function _nearestIdx(list,fr){ let bi=0; for(let i=1;i<list.length;i++){ if(Math.abs(list[i].fr-fr)<Math.abs(list[bi].fr-fr)) bi=i; } return bi; }
 // CONTINUOUS bin bracket: find ia = the LAST bin with fr<=playhead, ib=ia+1, mix=frac.
 // Guarantees C0 continuity across bin boundaries (at a bin: mix=1 of [ia,ib] == mix=0 of
@@ -1267,6 +1384,21 @@ function drawStarsTex(){
    if(e2on){ const f=new Float32Array(32); for(let i=0;i<8;i++) for(let j=0;j<4;j++) f[i*4+j]=row.enc2[i][j];
      gl.uniform4fv(U('uE2'),f); } }
  gl.activeTexture(33984+0); gl.bindTexture(3553,star2D); gl.uniform1i(U('starTex'),0);
+ // STAR-GRID FIX (2026-06-13, polish scenes only): the star texture is tiled STAR_TILE=6x per cube face and
+ // REPEAT-wrapped, but the source is NOT seamless (last-vs-first row/col luminance step ~29.5/255), so every
+ // tile boundary is a hard discontinuity -> the 6x6 lattice of seam lines reads as a visible regular GRID
+ // (user report, sc12). MIRRORED_REPEAT reflects the texture at each boundary so the seam step -> 0 (the grid
+ // vanishes) while the star dots and the validated tile=6 density are unchanged. Per-draw + gated to polish
+ // scenes so scenes 0/1 keep the as-uploaded GL_REPEAT and stay pixel-identical (10497=REPEAT, 33648=MIRROR).
+ { const w = isPolishScene() ? 33648 : 10497; gl.texParameteri(3553,10242,w); gl.texParameteri(3553,10243,w); }
+ // GRID FIX (polish scenes 2-49 only): the star tile (STAR_TILE=6 per face) is REPEAT-wrapped, but the
+ // source texture is NOT seamless (last-vs-first row/col luminance step ~29.5/29.6), so every tile boundary
+ // is a hard discontinuity -> the 6x6 lattice of seam lines reads as a visible regular GRID (user report, sc12).
+ // MIRRORED_REPEAT reflects the texture at each boundary so the edge pixel maps onto itself (seam step = 0),
+ // erasing the lattice while KEEPING tile=6 (minification stays -> crisp sparse stars, validated s15 density/peak
+ // preserved). Scenes 0/1 are excluded by isPolishScene() and keep the as-uploaded REPEAT wrap (pixel-identical).
+ { const wrap = isPolishScene() ? 33648 /*GL_MIRRORED_REPEAT*/ : 10497 /*GL_REPEAT*/;
+   gl.texParameteri(3553,10242,wrap); gl.texParameteri(3553,10243,wrap); }
  { // EXACT camera eye from the surface rows: the center C solves c260.(C,1)=c261.(C,1)=c263.(C,1)=0
    // (the projective null point), guaranteeing the occlusion disc matches the drawn earth to subpixel.
    const r0=s['260'],r1=s['261'],r3=s['263']; let e=s['460']||[0,0,3,0];
@@ -1369,6 +1501,15 @@ function drawGlow(){
  gl.viewport(0,0,W,H);gl.clearColor(0,0,0,0);gl.clear(16640);gl.enable(2929);gl.depthFunc(515);
  if(!STARTEX)drawStars();               // catalog stars (legacy) into HDR; texture stars are added post-composite (display space)
  if(CULL){gl.enable(2884);gl.cullFace(1029);}else{gl.disable(2884);}
+ // POLISH FIX 2026-06-13: fill the disc behind the patches on this (GLOW) path too. Scenes WITHOUT a per-scene
+ // tone LUT (e.g. scene 31, missing from cap_scene_tonelut.json) fail the drawGlowFaith() SCENE_HAS_TONE gate and
+ // fall through to drawGlow(), which previously NEVER called the base sphere -> the ~78% of the disc not covered
+ // by front-facing patches stayed black/untextured ("incomplete texture mapping"; base ON==OFF because this path
+ // ignored the base entirely). The faithful path (drawGlowFaith, scenes 0/1 etc.) and the legacy forward path
+ // already pre-fill here. This path renders the patches as LINEAR HDR (uMode=5) and the composite re-exposes by
+ // ~0.0986, so boost the base to the same convention via _baseHdrK so it lands at the patches' display tone (not
+ // ~8x dim). Base uses depth-test-off + depthMask-false then restores depth/cull for the patch loop.
+ _baseHdrK = 1.0/Math.max(1e-3, GLOW_SLUM*0.125); drawBaseEarth(); _baseHdrK = 1.0;
  gl.useProgram(prog);const U=n=>gl.getUniformLocation(prog,n);
  const fcsrc=curFC||D.fc;
  const fc=new Float32Array(23*4); for(let i=0;i<23;i++){const v=fcsrc[i];fc[i*4]=v[0];fc[i*4+1]=v[1];fc[i*4+2]=v[2];fc[i*4+3]=v[3];}
@@ -1403,7 +1544,7 @@ function drawGlow(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
    gl.uniform1f(U('uT2bad'), (T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
-   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());gl.uniform1f(U('uFp16'),FP16);gl.uniform1f(U('uExpFix'),(ATMO_REAL||(typeof window!=='undefined'&&window.__expfix))?1.0:0.0);
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());gl.uniform1f(U('uFp16'),FP16);gl.uniform1f(U('uExpFix'),(ATMO_REAL||(typeof window!=='undefined'&&window.__expfix))?1.0:0.0);gl.uniform1f(U('uNightLift'),nightLiftAt());gl.uniform1f(U('uSpec'),specAt());gl.uniform1f(U('uSpecPow'),SPEC_POW);gl.uniform3fv(U('uEye'),new Float32Array(((D&&D.shared&&D.shared['460'])||[0,0,3,0]).slice(0,3)));
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  // (per-scene limb atmo frame is set in resolveInscat -> ATMO_SCENE auto-managed)
@@ -1540,14 +1681,53 @@ function covAlphaOn(){
 function drawBaseEarth(){
  const sc=(SCENES_IDX&&SCENES_IDX[sceneIdx])?SCENES_IDX[sceneIdx].scene:sceneIdx;
  const areal=(ATMO_REAL_MASTER && ATMO_REAL_SCENES.indexOf(sc)>=0);
- if(!(BASE_FILL && areal && baseProg && baseMesh && D && D.shared && D.shared['260'] && D.shared['263'])) return;
+ const polish=(BASE_POLISH && isPolishScene());   // POLISH: full base sphere behind patches on scenes 2-49 (fills the "cut off" black beyond the lit cap)
+ if(!(BASE_FILL && (areal||polish) && baseProg && baseMesh && D && D.shared && D.shared['260'] && D.shared['263'])) return;
  const sb=D.shared; const fcb=curFC||D.fc; const sun=(fcb&&fcb[8])?fcb[8]:[0,0,1];
+ // DARK-SCENE SKIP (Design-2, 2026-06-13): on eclipse/back-lit polish scenes the clean atmosphere-only limb
+ // looks better than any base overpaint (idx46 base ON 11.5 muddier vs OFF 23.2), and even a near-black base
+ // writes the display alpha-exponent -> a NET dimming. Skip the base there; the dark-crescent look is intended.
+ if(polish && !areal){
+   const e=(D&&D.shared&&D.shared['460'])||[0,0,3,0];
+   const el=Math.hypot(e[0],e[1],e[2])||1, sl=Math.hypot(sun[0],sun[1],sun[2])||1;
+   const litFrac=Math.max(0,Math.min(1,((((e[0]*sun[0])+(e[1]*sun[1])+(e[2]*sun[2]))/(el*sl))+0.2)/0.9));
+   // Skip the base (-> clean crescent) ONLY for dark scenes with a CLOSE camera, where the crescent fills the
+   // frame and the rest is sky (idx46 el=2.14, idx2 el=2.6). For dark scenes with a FAR camera the WHOLE disc
+   // is in frame, so skipping leaves "half the earth black at the bottom" (user report idx8/10/19, el=4-8) -
+   // those must FILL with the haze base. So gate by camera distance too.
+   if(litFrac < BASE_DARK_SKIP && el < BASE_DARK_SKIP_DIST) return;
+ }
  gl.useProgram(baseProg); const Ub=n=>gl.getUniformLocation(baseProg,n);
  gl.uniform4fv(Ub('c260'),sb['260']);gl.uniform4fv(Ub('c261'),sb['261']);gl.uniform4fv(Ub('c262'),sb['262']);gl.uniform4fv(Ub('c263'),sb['263']);
- gl.uniform1f(Ub('uFlipY'),-1.0); gl.uniform3f(Ub('uSun'),sun[0],sun[1],sun[2]); gl.uniform1f(Ub('uBaseGain'),BASE_GAIN);
+ gl.uniform1f(Ub('uFlipY'),-1.0); gl.uniform3f(Ub('uSun'),sun[0],sun[1],sun[2]); gl.uniform1f(Ub('uBaseGain'),((polish&&!areal)?BASE_POLISH_GAIN:BASE_GAIN)*_baseHdrK);
+ gl.uniform1f(Ub('uPolish'),(polish&&!areal)?1.0:0.0);   // POLISH: cool-tint the dim base so it matches the surface night-lift (no warm/grey mismatch at the patch boundary)
+ gl.uniform1f(Ub('uBaseDayK'),BASE_DAY_K);   // POLISH: base day-side brightness (closes the patch->base step where the cap cuts through lit terrain)
+ gl.uniform1f(Ub('uBaseCloud'),(polish&&!areal)?BASE_CLOUD:0.0);   // POLISH: add the patch cloud layer to the base so it isn't bare/flat at the seam
+ gl.uniform1f(Ub('uBaseNight'),(polish&&!areal)?(NIGHT_LIFT*BASE_NIGHT_MATCH/Math.max(BASE_POLISH_GAIN,0.05)):1.0);   // POLISH: match the base night brightness to the patch night-lift magnitude (no dark step at the cap boundary on the night side)
+ gl.uniform1f(Ub('uBaseRim'),(polish&&!areal)?BASE_RIM:0.0);   // POLISH: soft atmosphere rim on the whole globe limb (esp. the night side)
+ gl.uniform1f(Ub('uBaseRimPow'),BASE_RIM_POW);
+ gl.uniform1f(Ub('uBaseRimD0'),BASE_RIM_D0); gl.uniform1f(Ub('uBaseRimD1'),BASE_RIM_D1);
+ gl.uniform1f(Ub('uBaseLod'),(polish&&!areal)?((typeof window!=='undefined'&&typeof window.__baseLod==='number')?window.__baseLod:BASE_LOD):0.0);   // POLISH: crispen the base cube samples toward the patches' sharpness - polish scenes ONLY (areal/scene-0/1 keep natural-mip = pixel-identical, untouched)
+ gl.uniform1f(Ub('uBaseDetail'),(polish&&!areal)?((typeof window!=='undefined'&&typeof window.__baseDetail==='number')?window.__baseDetail:BASE_DETAIL):0.0);   // POLISH: unsharp detail-restore (DISABLED, BASE_DETAIL=0) - polish scenes only
+ gl.uniform1f(Ub('uBaseFlat'),(polish&&!areal)?((typeof window!=='undefined'&&typeof window.__baseFlat==='number')?window.__baseFlat:BASE_FLAT):0.0);   // POLISH (Design-2): crush base contrast -> dim haze (dissolve seam + kill shimmer)
+ gl.uniform1f(Ub('uBaseGlow'),(polish&&!areal)?((typeof window!=='undefined'&&typeof window.__baseGlow==='number')?window.__baseGlow:(BASE_RIM*BASE_GLOW_K)):0.0);   // POLISH (Design-2): always-on atmospheric limb glow
+ // PER-SCENE DARKNESS ATTENUATION: fade the whole base on deep/back-lit (eclipse) scenes so the clean
+ // atmospheric limb is not muddied by a dim base overpaint (idx46: base ON 11.5 muddier vs base OFF 23.2).
+ // litFrac = how lit the camera-facing hemisphere is = (eye . sun) remapped: sun in front of the eye-cap
+ // (lit close-up) -> 1; sun behind the globe (eclipse/dark back-lit) -> 0. The atmosphere shell + night-lift
+ // already carry those dark scenes. ARETL/scene-0/1 path keeps att=1 (unchanged, untouched).
+ { let att=1.0;
+   if(polish&&!areal){ const e=(D&&D.shared&&D.shared['460'])||[0,0,3,0];
+     const el=Math.hypot(e[0],e[1],e[2])||1, sl=Math.hypot(sun[0],sun[1],sun[2])||1;
+     const es=(e[0]*sun[0]+e[1]*sun[1]+e[2]*sun[2])/(el*sl);   // -1 back-lit (eclipse/dark) .. +1 lit cap facing
+     let lit=(es+0.2)/0.9; lit=Math.max(0.0,Math.min(1.0,lit));  // remap: full base by es~+0.7, fades out below es~-0.2
+     att=0.18 + 0.82*Math.pow(lit, Math.max(0.05,BASE_DARK_GAMMA)); }   // never fully 0 (a faint silhouette fill remains so the globe isn't "cut off"), but dim enough not to muddy the limb
+   gl.uniform1f(Ub('uBaseDarkAtt'),att); }
+ { const e=(D&&D.shared&&D.shared['460'])||[0,0,3,0]; gl.uniform3f(Ub('uBaseEye'),e[0],e[1],e[2]); }
  gl.uniform1f(Ub('uDbgProj'),(typeof window!=='undefined'&&window.__baseDbgProj)?1.0:0.0);
  gl.uniform1f(Ub('uBaseScale'),(typeof window!=='undefined'&&window.__baseScale)?window.__baseScale:BASE_SCALE);
  gl.activeTexture(33984+10);gl.bindTexture(34067,sharedTex.earthCube);gl.uniform1i(Ub('uEarthCube'),10);
+ gl.activeTexture(33984+11);gl.bindTexture(34067,sharedTex.cloudsCube);gl.uniform1i(Ub('uCloudsCube'),11);
  gl.bindVertexArray(null);   // clean default-VAO attribute setup (a stale glowVAO would mis-route the attribs)
  gl.disable(2929); gl.depthMask(false);
  if(typeof window!=='undefined'&&window.__baseNoCull){ gl.disable(2884); } else { gl.enable(2884); gl.cullFace(1029); gl.frontFace((typeof window!=='undefined'&&window.__baseWind)?2304:2305); }
@@ -1612,7 +1792,7 @@ function drawGlowFaith(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]);}
    gl.uniform1f(U('uT2bad'),(T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
-   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());gl.uniform1f(U('uFp16'),FP16);gl.uniform1f(U('uExpFix'),(ATMO_REAL||(typeof window!=='undefined'&&window.__expfix))?1.0:0.0);
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());gl.uniform1f(U('uFp16'),FP16);gl.uniform1f(U('uExpFix'),(ATMO_REAL||(typeof window!=='undefined'&&window.__expfix))?1.0:0.0);gl.uniform1f(U('uNightLift'),nightLiftAt());gl.uniform1f(U('uSpec'),specAt());gl.uniform1f(U('uSpecPow'),SPEC_POW);gl.uniform3fv(U('uEye'),new Float32Array(((D&&D.shared&&D.shared['460'])||[0,0,3,0]).slice(0,3)));
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex&&!STARSONLY){ if(ATMO_REAL) drawAtmo(); else if(HDRC) drawAtmoLinear(); else drawAtmo(); }   // ATMO_REAL: the real music-globe fp f566cf05 is a SELF-CONTAINED LDR shader (own dual-LUT tonemap + dst-alpha composite); never route it through the HDR-additive linear path (= blown-out white). HDRC: HDR limb added in LINEAR domain into Fd; else legacy tonemapped LDR limb
@@ -1628,7 +1808,7 @@ function drawGlowFaith(){
    if(ww){ BLOOMDISP=ww.some(w=>animT>=w[0]&&animT<=w[1])?1:0; }  // per-(scene,t-window) winners (clean warmed 12-pt protocol; tertiles damaged scene tails - sc24 t=0.94 was 53 vs 17)
    else if(tw){ BLOOMDISP=tw[Math.min(2,Math.floor(animT*3))]?1:0; }   // per-(scene,t-tertile): restores the sc24 burst corona while keeping early-scene legacy
    else { BLOOMDISP=(FAITH_POLICY.bloomScenes&&FAITH_POLICY.bloomScenes.indexOf(scid)>=0)?1:0; } }
- if(!FAITH_AUTO) BLOOMDISP = ATMO_REAL ? 1 : 0;   // SCENE-0 GLOW gate: bloom-of-display ON for scene 0 (ATMO_REAL), OFF for all others (must RESET to 0 - BLOOMDISP is a persistent global; else scene 0's =1 leaks into the next scene and blows it white)
+ if(!FAITH_AUTO){ BLOOMDISP = (ATMO_REAL || (GLOW_POLISH_ON && isGlowScene())) ? 1 : 0; }   // SCENE-0 GLOW gate + POLISH 2026-06-13: bloom-of-display ON for ATMO_REAL (scene 0/1) AND for the per-scene polish set (the soft "glowing lights" look). Reset to 0 otherwise (BLOOMDISP is a persistent global).
  const burstRows=(BURST && BURST_FAN && FLARE_SCENES && typeof GlobeBurst!=='undefined' && SCENES_IDX && SCENES_IDX[sceneIdx]) ? (FLARE_SCENES[String(SCENES_IDX[sceneIdx].scene)]||null) : null;
  // live-harvested glare rows can drive the same verbatim fan: vc window captured at c[256..272]
  // (VS FC(0) = c257 -> shift one), fp consts = the 17 glare rows. GLOW2-gated.
@@ -1655,6 +1835,7 @@ function drawGlowFaith(){
    gl.uniform1f(C('uPassthru'),0.0);gl.uniform1f(C('uLutOn'),1.0);gl.uniform1f(C('uLutExpo'),1.0/128.0);gl.uniform1f(C('uLutFb'),1.0);
  } else { gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uDespeckle'),DESPECKLE);gl.uniform1f(C('uLutOn'),0.0); }
  gl.uniform2f(C('uDims'),W,H);
+ gl.uniform1f(C('uHalo'), (HALO_ON&&isPolishScene()&&!isGlowScene())?HALO_STR:0.0); gl.uniform2f(C('uHaloPx'),1.0/W,1.0/H);   // POLISH: atmosphere limb halo for the BRIGHT polish scenes (the dark/glow scenes get the bloom glow instead; halo would flood their big dark sky)
  // sun-glare: the c868fd6a draw is NOT fullscreen - VERTS f014391_d021 decoded it as the 65-vertex
  // TRIANGLE-FAN disc (radius 5/9, model space) positioned by its OWN MVP (row vc[6..9]); at most
  // (scene,t) it transforms to a tiny spot or fully off-screen (fr82800: every vert at ndc ~3.7).
@@ -1753,6 +1934,9 @@ function drawGlowFaith(){
        cg=c0*gv;
      }
    }
+   let _glowCap=0.0;
+   if(GLOW_POLISH_ON && !ATMO_REAL && isGlowScene()){ cg=GLOW_POLISH_GAIN; _glowCap=GLOW_POLISH_CAP; }   // POLISH: bounded soft glow for the polish scenes (override FAITH_POLICY.bloomGain=0; cap so it can't blow out)
+   gl.uniform1f(C('uGlowCap'),_glowCap);
    gl.uniform3fv(C('uGlowGain'),new Float32Array([cg,cg,cg]));
    gl.uniform1f(C('uPassthru'),1.0);gl.uniform1f(C('uDespeckle'),DESPECKLE);
    gl.bindVertexArray(glowVAO);gl.drawArrays(4,0,3);gl.bindVertexArray(null);
@@ -1821,6 +2005,10 @@ function limbSoftAt(){
  if(!(FAITH_POLICY&&FAITH_POLICY.limbSoft&&SCENES_IDX&&SCENES_IDX[sceneIdx])) return 0.0;
  const g=FAITH_POLICY.limbSoft[String(SCENES_IDX[sceneIdx].scene)];
  return (typeof g==='number')?g:0.0;
+}
+function nightLiftAt(){   // POLISH (2026-06-13, approx OK): soft night-side atmospheric fill, SCENE-BY-SCENE (SCENE_POLISH set).
+ if(!NIGHT_LIFT_ON) return 0.0;
+ return isPolishScene() ? NIGHT_LIFT : 0.0;
 }
 function discGainAt(){
  if(!(FAITH_POLICY&&FAITH_POLICY.discGain&&SCENES_IDX&&SCENES_IDX[sceneIdx])) return 1.0;
@@ -1929,7 +2117,7 @@ function draw(){
    const pt=patchTex[D.patches[i].idx];
    if(pt){ bindT(0,'tex0',pt[0]);bindT(1,'tex1',pt[1]);bindT(2,'tex2',pt[2]);bindT(3,'tex3',pt[3]); }
    gl.uniform1f(U('uT2bad'), (T2ALL||BADT2.has(D.patches[i].idx))?1.0:0.0);
-   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());gl.uniform1f(U('uFp16'),FP16);gl.uniform1f(U('uExpFix'),(ATMO_REAL||(typeof window!=='undefined'&&window.__expfix))?1.0:0.0);
+   gl.uniform1f(U('uBias0'),BIAS0);gl.uniform1f(U('uBias2'),BIAS2);gl.uniform1f(U('uT3Flip'),(FAITH_POLICY&&FAITH_POLICY.t3flip&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&FAITH_POLICY.t3flip.indexOf(SCENES_IDX[sceneIdx].scene)>=0)?1.0:(window.__t3f||0));gl.uniform1f(U('uDiscGain'),discGainAt());gl.uniform1f(U('uLimbSoft'),limbSoftAt());gl.uniform1f(U('uFp16'),FP16);gl.uniform1f(U('uExpFix'),(ATMO_REAL||(typeof window!=='undefined'&&window.__expfix))?1.0:0.0);gl.uniform1f(U('uNightLift'),nightLiftAt());gl.uniform1f(U('uSpec'),specAt());gl.uniform1f(U('uSpecPow'),SPEC_POW);gl.uniform3fv(U('uEye'),new Float32Array(((D&&D.shared&&D.shared['460'])||[0,0,3,0]).slice(0,3)));
    gl.uniform4fv(U('vc'),buildVC(D.patches[i].corners));gl.drawElements(4,eMesh.n,5123,0);}
  gl.disable(2884);
  if((ATMO||ATMO_ONLY)&&aMesh&&scatterTex)drawAtmo();
@@ -1940,9 +2128,12 @@ function drawAtmo(){
  if(!aMesh||!scatterTex||got<want)return; const s=D.shared; if(!s['460']||!s['461']||!s['462'])return;
  const a=(ATMO_SCENE?atmoAt(animT):null)||{};
  if(atmoCamBad(a,s))return;   // mis-captured atmo camera (scenes 0/1/2/23): shell would render as a wrong-scale ring
- const e460=a['460']||s['460'], e461=a['461']||s['461'], e462=a['462']||s['462'];
+ // scene-2 family: the captured atmo camera is mis-captured; register the dst-alpha shell to the GOOD
+ // surface camera (the atmo shell ~ the surface sphere scaled) so the blue lands on the disc.
+ const _surfcam=(ATMO_SURFCAM_SCENES&&SCENES_IDX&&SCENES_IDX[sceneIdx]&&ATMO_SURFCAM_SCENES.indexOf(SCENES_IDX[sceneIdx].scene)>=0);
+ const e460=(_surfcam&&s['460'])?s['460']:(a['460']||s['460']), e461=(_surfcam&&s['461'])?s['461']:(a['461']||s['461']), e462=(_surfcam&&s['462'])?s['462']:(a['462']||s['462']);
  const c5=e461.slice(0,3), c7=e462.slice(0,3), c6=_cross(c5,c7), c8=e460.slice(0,3);
- const m0=a['256']||s['256']||s['260'],m1=a['257']||s['257']||s['261'],m2=a['258']||s['258']||s['262'],m3=a['259']||s['259']||s['263'];
+ const m0=(_surfcam&&s['260'])?s['260']:(a['256']||s['256']||s['260']),m1=(_surfcam&&s['261'])?s['261']:(a['257']||s['257']||s['261']),m2=(_surfcam&&s['262'])?s['262']:(a['258']||s['258']||s['262']),m3=(_surfcam&&s['263'])?s['263']:(a['259']||s['259']||s['263']);
  if(!m0||!m1||!m2||!m3)return;
  gl.useProgram(aprog); const U=n=>gl.getUniformLocation(aprog,n);
  gl.uniform4fv(U('mvp0'),m0);gl.uniform4fv(U('mvp1'),m1);gl.uniform4fv(U('mvp2'),m2);gl.uniform4fv(U('mvp3'),m3);
@@ -2046,7 +2237,7 @@ let USE_COH=true;    // DEFAULT = coherent set (9 scenes) + aligned atmosphere l
                      // MPGlobe.coherent=false. Correct exposure ships when the decode lands (GLOBE_FINISH_PROCEDURE).
 function setFC(){ curFC = (SCENE_FC && SCENES_IDX && SCENES_IDX[sceneIdx] && SCENE_FC[String(SCENES_IDX[sceneIdx].scene)]) || null;
  ATMO_SCENE = (ATMO_SCENES && ATMO_SCENES[sceneIdx]) || null;
- SCENE_HAS_TONE = !TONELUT_PS || !!(CAP_SCENE_TONE && SCENES_IDX && SCENES_IDX[sceneIdx] && (CAP_SCENE_TONE[String(SCENES_IDX[sceneIdx].scene)]||[]).length); }
+ SCENE_HAS_TONE = !TONELUT_PS || TONE_FAITH_FALLBACK || !!(CAP_SCENE_TONE && SCENES_IDX && SCENES_IDX[sceneIdx] && (CAP_SCENE_TONE[String(SCENES_IDX[sceneIdx].scene)]||[]).length); }
 const SCENE_KEYS=['260','261','262','263','264','265','266','267','268','269','270','271','454','455','456','457','458','459','460','461','462','463','464','465','466','467'];   // 266/267 = the REAL zoom rows (were MISSING: scenes framed with the static pose - the intermittent wide-arc bug)
 const HOLD_KEYS=new Set(['463','464','465','466','467']);   // STEPPED consts (LOD geomorph vc21 + tile UV transforms): the firmware switches them discretely; LERPING mid-step makes an invalid geomorph/UV for a window = spiky vertices + black tile checkerboard. Hold-previous instead.
 function sceneAt(F,t){
@@ -2253,6 +2444,8 @@ async function load(){
        if(a&&b) for(let j=0;j<a.length;j++) m+=Math.abs(b[j]-a[j]); } } return m; };
    SCENE_SKIP=new Set(); SCENES.forEach((F,i)=>{ if(!F||F.length<3||motionOf(F)<1.0) SCENE_SKIP.add(i); });
    if(SCENE_SKIP.size>=SCENES.length) SCENE_SKIP.clear();
+   // USER-EXCLUDED scenes (2026-06-13 review): drop from the cycle by scene NUMBER (added AFTER the size-guard so they always stick).
+   if(SCENES_IDX) SCENES_IDX.forEach((s,i)=>{ if(s && EXCLUDE_SCENES.indexOf(s.scene)>=0) SCENE_SKIP.add(i); });
    while(SCENE_SKIP.has(sceneIdx)) sceneIdx=(sceneIdx+1)%SCENES.length;   // start on the first real scene
    { const sc0=(SCENES_IDX&&SCENES_IDX[sceneIdx]&&SCENES_IDX[sceneIdx].scene===0); animT=(SCENE0_LOOP&&sc0)?S0_T0:0.0; transState=2; transF=0.0; }   // first scene fades IN from black, scene 0 starts at the clean range start
    try{ SCENE_FC=await fetch(BASE+'scene_fc'+SUF+'.json').then(r=>r.json()); }catch(e){ SCENE_FC=null; }
@@ -2375,6 +2568,8 @@ const MPGlobe={
    if(obj.fc) curFC=obj.fc;
    if(obj.atmo){ const a={t:0}; for(const k in obj.atmo) a[k]=obj.atmo[k]; ATMO_SCENE=[a,Object.assign({},a,{t:1})]; ATMO=1; }
    animT=0.0; draw(); return 'ok'; },
+ get sceneN(){ return SCENES?SCENES.length:0; },
+ _basedbg(){ const sc=(SCENES_IDX&&SCENES_IDX[sceneIdx])?SCENES_IDX[sceneIdx].scene:sceneIdx; const s=D&&D.shared; const e=s&&s['460']; return {scene:sc, has260:!!(s&&s['260']), has263:!!(s&&s['263']), eye:e?[+e[0].toFixed(2),+e[1].toFixed(2),+e[2].toFixed(2)]:null, eyeLen:e?+Math.hypot(e[0],e[1],e[2]).toFixed(2):null, polish:(BASE_POLISH&&!(sc===0||sc===1)&&(SCENE_POLISH_ALL||SCENE_POLISH.indexOf(sc)>=0))}; },
  _frame(sid,t){ if(!SCENES||!SCENES.length||!D) return 'no scenes';   // diagnostic: render exactly tick()'s
    running=false;                                                     // path frozen at (sid,t), no fade/advance
    sceneIdx=((sid%SCENES.length)+SCENES.length)%SCENES.length; animT=t;
@@ -2393,6 +2588,19 @@ set cull(v){ CULL=v?1:0; },
  set basefill(v){ BASE_FILL=v?1:0; }, get basefill(){ return BASE_FILL; },
  set basegain(v){ BASE_GAIN=+v||1.0; }, get basegain(){ return BASE_GAIN; },
  set basescale(v){ BASE_SCALE=+v||1.0; }, get basescale(){ return BASE_SCALE; },
+ set basepolish(v){ BASE_POLISH=v?1:0; }, get basepolish(){ return BASE_POLISH; },
+ set basepolishgain(v){ BASE_POLISH_GAIN=+v||0.62; }, get basepolishgain(){ return BASE_POLISH_GAIN; },
+ set basedayk(v){ BASE_DAY_K=+v||1.5; }, get basedayk(){ return BASE_DAY_K; },
+ set basecloud(v){ BASE_CLOUD=+v; }, get basecloud(){ return BASE_CLOUD; },
+ set basenightmatch(v){ BASE_NIGHT_MATCH=+v; }, get basenightmatch(){ return BASE_NIGHT_MATCH; },
+ set baserim(v){ BASE_RIM=+v; }, get baserim(){ return BASE_RIM; }, set baserimpow(v){ BASE_RIM_POW=+v; }, get baserimpow(){ return BASE_RIM_POW; },
+ set baserimd0(v){ BASE_RIM_D0=+v; }, get baserimd0(){ return BASE_RIM_D0; }, set baserimd1(v){ BASE_RIM_D1=+v; }, get baserimd1(){ return BASE_RIM_D1; },
+ set baseflat(v){ BASE_FLAT=+v; }, get baseflat(){ return BASE_FLAT; },
+ set baseglowk(v){ BASE_GLOW_K=+v; }, get baseglowk(){ return BASE_GLOW_K; },
+ set basedarkskip(v){ BASE_DARK_SKIP=+v; }, get basedarkskip(){ return BASE_DARK_SKIP; },
+ set basedarkskipdist(v){ BASE_DARK_SKIP_DIST=+v; }, get basedarkskipdist(){ return BASE_DARK_SKIP_DIST; },
+ set excludeScenes(v){ EXCLUDE_SCENES=Array.isArray(v)?v.slice():EXCLUDE_SCENES; if(typeof SCENES_IDX!=='undefined'&&SCENES_IDX) SCENES_IDX.forEach((s,i)=>{ if(s&&EXCLUDE_SCENES.indexOf(s.scene)>=0) SCENE_SKIP.add(i); }); }, get excludeScenes(){ return EXCLUDE_SCENES.slice(); },
+ set baselod(v){ BASE_LOD=+v; }, get baselod(){ return BASE_LOD; }, set basedetail(v){ BASE_DETAIL=+v; }, get basedetail(){ return BASE_DETAIL; },
  set covalpha(v){ COV_ALPHA=v?1:0; }, get covalpha(){ return COV_ALPHA; },
  set fp16(v){ FP16=v?1:0; }, get fp16(){ return FP16; },   // faithful fp16 half-register truncation in the surface fp
  set scene0loop(v){ SCENE0_LOOP=v?1:0; }, get scene0loop(){ return SCENE0_LOOP; },
@@ -2407,6 +2615,16 @@ set cull(v){ CULL=v?1:0; },
  set t2all(v){ T2ALL=v?1:0; },                 // test: all-patch cloud from the cube (uniform cloud)
  get t2all(){ return T2ALL; },
  set starBri(v){ STAR_BRI=v; },
+ set nightLift(v){ NIGHT_LIFT=+v; }, get nightLift(){ return NIGHT_LIFT; },
+ set nightLiftOn(v){ NIGHT_LIFT_ON=v?1:0; }, get nightLiftOn(){ return NIGHT_LIFT_ON; },
+ set glowPolish(v){ GLOW_POLISH_ON=v?1:0; }, get glowPolish(){ return GLOW_POLISH_ON; },
+ set glowPolishGain(v){ GLOW_POLISH_GAIN=+v; }, get glowPolishGain(){ return GLOW_POLISH_GAIN; },
+ set glowPolishCap(v){ GLOW_POLISH_CAP=+v; }, get glowPolishCap(){ return GLOW_POLISH_CAP; },
+ set scenePolish(v){ SCENE_POLISH=Array.isArray(v)?v.slice():SCENE_POLISH; }, get scenePolish(){ return SCENE_POLISH.slice(); },
+ set scenePolishAll(v){ SCENE_POLISH_ALL=v?1:0; }, get scenePolishAll(){ return SCENE_POLISH_ALL; },
+ set glowScenes(v){ GLOW_SCENES=Array.isArray(v)?v.slice():GLOW_SCENES; }, get glowScenes(){ return GLOW_SCENES.slice(); },
+ set halo(v){ HALO_STR=+v; }, get halo(){ return HALO_STR; }, set haloOn(v){ HALO_ON=v?1:0; }, get haloOn(){ return HALO_ON; },
+ set spec(v){ SPEC_STR=+v; }, get spec(){ return SPEC_STR; }, set specOn(v){ SPEC_ON=v?1:0; }, get specOn(){ return SPEC_ON; }, set specpow(v){ SPEC_POW=+v; }, get specpow(){ return SPEC_POW; },
  set glow2(v){ GLOW2=v?1:0; }, get glow2(){ return GLOW2; },
  get glareinfo(){ try{ const s=GLARE_ROWS?Object.keys(GLARE_ROWS).length:0; const cur=(GLARE_ROWS&&SCENES_IDX&&SCENES_IDX[sceneIdx])?(GLARE_ROWS[String(SCENES_IDX[sceneIdx].scene)]||[]).length:-1; return JSON.stringify({scenes:s,curRows:cur,glow2:GLOW2}); }catch(e){ return ''+e; } },
  set burst(v){ BURST=v?1:0; }, get burst(){ return BURST; },   // verbatim sun-disc burst pass (needs flare_scene data)
@@ -2497,6 +2715,7 @@ set cull(v){ CULL=v?1:0; },
  set startile(v){ STAR_TILE=+v; }, get startile(){ return STAR_TILE; },   // cube tiling factor (minification -> crisp stars)
  set starsonly(v){ STARSONLY=v?1:0; }, get starsonly(){ return STARSONLY; },   // debug: render only the stars (no earth)
  set tonelut(v){ TONELUT_PS=v?1:0; }, get tonelut(){ return TONELUT_PS; },     // per-scene surface-fp tonemap LUT (brightness fix); needs cap_scene_tonelut.json
+ set tonefaithfallback(v){ TONE_FAITH_FALLBACK=v?1:0; }, get tonefaithfallback(){ return TONE_FAITH_FALLBACK; },   // route no-tone scenes (scene 31) through the faith path
  set lutscale(v){ LUTSCALE=+v; }, get lutscale(){ return LUTSCALE; },
  set glowfaith(v){ GLOWFAITH=v?1:0; }, get glowfaith(){ return GLOWFAITH; },   // faithful render (col0 earth + separate limb/sun bloom)           // firmware tex14/15 COORD_SCALE2 (UNNORMALIZED -> 1/128)
  set feedback(v){ FEEDBACK_PS=v?1:0; }, get feedback(){ return FEEDBACK_PS; },   // steady-state backbuffer feedback x1/(1-0.125)
