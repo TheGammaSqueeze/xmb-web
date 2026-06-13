@@ -1946,6 +1946,16 @@ dialogBlurCanvas.height = DIALOG_BLUR_H;
 // be redrawn scaled-up + faded (Fix 3). Sized to the device canvas in resize().
 const chromeXfadeCanvas = document.createElement('canvas');
 const chromeXfadeCtx = chromeXfadeCanvas.getContext('2d');
+// Now Playing EXIT snapshot: the player bar is captured here on close so it can fade OUT during the exit
+// transition (the player is gone the instant musicPlayer is nulled, so without this it would pop out).
+const mpExitSnapCanvas = document.createElement('canvas');
+const mpExitSnapCtx = mpExitSnapCanvas.getContext('2d');
+let mpExitSnapValid = false;
+// Visualizer CROSSFADE: on SQUARE (cycle visualizer) we snapshot the current visualizer composite here, then
+// fade it out over the incoming visualizer (~0.5s) so they dissolve instead of hard-cutting (user 2026-06-13).
+const mpVisXfadeCanvas = document.createElement('canvas');
+const mpVisXfadeCtx = mpVisXfadeCanvas.getContext('2d');
+let mpVisXfade = null;   // {start, dur} while a visualizer crossfade is in progress
 
 let scale = 1, scaleX = 1, scaleY = 1, dpr = window.devicePixelRatio || 1;
 // Two horizontal factors for non-16:9 aspect ratios (both 1.0 in 16:9):
@@ -2144,6 +2154,12 @@ function resize() {
   xmbPrevCanvas.height = h * dpr;
   chromeXfadeCanvas.width = w * dpr;
   chromeXfadeCanvas.height = h * dpr;
+  mpExitSnapCanvas.width = w * dpr;
+  mpExitSnapCanvas.height = h * dpr;
+  mpExitSnapValid = false;
+  mpVisXfadeCanvas.width = w * dpr;
+  mpVisXfadeCanvas.height = h * dpr;
+  mpVisXfade = null;
   // Invalidate residual content -- a resize changes pixel layout.
   xmbPrevValid = false;
   // Resize wave canvas
@@ -2766,10 +2782,13 @@ for (let i = 0; i < BG_NUM_PARTICLES; i++) {
 let _mpExtraParticles = [];
 let _mpCombinedParticles = null;
 function activeParticlePool() {
-  if (musicPlayer && musicPlayer.vis === 0) {
+  // Use the doubled (music) pool whenever the wave wallpaper is morphing toward / sitting in the music
+  // visualizer (mpVisBlend > 0) so the EXTRA particles are present for the whole crossfade; their
+  // brightness is faded by mpVisBlend in buildParticleData so they appear/vanish smoothly (no pop).
+  if (mpVisBlend > 0.0001 || (musicPlayer && musicPlayer.vis === 0)) {
     if (_mpExtraParticles.length === 0) {
       for (let i = 0; i < BG_NUM_PARTICLES; i++) {
-        const p = {}; spawnParticle(p, PART_ASPECT_DEFAULT); _mpExtraParticles.push(p);
+        const p = {_mvExtra: true}; spawnParticle(p, PART_ASPECT_DEFAULT); _mpExtraParticles.push(p);
       }
       _mpCombinedParticles = particles.concat(_mpExtraParticles);
     }
@@ -3609,7 +3628,7 @@ void main() {
   // TOP smoothly fading to pure BLACK at the bottom (music2.mp4), with the raised
   // silvery wave ribbon (already in waveColorAdd) kept on top. Particles are drawn
   // separately (doubled in this mode) over this composite.
-  if (uMusicVis > 0.5) {
+  if (uMusicVis > 0.001) {
     // 1:1 with the real PS3 "XMB Waves" visualizer (back_colours0.fpo), measured
     // from RPCS3 (xmb-ref/music_vis/waves): the gradient is a FIXED purple field
     // (theme-independent -- XMB theme was GREEN at capture, visualizer rendered
@@ -3620,8 +3639,11 @@ void main() {
     // reads magenta), with the cliff to black ~y0.49 inherent in the t-clamp.
     float vert = pow(t, 1.2);
     float horiz = 0.59 + 0.41 * vUV.x;                  // left 0.59 -> right 1.0
-    vec3 grad = uMusicTop * (vert * horiz);             // uMusicTop = peak purple
-    gl_FragColor = vec4(grad + waveColorAdd, 1.0);
+    vec3 musicGrad = uMusicTop * (vert * horiz) + waveColorAdd;   // music gradient + wave
+    // SMOOTHLY cross-fade the menu gradient (finalColor, incl. wave) -> the music gradient by uMusicVis
+    // (mpVisBlend, ~1s) so the background TRANSITIONS on entering/leaving the player instead of snapping
+    // at the 0.5 midpoint (user 2026-06-13: "add a gradient transition entering xmb<->music player").
+    gl_FragColor = vec4(mix(finalColor, musicGrad, uMusicVis), 1.0);
     return;
   }
   gl_FragColor = vec4(finalColor, 1.0);
@@ -5474,8 +5496,9 @@ function drawCapturedWave(fade) {
   // MUSIC "XMB Waves" visualizer: the real ribbon is much brighter than the
   // menu wave (measured peak ~160-255 vs ~60), reading as a bright magenta/white
   // sweep over the purple field. Boost the captured-wave emission in music mode.
-  const _mvWaveGain = (musicPlayer && musicPlayer.vis === 0)
-                      ? ((window._mvWaveGain != null) ? window._mvWaveGain : 1.35) : 1.0;
+  // crossfaded (mpVisBlend) between the menu wave (1.0) and the brighter music ribbon
+  const _mvGainTo = (window._mvWaveGain != null) ? window._mvWaveGain : 1.35;
+  const _mvWaveGain = 1.0 + (_mvGainTo - 1.0) * mpVisBlend;
   fade = fade * _mvWaveGain;
   gl.useProgram(waveCapProgram);
   gl.enable(gl.BLEND);
@@ -5502,8 +5525,12 @@ function drawCapturedWave(fade) {
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uAlpha'), (window._waveAlpha2 != null) ? window._waveAlpha2 : 0.18);
   // Music "XMB Waves" ribbon is tinted MAGENTA/purple (low green), measured from
   // RPCS3 (bright spots ~ (255,191,255)/(221,90,208)); the menu wave stays silver.
-  const _mvTint = (musicPlayer && musicPlayer.vis === 0)
-                  ? ((window._mvTint) || [1.0, 0.52, 1.0]) : ((window._waveTint) || [0.96, 0.97, 1.00]);
+  // crossfade the ribbon tint between the silver menu wave and the magenta music ribbon (mpVisBlend)
+  const _mvTintTo = (window._mvTint) || [1.0, 0.52, 1.0];
+  const _mvTintFrom = (window._waveTint) || [0.96, 0.97, 1.00];
+  const _mvTint = [ _mvTintFrom[0] + (_mvTintTo[0]-_mvTintFrom[0])*mpVisBlend,
+                    _mvTintFrom[1] + (_mvTintTo[1]-_mvTintFrom[1])*mpVisBlend,
+                    _mvTintFrom[2] + (_mvTintTo[2]-_mvTintFrom[2])*mpVisBlend ];
   gl.uniform3fv(gl.getUniformLocation(waveCapProgram, 'uTint'), new Float32Array(_mvTint));
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uSilk'), (window._waveSilk != null) ? window._waveSilk : 1.0);
   gl.uniform1f(gl.getUniformLocation(waveCapProgram, 'uSpecW'),
@@ -5517,8 +5544,9 @@ function drawCapturedWave(fade) {
   // The real "XMB Waves" visualizer wave sits in the UPPER-MIDDLE (~y0.40,
   // measured from RPCS3 xmb-ref/music_vis/waves), inside the purple zone so the
   // additive ribbon reads magenta (not gray). Small NDC lift up from the default.
-  const _mvLift = (musicPlayer && musicPlayer.vis === 0)
-                  ? ((window._mvLift != null) ? window._mvLift : 0.30) : 0.0;
+  // crossfade the wave vertical position (the wave MOVES into the visualizer position as you enter playback)
+  const _mvLiftTo = (window._mvLift != null) ? window._mvLift : 0.30;
+  const _mvLift = _mvLiftTo * mpVisBlend;
   if (window._waveLines === true && waveCapLineIBO) {
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, waveCapLineIBO);
     // Multi-pass strand thickening: 1px GL_LINES get sparse/wireframe at high
@@ -6413,6 +6441,7 @@ function buildParticleData(aspect, canvasH, nightBlend) {
     let bright = (bodyLevel * bodyGain + fres * 0.04 + spec * glintExpo * glintGain)
                  * ageF * dofDark * bootFade;
     if (bright < 0) bright = 0;
+    if (p._mvExtra) bright *= mpVisBlend;   // doubled music particles fade in/out with the wallpaper crossfade
     // base perspective size; edge particles are BIGGER; gentle DoF growth.
     let sizePx = (FW_PART.sizeNear * 90.0 / w) * Hs * (p.bigScale || 1.0);
     sizePx *= (1.0 + defocus * 1.5);
@@ -6676,9 +6705,9 @@ function drawBGWebGL(dt) {
   // bottom) and raise the wave. The top colour is the live theme tint, lifted to
   // a vivid value so the top band reads richly coloured (music2.mp4 = saturated
   // purple top). The base hue follows whatever Colour the user has chosen.
-  var _mvOn = (musicPlayer && musicPlayer.vis === 0) ? 1.0 : 0.0;
+  var _mvOn = mpVisBlend;   // crossfaded gradient flip (menu gradient <-> flipped music gradient)
   gl.uniform1f(gl.getUniformLocation(bgShaderProgram, 'uMusicVis'), _mvOn);
-  if (_mvOn > 0.5) {
+  if (_mvOn > 0.001) {
     // FIXED purple peak colour (top-right), measured 1:1 from the real RPCS3
     // capture (xmb-ref/music_vis/waves): peak sRGB ~ (122,55,143). This is the
     // visualizer's OWN colour, independent of the XMB seasonal/theme hue. The
@@ -7135,6 +7164,25 @@ function drawBGFallback(dt) {
 
 // Unified drawBG that dispatches to WebGL or canvas fallback
 function drawBG(dt) {
+  // Music-visualizer crossfade: smoothly morph the menu wave wallpaper <-> the playback "XMB Waves"
+  // visualizer (wave lift + gradient flip + tint + doubled particles) on entering/leaving Now Playing.
+  // Ramped here (independent of musicPlayer so the EXIT transition still plays after musicPlayer is cleared).
+  // ~1.0s (user 2026-06-13): advance LINEAR progress over 1s, then smoothstep-ease. Two transitions:
+  //  - mpVisBlend: the vis-0 WAVE wallpaper morph (only when the Waves visualizer is active).
+  //  - mpEnterT:   the player-presence fade (XMB chrome out/in + Now Playing overlay in), any visualizer.
+  const _st = (dt || 16) / 1000;   // full 0..1 traversal in 1.0s
+  const _mvTarget = (musicPlayer && musicPlayer.vis === 0) ? 1 : 0;
+  if (mpVisRaw !== _mvTarget) mpVisRaw = (mpVisRaw < _mvTarget) ? Math.min(_mvTarget, mpVisRaw + _st) : Math.max(_mvTarget, mpVisRaw - _st);
+  mpVisBlend = mpVisRaw * mpVisRaw * (3 - 2 * mpVisRaw);
+  const _enTarget = musicPlayer ? 1 : 0;
+  if (mpEnterRaw !== _enTarget) mpEnterRaw = (mpEnterRaw < _enTarget) ? Math.min(_enTarget, mpEnterRaw + _st) : Math.max(_enTarget, mpEnterRaw - _st);
+  mpEnterT = mpEnterRaw * mpEnterRaw * (3 - 2 * mpEnterRaw);
+  const _chSt = (dt || 16) / 400;   // chrome (icons) ramps faster: ~0.4s
+  if (mpChromeRaw !== _enTarget) mpChromeRaw = (mpChromeRaw < _enTarget) ? Math.min(_enTarget, mpChromeRaw + _chSt) : Math.max(_enTarget, mpChromeRaw - _chSt);
+  const _fiTarget = (musicPlayer && musicPlayer.fullInfo) ? 1 : 0;   // Display full-info fade (~0.5s)
+  const _fiSt = (dt || 16) / 500;
+  if (mpFullInfoRaw !== _fiTarget) mpFullInfoRaw = (mpFullInfoRaw < _fiTarget) ? Math.min(_fiTarget, mpFullInfoRaw + _fiSt) : Math.max(_fiTarget, mpFullInfoRaw - _fiSt);
+  mpFullInfoT = mpFullInfoRaw * mpFullInfoRaw * (3 - 2 * mpFullInfoRaw);
   if (webglAvailable) {
     drawBGWebGL(dt);
   } else {
@@ -8114,7 +8162,7 @@ function navDialog(dir) {
     // Immediate hover-preview: apply (without saving) so the user sees the
     // colour/theme/background change the instant they move onto it.
     if (t.themeKey) previewThemeSelection(t.themeKey, dialogState.sel);
-  } else if (t.type === 'confirm') {
+  } else if (t.type === 'confirm' || t.type === 'mpdelete') {
     dialogState.sel = dialogState.sel === 0 ? 1 : 0;
     playCursor();
   }
@@ -8517,8 +8565,50 @@ function drawIllustration(ctx2, key, cx, cy, sz) {
 // The backdrop is the live wave canvas, downsampled to a small offscreen and
 // then composited back onto the main 2D canvas with ctx.filter='blur(...)'.
 // A darkening overlay restores legibility for the white dialog text.
+// del_dialog_page -- custom delete confirm, layout MEASURED from real RPCS3 (/tmp/rdlg_delete.png):
+// top divider (y0.184); jacket cover + title/date/size centred on the LEFT (jacket ~x0.32, y0.41);
+// "Are you sure you want to delete the track?" + Yes/No on the RIGHT (msg x0.54 y0.46; Yes x0.62 / No x0.71
+// y0.535); bottom X Enter / O Back. sel 1 = No (destructive-confirm default).
+function drawMpDelete(ctx2) {
+  const ds = dialogState; if (!ds) return;
+  const t = Math.min(1, (performance.now() - ds.anim.start) / ds.anim.dur);
+  ctx2.setTransform(dpr*scaleX,0,0,dpr*scaleY,0,frameCenterTY());
+  ctx2.save(); ctx2.globalAlpha = t;
+  // dim backdrop
+  ctx2.fillStyle='rgba(0,0,0,0.45)'; ctx2.fillRect(0,0,V.W,V.H);
+  // top divider line
+  ctx2.strokeStyle='rgba(255,255,255,0.35)'; ctx2.lineWidth=1;
+  ctx2.beginPath(); ctx2.moveTo(XCF(V.W*0.04), V.H*0.184); ctx2.lineTo(XCF(V.W*0.96), V.H*0.184); ctx2.stroke();
+  // jacket cover (default music cover) on the left
+  const jsz=V.H*0.185, jx=XCF(V.W*0.32)-jsz/2, jy=V.H*0.41;
+  ctx2.save(); ctx2.shadowColor='rgba(0,0,0,0.6)'; ctx2.shadowBlur=16; ctx2.shadowOffsetY=5;
+  const jic=getIcon('asset:images/icon_fw_track.png');
+  if (jic && jic.loaded) ctx2.drawImage(jic.img, jx, jy, jsz, jsz);
+  ctx2.restore();
+  // title + date + size centred under the jacket
+  ctx2.textAlign='center'; ctx2.textBaseline='alphabetic';
+  ctx2.shadowColor='rgba(0,0,0,0.8)'; ctx2.shadowBlur=4;
+  let title=ds.template.title||''; if (title.length>46) title=title.slice(0,45)+'…';
+  ctx2.fillStyle='#fff'; ctx2.font='22px PS3'; ctx2.fillText(title, XCF(V.W*0.32), jy+jsz+34);
+  ctx2.fillStyle='rgba(255,255,255,0.7)'; ctx2.font='17px PS3';
+  ctx2.fillText('-- / -- / ----  --:--', XCF(V.W*0.32), jy+jsz+62);   // date (placeholder media)
+  ctx2.fillText('-- MB', XCF(V.W*0.32), jy+jsz+86);                    // size (placeholder media)
+  // message on the right
+  ctx2.textAlign='left'; ctx2.fillStyle='#fff'; ctx2.font='24px PS3';
+  ctx2.fillText(ds.template.body, XCF(V.W*0.54), V.H*0.47);
+  // Yes / No (sel 1 = No default) -- selected one bright, the other dim
+  ctx2.textAlign='center'; ctx2.font='24px PS3';
+  ctx2.fillStyle = ds.sel===0 ? '#fff' : 'rgba(255,255,255,0.45)'; ctx2.fillText('Yes', XCF(V.W*0.62), V.H*0.535);
+  ctx2.fillStyle = ds.sel===1 ? '#fff' : 'rgba(255,255,255,0.45)'; ctx2.fillText('No',  XCF(V.W*0.71), V.H*0.535);
+  // bottom button hints
+  ctx2.shadowBlur=0; ctx2.font='18px PS3'; ctx2.textAlign='left'; ctx2.fillStyle='rgba(255,255,255,0.9)';
+  ctx2.fillText('✕ Enter', XCF(V.W*0.40), V.H*0.84);
+  ctx2.fillText('○ Back',  XCF(V.W*0.55), V.H*0.84);
+  ctx2.restore();
+}
 function drawDialog(ctx2) {
   if (!dialogState) return;
+  if (dialogState.template && dialogState.template.type === 'mpdelete') { drawMpDelete(ctx2); return; }
   const ds = dialogState;
   const t = ds.template;
   const now = performance.now();
@@ -9619,8 +9709,8 @@ function wizNext(id, choice) {
     case 'bt_bd_remote': return 'bt_bd_registering';
     case 'bt_bd_done':   return '__close__';
     case 'item_text': {
-      const it = v._bindItem;
-      if (it) { it.v = v._text; saveSetting(it.n, v._text); }
+      if (typeof v._onCommit === 'function') { try { v._onCommit(v._text); } catch(e){} }   // playlist-name OSK etc.
+      else { const it = v._bindItem; if (it) { it.v = v._text; saveSetting(it.n, v._text); } }
       return '__close__';
     }
     // ---- System Information ----
@@ -10565,10 +10655,97 @@ let groupReflow = null;   // {start} -- staggered fan-in of the regrouped list (
 // Globe). Plays the real track via Web Audio so the visualizers are
 // audio-reactive (AnalyserNode frequency data).
 // ============================================================================
-let musicPlayer = null;     // {tracks, idx, vis}
+let musicPlayer = null;     // {tracks, idx, vis, repeat, shuffle, order}
 const MP_VIS = ['XMB Waves', 'Canyon', 'Globe'];
+// PLAYLIST subsystem (user 2026-06-13): Add to Playlist collects tracks here; the Music column's "Playlists"
+// item is a FOLDER of named playlists (subfolders). Each playlist = {name,n,mtype:'album',ch:[tracks],...}.
+// Deduped by file. User 2026-06-13: subfolders not root; OSK to name; Add-to picks existing or creates new.
+let mpPlaylists = [];   // [{name, n, mtype:'album', i, ch:[tracks], d, artist}]
+function mpCreatePlaylist(name) {
+  name = (name || '').trim() || ('Playlist ' + (mpPlaylists.length + 1));
+  const pl = {name: name, n: name, mtype: 'album', i: 'asset:images/icon_fw_folder.png', ch: [], artist: 'Playlist', genre: '-', year: '-'};
+  mpPlaylists.push(pl);
+  return pl;
+}
+function mpAddTracksToPlaylist(pl, tracksIn) {
+  const list = Array.isArray(tracksIn) ? tracksIn : [tracksIn];
+  let added = 0;
+  for (const t of list) {
+    if (!t || (t.mtype && t.mtype !== 'track')) continue;
+    const key = t.file || t.n;
+    if (pl.ch.some(p => (p.file || p.n) === key)) continue;   // no duplicates
+    pl.ch.push(Object.assign({}, t, {mtype: 'track'}));
+    added++;
+  }
+  return added;
+}
+// Keep each playlist's track-count subtitle + the Music column "Playlists" item (a folder of: a "Create New
+// Playlist" entry + every playlist subfolder).
+function mpSyncPlaylistItem() {
+  try {
+    mpPlaylists.forEach(p => { p.n = p.name; p.mtype = 'album'; p.i = p.i || 'asset:images/icon_fw_folder.png';
+      p.d = p.ch.length + (p.ch.length === 1 ? ' Track' : ' Tracks'); });
+    const cat = (typeof DATA !== 'undefined') ? DATA.find(c => c.id === 'music') : null;
+    if (!cat || !cat.items) return;
+    const pl = cat.items.find(it => it.n === 'Playlists'); if (!pl) return;
+    pl.ch = [{n: 'Create New Playlist', i: 'xmb_icon_037', _createPlaylist: true}].concat(mpPlaylists);
+    pl.d = mpPlaylists.length + (mpPlaylists.length === 1 ? ' Playlist' : ' Playlists');
+  } catch(e){}
+}
+// OSK to name a playlist: reuse the firmware item_text OSK (network/System-Name keyboard). onName(text) runs
+// on Enter/commit; cancel just closes.
+function mpOpenNameOSK(title, onName) {
+  openWizard('item_text');
+  wizState.values._title = title; wizState.values._label = title;
+  wizState.values._text = '';
+  wizState.values._onCommit = onName;     // hooked in the item_text commit (wizConfirm)
+  wizState.values._max = 30;
+  wizEnterScreen('item_text', true);
+}
+// Add-to-Playlist chooser: pick an existing playlist or "New Playlist..." (-> OSK). Used by both the Now
+// Playing panel and the content-browser options. Reuses the shared 'chooser' dialog + an onChoose hook.
+function mpOpenAddChooser(tracksIn) {
+  const tracks = Array.isArray(tracksIn) ? tracksIn.slice() : [tracksIn];
+  const names = mpPlaylists.map(p => p.name);
+  optMenu = null;
+  dialogState = {
+    template: {type: 'chooser', title: 'Add to Playlist', options: ['New Playlist…'].concat(names)},
+    sel: names.length ? 1 : 0,
+    onChoose: function (i) {
+      if (i === 0) {
+        mpOpenNameOSK('Enter a name for the playlist', function (nm) {
+          const pl = mpCreatePlaylist(nm); mpAddTracksToPlaylist(pl, tracks); mpSyncPlaylistItem();
+        });
+      } else {
+        const pl = mpPlaylists[i - 1]; if (pl) { mpAddTracksToPlaylist(pl, tracks); mpSyncPlaylistItem(); }
+      }
+    },
+    anim: {start: performance.now(), dur: 220}
+  };
+  playNav2();
+}
 let mpAudio = null, mpCtx = null, mpAnalyser = null, mpFreq = null, mpSrc = null;
 let mpVisName = null;        // {text, start} brief visualizer-name banner
+// Music "XMB Waves" crossfade: 0 = the normal XMB menu wave wallpaper, 1 = the playback "XMB Waves"
+// visualizer (wave lifted into position + flipped/tinted gradient + doubled particles). Ramped each frame
+// toward (Now Playing && vis 0) so the wallpaper MORPHS in on entering playback and reverts on exit -- the
+// real XMB behaviour (user 2026-06-13). Drives uMusicVis + the _mv* wave params + the extra particle pool.
+let mpVisBlend = 0;   // eased (smoothstep) WAVE crossfade (vis-0 wallpaper morph) the renderer consumes
+let mpVisRaw = 0;     // linear 0..1 progress (~1.0s traversal), eased into mpVisBlend in drawBG
+// PLAYER-PRESENCE transition (0 = XMB menu, 1 = in Now Playing), INDEPENDENT of the visualizer (so cycling
+// the visualizer mid-playback never un-fades the menu). Drives the XMB-chrome fade-out/in + the Now Playing
+// overlay fade-in on enter/exit (~1.0s). User 2026-06-13: "xmb icons etc need a transition on enter/exit".
+let mpEnterT = 0;     // eased value (~1.0s) -> bar fade-in + backdrop-blur ease
+let mpEnterRaw = 0;   // linear 0..1 progress (~1.0s)
+let mpChromeRaw = 0;  // linear 0..1 progress (~0.4s) -> the XMB chrome (icons) fade FASTER than the bar/wave
+// DISPLAY full-info fade: the track-detail cluster (counter/time/codec/seek) fades IN when Display is toggled
+// on and OUT when off (user 2026-06-13), instead of snapping. ~0.5s.
+let mpFullInfoT = 0;
+let mpFullInfoRaw = 0;
+let mpMsg = null;            // full_screen_message_page: {text, start, dur, then}
+// Firmware full-screen message (full_screen_message_page). Shows a centered message
+// over the Now Playing screen for `dur` ms, then runs `then` (which may chain another).
+function mpShowMsg(text, dur, then) { mpMsg = {text: text, start: performance.now(), dur: dur, then: then || null}; }
 
 function mpInitAudio() {
   if (mpAudio) return;
@@ -10580,13 +10757,23 @@ function mpInitAudio() {
     mpSrc = mpCtx.createMediaElementSource(mpAudio);
     mpSrc.connect(mpAnalyser); mpAnalyser.connect(mpCtx.destination);
   } catch (e) { /* Web Audio unavailable: still play, no analyser */ }
-  mpAudio.addEventListener('ended', () => mpNext());
+  mpAudio.addEventListener('ended', () => mpOnEnded());
+}
+function mpOnEnded() {
+  if (!musicPlayer) return;
+  // Repeat ONE: replay the same track. Otherwise auto-advance in the playback order (which follows shuffle),
+  // and repeat-OFF stops at the end of the order (mpStep handles it); repeat-ALL loops.
+  if ((musicPlayer.repeat || 0) === 2) { try { mpAudio.currentTime = 0; } catch(e){} mpPlayCurrent(); return; }
+  mpStep(1, true);
 }
 
 function openMusicPlayer(tracks, idx) {
   mpInitAudio();
-  // GLOBE is the default first visualizer (user request); SQUARE still cycles Waves/Canyon/Globe.
-  musicPlayer = {tracks: tracks, idx: idx, vis: (musicPlayer ? musicPlayer.vis : 2)};
+  // XMB WAVES is the default visualizer (user 2026-06-13): on entering Now Playing the menu wave wallpaper
+  // MORPHS into the brighter music "XMB Waves" visualizer (mpVisBlend crossfade) and reverts on exit.
+  // SQUARE still cycles Waves/Canyon/Globe.
+  musicPlayer = {tracks: tracks, idx: idx, vis: (musicPlayer ? musicPlayer.vis : 0), repeat: 0, shuffle: false};
+  mpRebuildOrder();   // sequential playback order (shuffle off)
   if (musicPlayer.vis === 2 && typeof MPGlobe !== 'undefined') MPGlobe.start(mpGlobe2Canvas);
   mpPlayCurrent();
   playNav2();
@@ -10603,23 +10790,62 @@ function mpToggle() {
   if (mpAudio.paused) { if (mpCtx) mpCtx.resume(); mpAudio.play().catch(function(){}); }
   else mpAudio.pause();
 }
+// ---- Playback order / shuffle / repeat logic ----
+// musicPlayer.order = the playback order (array of track indices into .tracks). Sequential when shuffle is
+// off; a Fisher-Yates shuffle (current track first) when on. idx is the live track index; position in the
+// order = order.indexOf(idx). repeat: 0 off (stop at end), 1 all (loop), 2 one (replay current).
+function mpPlayableIdx() {
+  const a = [], ts = musicPlayer.tracks;
+  for (let i = 0; i < ts.length; i++) { if (!ts[i].mtype || ts[i].mtype === 'track') a.push(i); }
+  return a;
+}
+function mpRebuildOrder() {
+  const base = mpPlayableIdx();
+  if (musicPlayer.shuffle) {
+    for (let i = base.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; const t = base[i]; base[i] = base[j]; base[j] = t; }
+    const ci = base.indexOf(musicPlayer.idx); if (ci > 0) { const t = base[0]; base[0] = base[ci]; base[ci] = t; }   // current first
+  }
+  musicPlayer.order = base;
+}
+// dir: +1 next / -1 prev. isAuto = triggered by track-ended (then repeat-OFF stops at the end of the order).
+function mpStep(dir, isAuto) {
+  if (!musicPlayer) return;
+  if (!musicPlayer.order || !musicPlayer.order.length) mpRebuildOrder();
+  const order = musicPlayer.order; if (!order.length) return;
+  let pos = order.indexOf(musicPlayer.idx); if (pos < 0) pos = 0;
+  let np = pos + dir;
+  if (np >= order.length) {
+    if (isAuto && (musicPlayer.repeat || 0) !== 1) { musicPlayer.stopped = true; if (mpAudio) mpAudio.pause(); return; }  // repeat OFF: stop
+    np = 0;
+    if (musicPlayer.shuffle && isAuto) { mpRebuildOrder(); }   // reshuffle each full auto loop
+  } else if (np < 0) { np = order.length - 1; }
+  musicPlayer.idx = musicPlayer.order[np];
+  musicPlayer.stopped = false; mpPlayCurrent();
+}
 function mpNext() {
   if (!musicPlayer) return;
-  let n = musicPlayer.idx + 1;
-  while (n < musicPlayer.tracks.length && musicPlayer.tracks[n].mtype !== 'track') n++;
-  if (n >= musicPlayer.tracks.length) n = 0;
-  musicPlayer.idx = n; mpPlayCurrent();
+  musicPlayer.stopped = false;
+  mpStep(1, false);   // manual NEXT always wraps (user action), regardless of repeat
 }
 function mpPrev() {
   if (!musicPlayer) return;
-  if (mpAudio && mpAudio.currentTime > 3) { mpAudio.currentTime = 0; return; }
-  let n = musicPlayer.idx - 1;
-  while (n >= 0 && musicPlayer.tracks[n].mtype !== 'track') n--;
-  if (n < 0) n = musicPlayer.tracks.length - 1;
-  musicPlayer.idx = n; mpPlayCurrent();
+  if (mpAudio && mpAudio.currentTime > 3) { mpAudio.currentTime = 0; return; }   // >3s in: restart current
+  musicPlayer.stopped = false;
+  mpStep(-1, false);
 }
 function mpCycleVis() {
   if (!musicPlayer) return;
+  // Snapshot the CURRENT visualizer composite (wave/gradient WebGL layers + the 2D canyon/globe overlay) so it
+  // can be cross-faded out over the incoming visualizer (~0.5s) instead of hard-cutting (user 2026-06-13).
+  try {
+    const cw = mpVisXfadeCanvas.width, ch = mpVisXfadeCanvas.height;
+    mpVisXfadeCtx.setTransform(1,0,0,1,0,0); mpVisXfadeCtx.globalAlpha=1;
+    mpVisXfadeCtx.clearRect(0,0,cw,ch);
+    if (typeof bgCanvas !== 'undefined' && bgCanvas) mpVisXfadeCtx.drawImage(bgCanvas,0,0,cw,ch);
+    if (typeof waveCanvas !== 'undefined' && waveCanvas) mpVisXfadeCtx.drawImage(waveCanvas,0,0,cw,ch);
+    mpVisXfadeCtx.drawImage(xmbCanvas,0,0,cw,ch);   // 2D layer (canyon/globe for vis1/2; bar for vis0)
+    mpVisXfade = {start: performance.now(), dur: 500};
+  } catch(e){ mpVisXfade = null; }
   musicPlayer.vis = (musicPlayer.vis + 1) % MP_VIS.length;
   mpVisName = {text: MP_VIS[musicPlayer.vis], start: performance.now()};
   if (musicPlayer.vis === 1) initCanyon();
@@ -10629,7 +10855,16 @@ function mpCycleVis() {
 }
 function closeMusicPlayer() {
   if (mpAudio) mpAudio.pause();
-  musicPlayer = null;
+  // Snapshot the last player frame (the now-playing bar lives on xmbCanvas) so it can FADE OUT during the
+  // ~1s exit transition instead of popping out the instant musicPlayer is nulled.
+  try {
+    mpExitSnapCtx.setTransform(1,0,0,1,0,0);
+    mpExitSnapCtx.globalCompositeOperation='copy'; mpExitSnapCtx.globalAlpha=1;
+    mpExitSnapCtx.drawImage(xmbCanvas,0,0);
+    mpExitSnapCtx.globalCompositeOperation='source-over';
+    mpExitSnapValid = true;
+  } catch(e){ mpExitSnapValid = false; }
+  musicPlayer = null; mpMsg = null; optMenu = null; mpOptClosing = null; mpVisXfade = null;
   if (globeCanvas) globeCanvas.style.display = 'none';
   if (window.MPGlobe) MPGlobe.stop();
   playNav();
@@ -10836,6 +11071,9 @@ function drawVisWaves(ctx2, bands) {
   // where the 2D canvas is transparent. Nothing to draw here; just clear so the
   // real firmware wave is the visualizer.
   const cw = xmbCanvas.width, ch = xmbCanvas.height;
+  // Reset to device-pixel space first: a scaled transform was leaving the
+  // right/bottom edge of the chrome (the top-right clock) uncleared.
+  ctx2.setTransform(1,0,0,1,0,0);
   ctx2.clearRect(0,0,cw,ch);
 }
 function drawVisCanyon(ctx2, bands) {
@@ -10885,28 +11123,100 @@ function drawMusicPlayer(ctx2) {
   if (mp.vis === 0) drawVisWaves(ctx2, bands);
   else if (mp.vis === 1) drawVisCanyon(ctx2, bands);
   else drawVisGlobe(ctx2, bands);
-  // 2) Minimal Now Playing overlay (measured music2.mp4): small album art at
-  // the bottom-left, title (bold) above the artist/source line.
+  // VISUALIZER CROSSFADE: draw the previous visualizer snapshot OVER the freshly-rendered new one at a falling
+  // alpha so they dissolve (user 2026-06-13: "fade between them"). Drawn before the bar so the bar stays crisp.
+  if (mpVisXfade) {
+    const xp = (performance.now() - mpVisXfade.start) / mpVisXfade.dur;
+    if (xp >= 1) mpVisXfade = null;
+    else { ctx2.setTransform(1,0,0,1,0,0); ctx2.globalAlpha = 1 - (xp*xp*(3-2*xp)); ctx2.drawImage(mpVisXfadeCanvas,0,0); ctx2.globalAlpha = 1; }
+  }
+  // Now Playing OVERLAY (bar + panel + msg) fades IN with the player-presence transition (mpEnterT, ~1s) so it
+  // cross-fades against the XMB chrome fading out. The visualizer itself is drawn above at full alpha (its
+  // own crossfade is the WebGL wave morph / the Canyon/Globe render); only the overlay opacity ramps here.
+  ctx2.globalAlpha = mpEnterT;
+  // 2) Now Playing info bar - structure 1:1 from the firmware audioplayer RCO (play_progress_page +
+  // title_information_page + play_status_page). Format/colour/icons are exact: play-status icon, track N/M,
+  // title/artist fields, codec badge (plane_codec), cyan seek bar (audioplayer_display_time_bar, 0-100%),
+  // HH:MM:SS digit time. Firmware positions these via runtime code (all RCO transforms are 0,0,0), so the bar
+  // is laid out bottom-left to match the real now-playing screen. Track text = placeholder field (no real media).
   ctx2.setTransform(dpr*scaleX,0,0,dpr*scaleY,0,frameCenterTY());
+  // Now Playing info bar -- structure + geometry MEASURED 1:1 from real Windows RPCS3 present capture
+  // (2026-06-13). ALWAYS shown: jacket cover + title + artist/album line. The control-panel DISPLAY button
+  // (tex_cp_showinfo, mp.fullInfo) ADDS, on the right: track counter N/M, elapsed/total time, codec badge
+  // (plane_codec "MP3") and the seek/progress bar (audioplayer_display_time_bar).
+  {
   const t = mp.tracks[mp.idx] || {};
-  const artSz = 64, ax = XCF(V.W*0.045), ay = V.H*0.85;
-  ctx2.save(); ctx2.shadowColor='rgba(0,0,0,0.6)'; ctx2.shadowBlur=14; ctx2.shadowOffsetY=4;
-  const ic = getIcon('asset:images/icon_fw_track.png');
-  if (ic && ic.loaded) ctx2.drawImage(ic.img, ax, ay, artSz, artSz);
+  const panelUp = !!(optMenu && optMenu.player) || !!mpOptClosing;
+  // jacket cover (plane_default_music_cover): x0.066 y0.827, square 0.085*H
+  const jsz = V.H*0.085, ax = XCF(V.W*0.066), ay = V.H*0.827;
+  ctx2.save(); ctx2.shadowColor='rgba(0,0,0,0.55)'; ctx2.shadowBlur=12; ctx2.shadowOffsetY=3;
+  const ic = getIcon('asset:images/icon_fw_track.png');   // plane_default_music_cover / jacket
+  if (ic && ic.loaded) ctx2.drawImage(ic.img, ax, ay, jsz, jsz);
   ctx2.restore();
-  const tx = ax + artSz + 22;
+  // title (baseline 0.866) + artist / album line (baseline 0.900, "-" when the field is empty)
+  const tx = ax + jsz + XCF(V.W*0.013);
   ctx2.textAlign='left'; ctx2.textBaseline='alphabetic';
-  ctx2.shadowColor='rgba(0,0,0,0.75)'; ctx2.shadowBlur=4; ctx2.shadowOffsetY=1;
-  ctx2.fillStyle='#fff'; ctx2.font='26px PS3'; ctx2.fillText(t.n||'', tx, ay+30);
-  ctx2.fillStyle='rgba(255,255,255,0.8)'; ctx2.font='19px PS3';
-  ctx2.fillText((t.a?t.a+' / ':'') + 'http://s3k.ocremix.org - Project Chaos', tx, ay+56);
-  // thin progress line along the very bottom
-  const dur = (mpAudio && isFinite(mpAudio.duration)) ? mpAudio.duration : 0;
-  const cur = mpAudio ? mpAudio.currentTime : 0;
-  const frac = dur ? Math.max(0,Math.min(1,cur/dur)) : 0;
-  ctx2.shadowColor='rgba(0,0,0,0)';
-  ctx2.fillStyle='rgba(255,255,255,0.18)'; ctx2.fillRect(0, V.H-3, XCF(V.W), 2);
-  ctx2.fillStyle='rgba(255,255,255,0.9)'; ctx2.fillRect(0, V.H-3, XCF(V.W)*frac, 2);
+  ctx2.shadowColor='rgba(0,0,0,0.8)'; ctx2.shadowBlur=4; ctx2.shadowOffsetY=1;
+  // title: clipped to the area LEFT of the right info-cluster (so it never overlaps the time/codec/seek) and
+  // MARQUEE-BOUNCED when too long -- smooth ping-pong left<->right (user 2026-06-13: "smooth bounce left to
+  // right"), NOT a scroll-then-jump loop. Holds briefly at each end, eases (smoothstep) both ways.
+  ctx2.font='32px PS3';
+  const titleRight = mp.fullInfo ? XCF(V.W*0.715) : XCF(V.W*0.955);
+  const titleMaxW = titleRight - tx, titleStr = t.n || '';
+  const titleW = ctx2.measureText(titleStr).width;
+  ctx2.save();
+  ctx2.beginPath(); ctx2.rect(tx, V.H*0.80, titleMaxW, V.H*0.12); ctx2.clip();
+  let _toff = 0;
+  if (titleW > titleMaxW) {
+    const over = titleW - titleMaxW, HOLD = 1100, SPEED = 55;        // ms hold at each end, px/s scroll
+    const scrollT = Math.max(350, over / SPEED * 1000);
+    const cyc = HOLD + scrollT + HOLD + scrollT;                     // hold@start -> ease left -> hold@end -> ease right
+    const tt = performance.now() % cyc;
+    let p;                                                           // 0 = start, 1 = fully left (end visible)
+    if (tt < HOLD) p = 0;
+    else if (tt < HOLD + scrollT) { const u = (tt - HOLD) / scrollT; p = u*u*(3-2*u); }            // ease to end
+    else if (tt < HOLD + scrollT + HOLD) p = 1;
+    else { const u = (tt - HOLD - scrollT - HOLD) / scrollT; p = 1 - u*u*(3-2*u); }                // ease back (bounce)
+    _toff = over * p;
+  }
+  ctx2.fillStyle='rgba(255,255,255,0.95)'; ctx2.fillText(titleStr, tx - _toff, V.H*0.866);
+  ctx2.restore();
+  ctx2.fillStyle='rgba(255,255,255,0.70)'; ctx2.font='19px PS3';
+  ctx2.fillText((t.a||'-')+' / '+(t.st||'-'), tx, V.H*0.900);
+  ctx2.shadowColor='rgba(0,0,0,0)'; ctx2.shadowOffsetY=0;
+  // full-info right cluster (DISPLAY toggle) -- FADES in/out via mpFullInfoT (user: "should fade in/out")
+  if (mpFullInfoT > 0.001) {
+    ctx2.save(); ctx2.globalAlpha = mpEnterT * mpFullInfoT;
+    const dur = (mpAudio && isFinite(mpAudio.duration) && mpAudio.duration>0) ? mpAudio.duration : 0;
+    const cur = mpAudio ? mpAudio.currentTime : 0;
+    const rx = XCF(V.W*0.738), rEnd = XCF(V.W*0.940);
+    ctx2.shadowColor='rgba(0,0,0,0.8)'; ctx2.shadowBlur=4; ctx2.shadowOffsetY=1;
+    ctx2.textAlign='right'; ctx2.fillStyle='rgba(255,255,255,0.70)'; ctx2.font='17px PS3';
+    ctx2.fillText((mp.idx+1)+' / '+mp.tracks.length, rEnd, V.H*0.792);   // track counter N/M
+    ctx2.textAlign='left'; ctx2.fillStyle='rgba(255,255,255,0.80)'; ctx2.font='22px PS3';
+    ctx2.fillText(mpFmtTime(cur)+' / '+(dur?mpFmtTime(dur):'--:--:--'), rx, V.H*0.866);   // elapsed/total
+    ctx2.shadowColor='rgba(0,0,0,0)'; ctx2.shadowOffsetY=0;
+    // codec badge = REAL firmware codec icon (plane_codec; the metallic plate has the speaker glyph built in):
+    // ATRAC=22 AAC=23 MP3=24 PCM=25 CD=26 WMA=27. NOT a procedural plate.
+    const CODEC_ICON = {MP3:24, ATRAC:22, AAC:23, PCM:25, CD:26, WMA:27};
+    const cIdx = CODEC_ICON[(t.codec||'MP3').toUpperCase()]; const cIc = mpIcon(cIdx!=null?cIdx:24);
+    if (cIc && cIc.loaded && cIc.img) {
+      const ch = V.H*0.024, cw = ch*(cIc.img.naturalWidth/cIc.img.naturalHeight);
+      ctx2.drawImage(cIc.img, XCF(V.W*0.887), V.H*0.844, cw, ch);
+    }
+    // seek / progress bar: grey track + lighter top edge + bright played fill
+    const sx = rx, sw = rEnd - rx, sy = V.H*0.892, shh = V.H*0.009;
+    ctx2.fillStyle='rgba(70,70,70,0.95)'; ctx2.fillRect(sx, sy, sw, shh);
+    ctx2.fillStyle='rgba(150,150,150,0.85)'; ctx2.fillRect(sx, sy, sw, Math.max(1, V.H*0.001));
+    const frac = dur ? Math.max(0, Math.min(1, cur/dur)) : 0;
+    if (frac>0){ ctx2.fillStyle='rgba(245,245,245,0.95)'; ctx2.fillRect(sx, sy, Math.max(2, sw*frac), shh); }
+    ctx2.restore();
+  }
+  // status row (play-state / transport / repeat / shuffle, top-left above the jacket) -- shown whenever the
+  // panel is open, REGARDLESS of the Display/full-info toggle (user 2026-06-13: "see the play/stop/FF/Rewind/
+  // skip/back/repeat/shuffle icons regardless of the more-info icon"). Faded by the player-presence transition.
+  if (panelUp) drawMpStatusRow(ctx2, mp, ax, mpEnterT);
+  }
   // visualizer-name banner (brief, top-left)
   if (mpVisName) {
     const el = performance.now() - mpVisName.start;
@@ -10918,6 +11228,285 @@ function drawMusicPlayer(ctx2) {
       ctx2.fillStyle='#fff'; ctx2.fillText(mpVisName.text, XCF(V.W*0.045), V.H*0.11); ctx2.globalAlpha=1;
     }
   }
+  // Now Playing control/options panel (TRIANGLE) - drawn over the visualizer in the overlay transform.
+  if (optMenu && optMenu.player) drawMpOpt(ctx2, optMenu, null);
+  else if (mpOptClosing) {   // reverse slide/fade-out on close (t 1->0)
+    const p = (performance.now() - mpOptClosing.start) / mpOptClosing.dur;
+    if (p >= 1) mpOptClosing = null;
+    else drawMpOpt(ctx2, mpOptClosing.o, 1 - p);
+  }
+  // full_screen_message_page (Deleting... / Delete completed.) over everything.
+  if (mpMsg) drawMpMsg(ctx2);
+  ctx2.restore();
+}
+// full_screen_message_page: dim backdrop + centered message; auto-dismiss + chain.
+function drawMpMsg(ctx2) {
+  const el = performance.now() - mpMsg.start;
+  if (el > mpMsg.dur) { const then = mpMsg.then; mpMsg = null; if (then) then(); return; }
+  const fade = Math.min(1, el/150) * Math.min(1, Math.max(0,(mpMsg.dur-el))/200);
+  ctx2.setTransform(dpr*scaleX,0,0,dpr*scaleY,0,frameCenterTY());
+  ctx2.save();
+  ctx2.globalAlpha = 0.45*fade; ctx2.fillStyle='#000'; ctx2.fillRect(0,0,V.W,V.H);
+  ctx2.globalAlpha = fade; ctx2.fillStyle='#fff'; ctx2.font='28px PS3';
+  ctx2.textAlign='center'; ctx2.textBaseline='middle';
+  ctx2.shadowColor='rgba(0,0,0,0.7)'; ctx2.shadowBlur=6;
+  ctx2.fillText(mpMsg.text, XCF(V.W*0.5), V.H*0.5);
+  ctx2.restore();
+}
+// controller-button hint pill (e.g. the "SELECT" glyph shown beside the Display label in the real panel).
+function drawMpPill(ctx2, x, y, w, h, label) {
+  ctx2.save();
+  const r = h/2;
+  ctx2.beginPath();
+  ctx2.moveTo(x+r,y); ctx2.arcTo(x+w,y,x+w,y+h,r); ctx2.arcTo(x+w,y+h,x,y+h,r);
+  ctx2.arcTo(x,y+h,x,y,r); ctx2.arcTo(x,y,x+w,y,r); ctx2.closePath();
+  ctx2.fillStyle='rgba(150,150,150,0.55)'; ctx2.fill();
+  ctx2.lineWidth=1.2; ctx2.strokeStyle='rgba(225,225,225,0.7)'; ctx2.stroke();
+  ctx2.fillStyle='rgba(255,255,255,0.95)'; ctx2.font=Math.round(h*0.46)+'px PS3';
+  ctx2.textAlign='center'; ctx2.textBaseline='middle';
+  ctx2.fillText(label, x+w/2, y+h*0.56);
+  ctx2.restore();
+}
+// panel-open play-status row (play_status_page): drawn at the bar's top-left above the jacket while the
+// control panel is open. Uses the REAL firmware status icons (NOT the control-panel icons): play=000,
+// pause=003, stop=004, repeat-all=007 (loop), repeat-one=007 loop + 008 ("1"), shuffle=009 (SHUF pill).
+function drawMpStatusRow(ctx2, mp, ax, fade) {
+  const a = (fade != null) ? fade : 1;   // fades with the full-info cluster
+  const y = V.H*0.782, h = V.H*0.030;   // glyph size measured from real disp_B (play-glyph extent 0.771-0.794)
+  ctx2.save(); ctx2.shadowColor='rgba(0,0,0,0.7)'; ctx2.shadowBlur=4; ctx2.shadowOffsetY=1; ctx2.globalAlpha=0.95*a;
+  let x = ax + (V.H*0.085)*0.5 - h*0.5;        // play glyph centred over the jacket column
+  const ico = (idx, scale) => {
+    const ic = mpIcon(idx); if (!ic || !ic.loaded || !ic.img) return;
+    const ar = ic.img.naturalWidth / ic.img.naturalHeight, hh = h*(scale||1), ww = hh*ar;
+    ctx2.globalAlpha = 0.95*a; ctx2.drawImage(ic.img, x, y - hh/2, ww, hh); x += ww + XCF(V.W*0.008);
+  };
+  // base play-state glyph -- a transient transport action (skip/back/FF/rewind) briefly overrides it so those
+  // icons are visible too: prev=001 next=002 searchb(rewind)=005 searchf(FF)=006.
+  let baseIco;
+  if (mp.transient && performance.now() < mp.transient.until) baseIco = mp.transient.icon;
+  else baseIco = mp.stopped ? 4 : ((mpAudio && mpAudio.paused) ? 3 : 0);
+  ico(baseIco, 1.0);   // play / pause / stop / (transient prev/next/rewind/FF)
+  x += XCF(V.W*0.004);
+  if (mp.repeat === 1) ico(7, 1.0);                  // repeat ALL = loop
+  else if (mp.repeat === 2) { ico(7, 1.0); ico(8, 0.75); }   // repeat ONE = loop + "1"
+  if (mp.shuffle) ico(9, 1.0);                       // shuffle = SHUF pill
+  ctx2.restore();
+}
+
+// ---- Now Playing control/options panel (firmware audioplayer_plugin.rco) ----
+// Opened by TRIANGLE during playback. Real firmware icons in images/audioplayer/.
+// (v1: faithful control set + real icons + real labels + focused/dim states; exact
+//  cluster positions/animation refined against the RPCS3 reference iteratively.)
+function mpIcon(n) { return getIcon('asset:images/audioplayer/icon_' + String(n).padStart(3,'0') + '.png'); }
+function mpFmtTime(s) { s = Math.max(0, Math.floor(s||0)); const h=(s/3600)|0, m=((s%3600)/60)|0, ss=s%60;
+  return (h<10?'0':'')+h+':'+(m<10?'0':'')+m+':'+(ss<10?'0':'')+ss; }   // firmware HH:MM:SS digit slots
+// Player confirm dialog (del_dialog_page / quit_confirm_dialog_page): closes the options panel and shows the
+// shared PS3 confirm box with the firmware message. sel 1 = No by default (destructive-confirm convention).
+function openMpConfirm(title, body, onYes) {
+  optMenu = null;
+  dialogState = { template:{type:'confirm', title:title, body:body, defaultSel:1}, sel:1, onYes:onYes,
+                  anim:{start:performance.now(), dur:250} };
+  playNav2();
+}
+// AUTHORITATIVE control-panel layout, decoded 1:1 from audioplayer_plugin.rco widget tree
+// (control_panel_page -> button group, 14 buttons). Grid: +X right, +Y up, 1 cell = 70px icon.
+// n/s/f = the firmware's normal / shadow / focus icon indices for each button.
+const MP_CP = [
+  {act:'vol',     label:'Volume Control',  gx:-2, gy: 1, n:35, s:49, f:63},
+  {act:'vis',     label:'Visual Player',   gx:-1, gy: 1, n:29, s:43, f:57},
+  {act:'addpl',   label:'Add to Playlist', gx: 0, gy: 1, n:31, s:45, f:59},
+  {act:'del',     label:'Delete',          gx: 1, gy: 1, n:30, s:44, f:58},
+  {act:'disp',    label:'Display',         gx: 2, gy: 1, n:34, s:48, f:62},
+  {act:'prev',    label:'Previous',        gx:-3, gy: 0, n:36, s:50, f:64},
+  {act:'next',    label:'Next',            gx:-2, gy: 0, n:37, s:51, f:65},
+  {act:'rew',     label:'Fast Reverse',    gx:-1, gy: 0, n:41, s:55, f:69},
+  {act:'ff',      label:'Fast Forward',    gx: 0, gy: 0, n:42, s:56, f:70},
+  {act:'play',    label:'Play',            gx: 1, gy: 0, n:38, s:52, f:66},
+  {act:'pause',   label:'Pause',           gx: 2, gy: 0, n:39, s:53, f:67},
+  {act:'stop',    label:'Stop',            gx: 3, gy: 0, n:40, s:54, f:68},
+  // repeat / shuffle are WIDE pills that don't sit on the integer column grid -- measured real centres
+  // (present 2026-06-13) put repeat at gx~-0.6 and shuffle at gx~0.8 (clear gap, no overlap).
+  {act:'repeat',  label:'Repeat',          gx:-0.6, gy:-1, n:32, s:46, f:60},
+  {act:'shuffle', label:'Shuffle',         gx: 0.8, gy:-1, n:33, s:47, f:61},
+];
+const MP_CP_DEF = MP_CP.findIndex(b => b.act === 'play');   // default focus = Play
+let mpOptClosing = null;   // {o, start, dur} -- exit animation for the control panel
+function openMpOpt() {
+  if (!musicPlayer) return;   // the control panel only exists inside Now Playing
+  if (optMenu) return;
+  mpOptClosing = null;
+  optMenu = {player:true, sel:(MP_CP_DEF<0?0:MP_CP_DEF), anim:{start:performance.now(), dur:200}};
+  playNav2();
+}
+// Close the control panel with a reverse slide/fade (mirrors the open animation).
+function closeMpOpt() {
+  if (!optMenu || !optMenu.player) return;
+  if (optMenu.vol) { optMenu.vol = null; playNav(); return; }   // close the Volume submenu to the panel first
+  mpOptClosing = {o: optMenu, start: performance.now(), dur: 200};
+  optMenu = null; playNav();
+}
+// 2D grid nav: move to the nearest button in the pressed direction (firmware grid is sparse).
+// dx: +1 right / -1 left.  dy: +1 grid-up / -1 grid-down  (caller converts screen up/down).
+function mpOptMove(dx, dy) {
+  const o = optMenu; if (!o || !o.player) return;
+  if (o.vol) {   // Volume Control submenu: LEFT/RIGHT steps the firmware -4..+4 level (9 steps)
+    if (dx) { o.vol.level = Math.max(-4, Math.min(4, o.vol.level + (dx>0?1:-1)));
+      musicPlayer.volLevel = o.vol.level; if (mpAudio) { try{ mpAudio.volume = (o.vol.level+4)/8; }catch(e){} } playCursor(); }
+    return;
+  }
+  const cur = MP_CP[o.sel]; let best=-1, bestd=1e9;
+  for (let i=0;i<MP_CP.length;i++){ if (i===o.sel) continue; const b=MP_CP[i];
+    const ddx=b.gx-cur.gx, ddy=b.gy-cur.gy;
+    if (dx>0 && ddx<=0) continue; if (dx<0 && ddx>=0) continue;
+    if (dy>0 && ddy<=0) continue; if (dy<0 && ddy>=0) continue;
+    const along = dx!==0 ? Math.abs(ddx) : Math.abs(ddy);
+    const perp  = dx!==0 ? Math.abs(ddy) : Math.abs(ddx);
+    const d = along + perp*3;   // prefer same row/column
+    if (d<bestd){ bestd=d; best=i; }
+  }
+  if (best>=0){ o.selPrev=o.sel; o.focusStart=performance.now(); o.sel=best; playCursor(); }
+}
+function mpOptActivate() {
+  const o = optMenu; if (!o || !o.player || !musicPlayer) return;
+  if (o.vol) { o.vol = null; playNav2(); return; }   // CROSS confirms + closes the Volume Control submenu
+  o.press = {start: performance.now(), dur: 240, sel: o.sel};   // invoke-animation (drawn in drawMpOpt)
+  const a = MP_CP[o.sel] && MP_CP[o.sel].act;
+  if (a === 'vol')   { o.vol = {level: (musicPlayer.volLevel!==undefined ? musicPlayer.volLevel : 0)}; playNav2(); return; }
+  if (a === 'play')  { musicPlayer.stopped = false; if (mpAudio && mpAudio.paused) mpAudio.play(); }
+  else if (a === 'pause') { musicPlayer.stopped = false; if (mpAudio && !mpAudio.paused) mpAudio.pause(); }
+  else if (a === 'stop')  { musicPlayer.stopped = true; if (mpAudio) { mpAudio.pause(); try{ mpAudio.currentTime=0; }catch(e){} } }
+  else if (a === 'next')  { musicPlayer.stopped = false; musicPlayer.transient = {icon:2, until:performance.now()+900}; mpNext(); }
+  else if (a === 'prev')  { musicPlayer.stopped = false; musicPlayer.transient = {icon:1, until:performance.now()+900}; mpPrev(); }
+  else if (a === 'rew' && mpAudio) { musicPlayer.transient = {icon:5, until:performance.now()+900}; mpAudio.currentTime = Math.max(0, mpAudio.currentTime - 10); }
+  else if (a === 'ff'  && mpAudio) { musicPlayer.transient = {icon:6, until:performance.now()+900}; mpAudio.currentTime = Math.min(mpAudio.duration||0, mpAudio.currentTime + 10); }
+  // Repeat button cycles Off -> Repeat All -> Repeat One (firmware has tex_repeat_status + tex_1repeat_status).
+  else if (a === 'repeat')  { musicPlayer.repeat  = ((musicPlayer.repeat||0) + 1) % 3; }
+  else if (a === 'shuffle') { musicPlayer.shuffle = !musicPlayer.shuffle; mpRebuildOrder(); }   // re-derive the playback order
+  else if (a === 'vis')     { mpCycleVis(); }
+  else if (a === 'del')     {
+    // del_dialog_page (custom layout MEASURED from real RPCS3 /tmp/rdlg_delete.png): top divider, jacket
+    // cover + title/date/size on the LEFT, "Are you sure you want to delete the track?" + Yes/No on the RIGHT.
+    // On Yes -> full_screen_message "Deleting..." (msg_deleting) -> "Delete completed." (msg_deleted) -> advance.
+    const _delSel = o.sel;   // remember Delete's grid index so cancel can restore focus to it
+    optMenu = null;
+    const tr = musicPlayer.tracks[musicPlayer.idx] || {};
+    dialogState = { template:{type:'mpdelete', title:(tr.n||''), body:'Are you sure you want to delete the track?'},
+                    sel:1, onYes:function(){ mpShowMsg('Deleting...', 800, function(){ mpShowMsg('Delete completed.', 900, function(){ mpNext(); }); }); },
+                    // VERIFIED vs real RPCS3 (2026-06-13): dismissing the delete dialog returns to the control
+                    // panel with Delete still focused (NOT clean Now Playing).
+                    onCancel:function(){ if (musicPlayer){ openMpOpt(); if (optMenu) optMenu.sel = _delSel; } },
+                    anim:{start:performance.now(), dur:220} };
+    playNav2();
+    return;
+  }
+  // Display (msg_display, tex_cp_showinfo): toggles the "full info" overlay. VERIFIED 1:1 against real
+  // Windows RPCS3 (present capture 2026-06-13): default Now Playing shows the MINIMAL bar (jacket + title +
+  // artist/album line); pressing Display ADDS the track counter (N/M), elapsed/total time, codec badge (MP3)
+  // and the seek/progress bar. It does NOT hide the bar (the earlier hideInfo behaviour was wrong).
+  else if (a === 'disp')    { musicPlayer.fullInfo = !musicPlayer.fullInfo; }
+  // Add to Playlist: open the chooser (existing playlist or create a new one via OSK) for the current track.
+  else if (a === 'addpl')   { mpOpenAddChooser(musicPlayer.tracks[musicPlayer.idx]); return; }
+  playNav2();
+}
+// Draw the control panel over the Now Playing visualizer (called from drawMusicPlayer).
+// Faithful to the firmware grid: each button = shadow icon (behind) + normal icon; focused = focus(glow) icon.
+// audioplayer_volume_page -- MEASURED from real RPCS3 (/tmp/rdlg_volume.png): the panel STAYS visible and
+// the meter is drawn BELOW it: "Volume Control" label (y~0.56), the level NAME ("Normal" at 0, else +/-N),
+// then a "- [9 segments] +" bar (firmware range -4..+4). Centred under the panel cluster.
+function drawMpVolMeter(ctx2, o, t) {
+  const cx = XCF(V.W*0.22), topY = V.H*0.56;
+  ctx2.save(); ctx2.globalAlpha = t; ctx2.textAlign='center'; ctx2.textBaseline='alphabetic';
+  ctx2.shadowColor='rgba(0,0,0,0.7)'; ctx2.shadowBlur=4;
+  ctx2.fillStyle='#fff'; ctx2.font='22px PS3'; ctx2.fillText('Volume Control', cx, topY);
+  const lvl = o.vol.level;
+  const name = lvl===0 ? 'Normal' : (lvl>0 ? '+'+lvl : String(lvl));
+  ctx2.font='18px PS3'; ctx2.fillStyle='rgba(255,255,255,0.85)'; ctx2.fillText(name, cx, topY+30);
+  ctx2.shadowBlur=0;
+  const segN=9, segW=V.H*0.020, gap=V.H*0.006, hh=V.H*0.024, my=topY+44;
+  const totalW = segN*segW+(segN-1)*gap, x0 = cx-totalW/2;
+  ctx2.textAlign='right'; ctx2.fillStyle='#fff'; ctx2.font='18px PS3'; ctx2.fillText('-', x0-10, my+hh*0.9);
+  const filled = lvl+5;   // -4 -> 1 seg, 0 -> 5, +4 -> 9
+  for (let i=0;i<segN;i++){ const x=x0+i*(segW+gap);
+    ctx2.fillStyle = (i<filled) ? 'rgba(120,225,255,0.95)' : 'rgba(255,255,255,0.20)';
+    ctx2.fillRect(x, my, segW, hh); }
+  ctx2.textAlign='left'; ctx2.fillStyle='#fff'; ctx2.fillText('+', x0+totalW+10, my+hh*0.9);
+  ctx2.restore();
+}
+// Draw the control panel over the Now Playing visualizer (called from drawMusicPlayer).
+// o defaults to the live optMenu; tOverride lets the close animation drive t 1->0.
+function drawMpOpt(ctx2, o, tOverride) {
+  o = o || optMenu; if (!o || !o.player) return;
+  // (Volume Control: the real player KEEPS the panel visible and draws the meter BELOW it -- see end of fn.)
+  const t = (tOverride != null) ? tOverride
+            : Math.min(1, (performance.now() - o.anim.start) / o.anim.dur); // slide/fade in
+  // Geometry MEASURED from the real Windows RPCS3 (native-GPU correct-colour capture 2026-06-13,
+  // /tmp/win_panel_full.png): 3-row grid sitting CENTRE-LEFT / UPPER. Origin (gx0, gy0=transport row)
+  // at normX 0.273, normY 0.390. Column pitch ~47px, row pitch ~56px in a 1080-tall frame; icons are
+  // SMALL (~V.H*0.044 tall, native aspect). No persistent label (the real panel shows none).
+  // Grid geometry MEASURED 1:1 from real Windows RPCS3 present (2026-06-13, icon-centroid analysis across
+  // all 3 rows): origin (gx0,gy0=transport row) at normX 0.273 / normY 0.441; column pitch ~0.033*W,
+  // row pitch ~0.061*H; glyphs ~0.046*H tall at native aspect.
+  const cellX = XCF(V.W*0.033), cellY = V.H*0.061, ih = V.H*0.046;
+  const ox = XCF(V.W*0.273) - (1-t)*20, oy = V.H*0.441;
+  const pr = o.press;   // invoke-animation: scale-pop + brightness flash on the activated button
+  ctx2.save(); ctx2.textAlign='center'; ctx2.textBaseline='middle';
+  for (let i=0;i<MP_CP.length;i++){
+    const b = MP_CP[i], focus = (i===o.sel);
+    const cx = ox + b.gx*cellX, cy = oy - b.gy*cellY;
+    // the real panel ENLARGES the focused control; animate the grow-in / shrink-back (tasteful, ~140ms)
+    let baseScale = focus ? 1.18 : 1.0;
+    if (o.focusStart){
+      const fe = Math.min(1, (performance.now()-o.focusStart)/140), fk = 1-Math.pow(1-fe,3);
+      if (focus) baseScale = 1.0 + 0.18*fk;
+      else if (i===o.selPrev) baseScale = 1.18 - 0.18*fk;
+    }
+    let ps = baseScale, flash = 0;
+    if (pr && pr.sel===i){ const e=(performance.now()-pr.start)/pr.dur;
+      if (e<1){ const s=Math.sin(e*Math.PI); ps *= (1 - 0.18*s); flash = s*0.55; } }   // press dip + flash
+    const drawI = (cache, dx, dy, al) => {   // native aspect (height-normalised) + per-button scale
+      if (!cache || !cache.loaded || !cache.img) return;
+      const ar = (cache.img.naturalWidth/cache.img.naturalHeight) || 1;
+      const h = ih*ps, w = h*ar;
+      ctx2.globalAlpha = t*al; ctx2.drawImage(cache.img, cx-w/2+dx, cy-h/2+dy, w, h);
+    };
+    // Clean transparent glyphs: the firmware "shadow" textures (b.s) are near-opaque dark SQUARE plates --
+    // drawing them darkens a bright visualizer behind the icons (the user's "no transparent background").
+    // The real XMB shows clean icons, so we skip the plate and use a subtle glyph drop-shadow for legibility.
+    if (focus) {
+      // SELECTION GLOW: a SUBTLE breathing halo behind the focused glyph, then the crisp focus glyph on top so
+      // the icon detail is preserved (user 2026-06-13: the old 3x full-alpha bloom blew out the detail). One
+      // low-alpha halo pass (glyph body barely brightened) + one crisp pass that source-over restores detail.
+      const pulse = 0.5 + 0.5*Math.sin(performance.now()*0.0042);   // 0..1, ~1.5s breathe
+      ctx2.shadowOffsetX=0; ctx2.shadowOffsetY=0;
+      ctx2.shadowColor='rgba(220,235,255,'+(0.20+0.16*pulse).toFixed(3)+')'; ctx2.shadowBlur=8+5*pulse;
+      drawI(mpIcon(b.f), 0, 0, 0.32);                               // faint halo (does not blow out the glyph)
+      ctx2.shadowColor='rgba(0,0,0,0)'; ctx2.shadowBlur=0;
+      drawI(mpIcon(b.f), 0, 0, 1.0);                                // crisp focus glyph -> full detail
+    } else {
+      ctx2.shadowColor='rgba(0,0,0,0.5)'; ctx2.shadowBlur=5; ctx2.shadowOffsetX=0; ctx2.shadowOffsetY=2;
+      drawI(mpIcon(b.n), 0, 0, 0.85);
+      ctx2.shadowColor='rgba(0,0,0,0)'; ctx2.shadowBlur=0; ctx2.shadowOffsetY=0;
+    }
+    if (flash > 0) drawI(mpIcon(b.f), 0, 0, flash);             // brief brightness pop on activate
+  }
+  // focused-item label below the grid (measured real position: centred at the grid origin, y~0.568H)
+  const fb = MP_CP[o.sel];
+  if (fb && !o.vol){
+    ctx2.globalAlpha = t; ctx2.textBaseline='alphabetic';
+    ctx2.shadowColor='rgba(0,0,0,0.7)'; ctx2.shadowBlur=4; ctx2.shadowOffsetY=1;
+    ctx2.fillStyle='rgba(255,255,255,0.95)'; ctx2.font='20px PS3';
+    const ly = V.H*0.568;
+    // The real panel shows the focused-item label + a "SELECT" button-hint pill for EVERY item (verified
+    // against real RPCS3: "Play SELECT", "Display SELECT", "Delete" focused... -> the SELECT pill is generic,
+    // not Display-specific). label + pill centred as a group at the grid origin.
+    const lw = ctx2.measureText(fb.label).width, gap = XCF(V.W*0.008);
+    const pillW = XCF(V.W*0.050), pillH = V.H*0.030, total = lw + gap + pillW;
+    const sx = ox - total/2;
+    ctx2.textAlign='left'; ctx2.fillText(fb.label, sx, ly);
+    ctx2.shadowColor='rgba(0,0,0,0)'; ctx2.shadowOffsetY=0;
+    drawMpPill(ctx2, sx + lw + gap, ly - pillH*0.78, pillW, pillH, 'SELECT');
+  }
+  if (o.vol) drawMpVolMeter(ctx2, o, t);   // Volume Control meter below the (still-visible) panel
   ctx2.restore();
 }
 
@@ -10942,11 +11531,13 @@ function buildOptRows() {
     rows.push({label:'Copy Multiple', act:'copymulti'});
     rows.push({sep:1});
   }
+  const inPlaylist = inside && mpPlaylists.some(p => p.ch === curItems());   // inside a specific playlist's track folder
   const media = it && (it.mtype === 'album' || it.mtype === 'track');
   if (media || (inContent && it)) {
     rows.push({label:'Play', act:'play'});
     rows.push({label:'Copy', act:'copy'});
-    rows.push({label:'Add to Playlist', act:'addpl'});
+    if (inPlaylist) rows.push({label:'Remove from Playlist', act:'rmpl'});   // playlist management
+    else rows.push({label:'Add to Playlist', act:'addpl'});
     rows.push({label:'Delete', act:'delete'});
     rows.push({label:'Information', act:'info'});
   } else if (it) {
@@ -10956,7 +11547,10 @@ function buildOptRows() {
 }
 
 function openOptMenu() {
-  if (musicPlayer) return;   // no options menu in Now Playing (Square cycles the visualizer)
+  if (musicPlayer && !wizState && !dialogState) {   // Now Playing: TRIANGLE TOGGLES the control/options panel (firmware show/hide)
+    if (optMenu && optMenu.player) closeMpOpt(); else openMpOpt();
+    return;
+  }
   if (optMenu || dialogState || wizState || landingState || submenuAnim) return;
   const rows = buildOptRows(); if (!rows) return;
   let sel = 0; while (rows[sel] && rows[sel].sep) sel++;
@@ -10987,6 +11581,8 @@ function optEnter() {
 }
 function optBack() {
   const o = optMenu; if (!o) return;
+  if (o.player && o.vol) { o.vol = null; playNav(); return; }   // close the Volume Control submenu, back to the panel
+  if (o.player) { closeMpOpt(); return; }                       // animate the control panel out
   if (o.subOpen) { o.subOpen = false; playNav(); return; }
   closeOptMenu();
 }
@@ -11005,7 +11601,22 @@ function doOptAction(act) {
     else if (it && it.mtype === 'album' && it.ch) openMusicPlayer(it.ch, 0);
     return;
   }
-  closeOptMenu();   // copy / addpl / delete / multi: simulated no-ops
+  if (act === 'addpl') {
+    // Add to Playlist: open the chooser (pick existing / create new). A track adds itself; an album adds all.
+    optMenu = null;
+    mpOpenAddChooser(it && it.mtype === 'album' && it.ch ? it.ch : it);
+    return;
+  }
+  if (act === 'rmpl') {
+    // Remove from Playlist: splice the focused track out of THIS playlist (curItems IS the playlist's ch).
+    const pl = mpPlaylists.find(p => p.ch === curItems());
+    if (pl && ii < pl.ch.length) pl.ch.splice(ii, 1);
+    optMenu = null;
+    if (pl && !pl.ch.length) { submenuAnim = null; if (typeof inputLock !== 'undefined') inputLock = false; back(); mpSyncPlaylistItem(); }  // playlist now empty -> back out to the Playlists folder
+    else { mpSyncPlaylistItem(); if (pl && ii >= pl.ch.length) ii = Math.max(0, pl.ch.length - 1); showGroupBanner('Removed from the playlist'); playNav2(); }
+    return;
+  }
+  closeOptMenu();   // copy / delete / multi: simulated no-ops
 }
 function openContentInfo(it) {
   let body;
@@ -11790,10 +12401,14 @@ function queueOrLock(lockMs) {
 }
 
 function navCat(dir, fromRepeat) {
-  // Music player: LEFT/RIGHT = previous/next track.
-  if (musicPlayer) { if (dir > 0) mpNext(); else mpPrev(); return; }
+  // Music player: if the control panel is OPEN, LEFT/RIGHT moves the button focus;
+  // only with the panel closed does LEFT/RIGHT skip track (else the panel can't be navigated).
+  if (musicPlayer && !dialogState && !wizState) {   // a player dialog (delete/quit) or OSK takes the D-pad when open
+    if (optMenu && optMenu.player) { mpOptMove(dir > 0 ? 1 : -1, 0); return; }
+    if (dir > 0) mpNext(); else mpPrev(); return;
+  }
   // Content options menu (Triangle): RIGHT opens a submenu, LEFT closes it.
-  if (optMenu) { if (dir > 0) optOpenSub(); else optBack(); return; }
+  if (optMenu) { if (optMenu.player) { mpOptMove(dir > 0 ? 1 : -1, 0); return; } if (dir > 0) optOpenSub(); else optBack(); return; }
   // Network wizard: LEFT/RIGHT moves Yes/No or OSK column.
   if (wizState) { wizNavCat(dir); return; }
   // Dialog: LEFT/RIGHT moves between options for chooser, or between
@@ -11892,9 +12507,14 @@ function navCat(dir, fromRepeat) {
 }
 
 function navItem(dir, fromRepeat) {
-  if (musicPlayer) return;   // player ignores up/down
+  // Music player: if the control panel is OPEN, UP/DOWN moves the button focus;
+  // with the panel closed the player ignores up/down.
+  if (musicPlayer && !dialogState && !wizState) {
+    if (optMenu && optMenu.player) { mpOptMove(0, dir > 0 ? -1 : 1); return; }
+    return;
+  }
   // Content options menu (Triangle): UP/DOWN moves the option/sub focus.
-  if (optMenu) { optMove(dir); return; }
+  if (optMenu) { if (optMenu.player) { mpOptMove(0, dir > 0 ? -1 : 1); return; } optMove(dir); return; }
   // Network wizard: UP/DOWN moves option focus / OSK row.
   if (wizState) { wizNavItem(dir); return; }
   // Dialog: UP/DOWN moves between options for chooser. For confirm/info
@@ -11959,10 +12579,14 @@ function navItem(dir, fromRepeat) {
 }
 
 function enter() {
-  // Music player (Now Playing) owns Cross = play/pause.
-  if (musicPlayer) { mpToggle(); return; }
+  // Now Playing CONTROL PANEL (Triangle) owns Cross = ACTIVATE the focused button. This must be checked
+  // BEFORE the play/pause toggle below, otherwise Cross toggles playback and the panel buttons can never
+  // be selected (the user's "can't select any of the icons").
+  if (musicPlayer && optMenu && optMenu.player && !dialogState && !wizState) { mpOptActivate(); return; }
+  // Music player (Now Playing, panel closed) owns Cross = play/pause.
+  if (musicPlayer && !dialogState && !wizState) { mpToggle(); return; }
   // Content options menu (Triangle) owns Cross while open.
-  if (optMenu) { optEnter(); return; }
+  if (optMenu) { if (optMenu.player) { mpOptActivate(); return; } optEnter(); return; }
   // Network wizard: Cross confirms. On the OSK it presses the focused key.
   if (wizState) { if (wizState.osk) wizOskPress(); else wizConfirm(); return; }
   // Dialog: Cross confirms. For theme-bound chooser dialogs the current
@@ -11971,6 +12595,10 @@ function enter() {
   // side-effects (matching prior behaviour).
   if (dialogState) {
     const tpl = dialogState.template;
+    // Confirm dialogs with a callback (e.g. the music-player Delete/Quit confirms). sel 0 = Yes.
+    if (dialogState.onYes) { const yes = (dialogState.sel === 0), cb = dialogState.onYes, oc = dialogState.onCancel; dialogState = null; if (yes) cb(); else if (oc) oc(); playNav2(); return; }
+    // Generic chooser with a callback (e.g. Add to Playlist -> pick existing / New Playlist).
+    if (dialogState.onChoose) { const i = dialogState.sel, cb = dialogState.onChoose; dialogState = null; cb(i); playNav2(); return; }
     if (tpl.themeKey && (tpl.type === 'chooser' || tpl.type === 'chooser_illust')) {
       applyThemeSelection(tpl.themeKey, dialogState.sel);
     }
@@ -12053,6 +12681,10 @@ function enter() {
     return;
   }
 
+  if (it._createPlaylist) {   // "Create New Playlist" entry in the Playlists folder -> OSK -> new empty playlist
+    mpOpenNameOSK('Enter a name for the playlist', function (nm) { mpCreatePlaylist(nm); mpSyncPlaylistItem(); });
+    return;
+  }
   if (!it.ch) return;
   const parentItems = items;
   const parentIdx = ii;
@@ -12076,8 +12708,12 @@ function enter() {
 }
 
 function back() {
-  // Music player: Circle closes Now Playing.
-  if (musicPlayer) { closeMusicPlayer(); return; }
+  // Now Playing CONTROL PANEL / Volume submenu: Circle/Back closes those FIRST (optBack: volume -> panel ->
+  // player), and only THEN does Circle exit Now Playing. This must precede the closeMusicPlayer line below,
+  // otherwise Circle in the open panel exits the whole player instead of just closing the panel.
+  if (musicPlayer && optMenu && optMenu.player && !dialogState && !wizState) { optBack(); return; }
+  // Music player (no panel): Circle closes Now Playing (but a player dialog or OSK cancels first).
+  if (musicPlayer && !dialogState && !wizState) { closeMusicPlayer(); return; }
   // Content options menu (Triangle): Circle closes submenu / menu.
   if (optMenu) { optBack(); return; }
   // Network wizard: Circle pops the wizard stack (closes at the root).
@@ -12100,7 +12736,9 @@ function back() {
         dur: 110 * (window.XFADE_SLOMO || 1)
       };
     }
+    const _onc = dialogState.onCancel;   // e.g. the Now Playing delete dialog returns to the panel on cancel
     dialogState = null;
+    if (_onc) _onc();
     playNav();
     return;
   }
@@ -12194,8 +12832,19 @@ const KEY_ACCEL_FACTOR = V.INPUT_ACCEL_MULT;         // firmware: 1.4x accelerat
 // firmware-derived processKeyRepeat schedule can drive chained motion without
 // the inputLock clamping it down to the animation duration.
 function getKeyAction(key, fromRepeat) {
-  // Music player: LEFT/RIGHT = prev/next track.
-  if (musicPlayer) {
+  // Music player: when the control panel is OPEN the D-pad navigates the button grid;
+  // with the panel closed, LEFT/RIGHT skip track (UP/DOWN ignored). This is the keyboard
+  // path -- it previously hard-mapped arrows to prev/next, so the panel couldn't be navigated.
+  if (musicPlayer && !dialogState && !wizState) {   // a player dialog (delete/quit) or OSK falls through to the wizard/dialog keys
+    if (optMenu && optMenu.player) {
+      switch (key) {
+        case 'ArrowLeft':  return () => mpOptMove(-1, 0);
+        case 'ArrowRight': return () => mpOptMove(1, 0);
+        case 'ArrowUp':    return () => mpOptMove(0, 1);
+        case 'ArrowDown':  return () => mpOptMove(0, -1);
+        default: return null;
+      }
+    }
     switch (key) {
       case 'ArrowLeft':  return () => mpPrev();
       case 'ArrowRight': return () => mpNext();
@@ -13346,6 +13995,13 @@ function frame(now) {
       }
       blurProg = Math.max(blurProg, submenuBlur);
     }
+    // Now Playing visualizer must stay SHARP: when the music player is up, suppress the submenu/dialog
+    // backdrop blur entirely (the player is entered FROM a content submenu, so stack.length>0 would
+    // otherwise leave the visualizer gaussian-blurred). User 2026-06-13: "no blur like the submenu blur".
+    // Now Playing entry EASES the backdrop blur out (and back in on exit) instead of a hard cut, so the
+    // submenu blur smoothly resolves to a sharp visualizer over ~1s. User 2026-06-13: "the unblur needs a
+    // transition and vice versa".
+    blurProg *= (1 - mpEnterT);
     // Seamless blur (scales the canvases to hide the CSS-blur dark edge). px=0
     // clears it. Idempotent, so a closed dialog / exited submenu sharpens fully.
     applyBgBlur(blurProg > 0.001 ? (blurProg * BACKDROP_BLUR_PX) : 0);
@@ -13478,9 +14134,44 @@ function frame(now) {
   // Content-browser overlays (over the XMB, not over dialogs/wizards).
   if (groupReflow && performance.now() - groupReflow.start > 1400) groupReflow = null;
   drawGroupBanner(ctx);     // transient top-left grouping banner (self-gating)
-  if (optMenu) drawOptMenu(ctx);
-  // Music player (Now Playing) renders full-frame on top of everything.
+  if (optMenu && !optMenu.player) drawOptMenu(ctx);
+  // Music player (Now Playing) renders full-frame on top of everything, with an enter/exit CROSS-FADE of the
+  // XMB chrome (icons/list/clock) keyed to mpEnterT (~1s, user 2026-06-13). Snapshot the chrome (drawXMB
+  // output) before the player clears it, then composite it back at alpha (1-mpEnterT) so the menu dissolves
+  // into the Now Playing on enter and reappears on exit. The Now Playing overlay itself fades in via mpEnterT.
+  // chrome visible fraction = 1 - smoothstep(mpChromeRaw): the icons fade on the FASTER ~0.4s ramp (user:
+  // "icons need to transition more quickly"), while the bar/wave/blur use the ~1s mpEnterT/mpVisBlend.
+  const _chromeVis = 1 - (mpChromeRaw * mpChromeRaw * (3 - 2 * mpChromeRaw));
+  const _mpFading = (musicPlayer || mpEnterT > 0.001 || _chromeVis > 0.001);
+  if (_mpFading) {
+    chromeXfadeCtx.setTransform(1, 0, 0, 1, 0, 0);
+    chromeXfadeCtx.globalCompositeOperation = 'copy'; chromeXfadeCtx.globalAlpha = 1;
+    chromeXfadeCtx.drawImage(xmbCanvas, 0, 0);
+    chromeXfadeCtx.globalCompositeOperation = 'source-over';
+  }
   if (musicPlayer) drawMusicPlayer(ctx);
+  // The music player draws after the modal-overlay block above, so re-draw an open dialog
+  // (e.g. the Now Playing Delete/Quit confirm) on top of the player so it isn't hidden.
+  if (musicPlayer && dialogState) drawDialog(ctx);
+  // Same for the OSK/wizard (e.g. Add to Playlist -> New Playlist name entry): drawWizard ran in the
+  // modal-overlay block ABOVE drawMusicPlayer, so the player overdraws it. Re-draw it on top here so the
+  // OSK is visible and the user isn't stranded on a blank player (user 2026-06-13: "no OSK or dialog showed").
+  if (musicPlayer && wizState) drawWizard(ctx);
+  if (musicPlayer && _chromeVis > 0.001) {
+    // ENTER: drawMusicPlayer already cleared the canvas; overlay the fading-OUT chrome on top of the player.
+    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = _chromeVis; ctx.drawImage(chromeXfadeCanvas, 0, 0);
+    ctx.restore();
+  } else if (!musicPlayer && (mpEnterT > 0.001 || _chromeVis < 0.999)) {
+    // EXIT: cross-fade the Now Playing bar OUT (mpExitSnapCanvas at mpEnterT, ~1s) UNDER the menu chrome
+    // fading IN (_chromeVis, ~0.4s), both over the un-morphing wave. drawXMB drew the full chrome, so clear
+    // first; the bar snapshot was captured in closeMusicPlayer so the bar fades instead of popping out.
+    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, xmbCanvas.width, xmbCanvas.height);
+    if (mpExitSnapValid && mpEnterT > 0.001) { ctx.globalAlpha = mpEnterT; ctx.drawImage(mpExitSnapCanvas, 0, 0); }
+    if (_chromeVis > 0.001) { ctx.globalAlpha = Math.min(1, _chromeVis); ctx.drawImage(chromeXfadeCanvas, 0, 0); }
+    ctx.restore();
+  }
 
   // Mark the just-drawn xmbCanvas as the valid "previous" for next frame.
   // Even outside active animations we keep this updated so the FIRST frame
@@ -13493,6 +14184,7 @@ function frame(now) {
 initWebGL();
 initIconGlass();
 resize();
+mpSyncPlaylistItem();   // make the Music column "Playlists" item a folder with the "Create New Playlist" entry
 
 // Wait for PS3 Rodin fonts to load before starting the render loop
 // so the first frame uses Rodin instead of the sans-serif fallback.
