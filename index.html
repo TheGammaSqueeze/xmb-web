@@ -13,6 +13,10 @@ html,body{width:100%;height:100%;overflow:hidden;background:#000;font-family:'PS
 #wrap{display:flex;align-items:center;justify-content:center;width:100%;height:100%;background:#000}
 #scr{position:relative;overflow:hidden;background:#000;flex-shrink:0}
 canvas{position:absolute;top:0;left:0;width:100%;height:100%}
+/* Custom wallpaper (Photo "Set as Wallpaper" / Theme Settings>Background>Wallpaper):
+   a photo behind the (semi-transparent) wave. Shown only when a wallpaper is set;
+   the gradient #bg is hidden while it is up. */
+#bgwall{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;z-index:0;display:none;filter:brightness(0.6)}
 /* Integer-scaled resolution simulation: nearest-neighbour so each native pixel
    maps to a clean NxN block (no blurry fractional browser resample). */
 #scr.pixelated canvas{image-rendering:pixelated;image-rendering:crisp-edges}
@@ -24,6 +28,7 @@ canvas{position:absolute;top:0;left:0;width:100%;height:100%}
 </head>
 <body>
 <div id="wrap"><div id="scr">
+<img id="bgwall" alt="">
 <canvas id="bg"></canvas>
 <canvas id="wave"></canvas>
 <canvas id="globe"></canvas>
@@ -577,6 +582,30 @@ let themeIdx = _loadThemeState('theme',  0, THEME_OPTIONS);       // 0 = Origina
 let colorIdx = _loadThemeState('color',  0, COLOR_OPTIONS);       // 0 = Original
 let bgIdx    = _loadThemeState('bg',     0, BACKGROUND_OPTIONS);  // 0 = Original
 let fontIdx  = _loadThemeState('font',   0, FONT_OPTIONS);        // 0 = Original
+// Custom wallpaper image (set via Photo "Set as Wallpaper" or Settings>Theme>Background).
+// Persisted so it survives reload. Shown only when Background == 'Wallpaper'.
+let wallpaperSrc = ''; try { wallpaperSrc = localStorage.getItem('ps3-xmb-wallpaper') || ''; } catch (e) { /* ignore */ }
+// Show/hide the custom-wallpaper image layer vs the gradient #bg. Background ==
+// 'Wallpaper' WITH an image set -> show the photo (the wave still overlays it);
+// otherwise show the normal gradient (firmware: Wallpaper with no image set falls
+// back to the Original gradient).
+function applyWallpaper() {
+  const wall = document.getElementById('bgwall'), wv = document.getElementById('wave');
+  if (!wall) return;
+  // A custom wallpaper is a STATIC photo background, shown only in the XMB menu.
+  // Keep the live wave for the music visualizer + cold-boot (don't replace those).
+  const set = BACKGROUND_OPTIONS[bgIdx] && BACKGROUND_OPTIONS[bgIdx].key === 'wallpaper' && !!wallpaperSrc;
+  const inMenu = (typeof musicPlayer === 'undefined' || !musicPlayer) &&
+                 (typeof bootIntroDone === 'undefined' || bootIntroDone);
+  const useWall = set && inMenu;
+  const wd = useWall ? 'block' : 'none';
+  if (wall.style.display !== wd) {
+    if (useWall && wall.getAttribute('src') !== wallpaperSrc) wall.src = wallpaperSrc;
+    wall.style.display = wd;
+  }
+  // Hide the gradient/wave canvas while the static wallpaper is up so the photo shows.
+  if (wv) { const wvd = useWall ? 'none' : 'block'; if (wv.style.display !== wvd) wv.style.display = wvd; }
+}
 let daynightIdx = _loadThemeState('daynight', 0, DAYNIGHT_OPTIONS); // 0 = Auto
 
 // Smoothly-animated theme state, so colour and day/night changes CROSS-FADE
@@ -639,7 +668,7 @@ function previewThemeSelection(themeKey, selectedIdx) {
       colorIdx = selectedIdx;
       updateWaveTintConstants();   // wave/particles pick up the new tint live
       break;
-    case 'bg':   bgIdx = selectedIdx; break;
+    case 'bg':   bgIdx = selectedIdx; applyWallpaper(); break;   // toggle the custom-wallpaper layer live
     case 'font': fontIdx = selectedIdx; break;
     case 'daynight': daynightIdx = selectedIdx; break;
   }
@@ -1347,11 +1376,24 @@ const DATA = [
   },
   {
     id:'photo', name:'Photo', icon:'xmb_icon_002', color:'#e0a87c',
+    content:'photo',
+    groupModes:['By Month','By Year','By Album','All'],
     items:[
       {n:'Search for Media Servers',i:'xmb_icon_035',d:'Scans the network and connects to a media server. To use this function, a media server must be set up to allow connections from the PS3\u2122 system.'},
-      {n:'Photo Gallery',i:'xmb_icon_064',d:'Create a space to enjoy and enhance your photos.\nTurn the photos on your PS3\u2122 system into great albums in minutes.\nYou can sort your photos by themes, add music to enhance a slideshow or add custom frames to your photos. The more photos you add, the more fun you can have - the possibilities are endless!'},
+      {n:'Photo Gallery',i:'asset:icons/hakoniwa.png',d:'Create a space to enjoy and enhance your photos.\nTurn the photos on your PS3\u2122 system into great albums in minutes.\nYou can sort your photos by themes, add music to enhance a slideshow or add custom frames to your photos. The more photos you add, the more fun you can have - the possibilities are endless!'},
       {n:'Playlists',i:'xmb_icon_037'},
-      {n:'May 2026',i:'xmb_icon_062',d:'8 Images'}
+      {n:'Photos',mtype:'album',d:'10 Images',album:'Photos',i:'asset:photos/thumb/358972.jpg',ch:[
+        {n:'358972',mtype:'photo',date:'2014-07-03 15:09',w:1920,h:1200,sz:1712234,i:'asset:photos/thumb/358972.jpg',disp:'photos/disp/358972.jpg',full:'photos/358972.jpg'},
+        {n:'1308922',mtype:'photo',date:'2024-04-18 08:18',w:3840,h:2160,sz:1380400,i:'asset:photos/thumb/1308922.jpg',disp:'photos/disp/1308922.jpg',full:'photos/1308922.jpg'},
+        {n:'106481',mtype:'photo',date:'2024-04-18 08:19',w:3796,h:2276,sz:1387876,i:'asset:photos/thumb/106481.jpg',disp:'photos/disp/106481.jpg',full:'photos/106481.jpg'},
+        {n:'1245403',mtype:'photo',date:'2024-04-18 08:19',w:5120,h:3200,sz:1112153,i:'asset:photos/thumb/1245403.jpg',disp:'photos/disp/1245403.jpg',full:'photos/1245403.jpg'},
+        {n:'551537',mtype:'photo',date:'2024-04-18 08:19',w:3840,h:2160,sz:592136,i:'asset:photos/thumb/551537.jpg',disp:'photos/disp/551537.jpg',full:'photos/551537.jpg'},
+        {n:'677357',mtype:'photo',date:'2024-04-18 08:19',w:5120,h:3200,sz:1701860,i:'asset:photos/thumb/677357.jpg',disp:'photos/disp/677357.jpg',full:'photos/677357.jpg'},
+        {n:'586388',mtype:'photo',date:'2024-04-18 08:20',w:5120,h:3200,sz:4743920,i:'asset:photos/thumb/586388.jpg',disp:'photos/disp/586388.jpg',full:'photos/586388.jpg'},
+        {n:'509987',mtype:'photo',date:'2024-04-18 08:22',w:3840,h:2400,sz:2013549,i:'asset:photos/thumb/509987.jpg',disp:'photos/disp/509987.jpg',full:'photos/509987.jpg'},
+        {n:'976156',mtype:'photo',date:'2024-04-18 08:22',w:5120,h:3200,sz:1115425,i:'asset:photos/thumb/976156.jpg',disp:'photos/disp/976156.jpg',full:'photos/976156.jpg'},
+        {n:'893848',mtype:'photo',date:'2024-04-19 05:56',w:3840,h:2400,sz:701288,i:'asset:photos/thumb/893848.jpg',disp:'photos/disp/893848.jpg',full:'photos/893848.jpg'}
+      ]}
     ]
   },
   {
@@ -1701,6 +1743,7 @@ function iconScale(id) {
 }
 
 function getIcon(id) {
+  if (!id) return {img: null, loaded: false, rendered: false, normalMap: null, normalMapReady: false};
   if (!iconCache[id]) {
     // Direct image asset (real firmware-rendered content icons extracted from
     // RPCS3, e.g. the music folder + music-file glyphs). id = 'asset:<path>'.
@@ -6065,9 +6108,21 @@ function drawSettingsBadge(ctx2D, mainX, mainY, mainSize) {
 // Store icons). The waveCanvas-relative center/half-size are needed for
 // the refraction sampling.
 function drawIconAt(ctx2D, ic, id, x, y, w, h) {
-  // Special path: icons with no normal map (PSN sphere, Store bag).
+  // Special path: icons with no normal map (PSN sphere, Store bag, the
+  // direct firmware-rendered asset:* images). Preserve the source aspect
+  // ratio (contain-fit, centred) so non-square assets like the photo-folder
+  // cards (237x178) are not stretched to a square. For square icons this is
+  // identical to a plain stretch.
   if (!ic.normalMap || !ic.normalMapReady) {
-    if (ic.loaded) ctx2D.drawImage(ic.img, x, y, w, h);
+    if (ic.loaded && ic.img) {
+      const iw = ic.img.naturalWidth || ic.img.width, ih = ic.img.naturalHeight || ic.img.height;
+      if (iw && ih && Math.abs(iw / ih - w / h) > 0.01) {
+        const s = Math.min(w / iw, h / ih), dw = iw * s, dh = ih * s;
+        ctx2D.drawImage(ic.img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+      } else {
+        ctx2D.drawImage(ic.img, x, y, w, h);
+      }
+    }
     return;
   }
   // Glass path: render into iconGLCanvas, then drawImage onto the 2D
@@ -7179,6 +7234,10 @@ function drawBG(dt) {
   mpEnterT = mpEnterRaw * mpEnterRaw * (3 - 2 * mpEnterRaw);
   const _chSt = (dt || 16) / 400;   // chrome (icons) ramps faster: ~0.4s
   if (mpChromeRaw !== _enTarget) mpChromeRaw = (mpChromeRaw < _enTarget) ? Math.min(_enTarget, mpChromeRaw + _chSt) : Math.max(_enTarget, mpChromeRaw - _chSt);
+  // Photo viewer presence fade (~0.4s): the photo fades in from black on open, out on close.
+  const _pvTarget = photoViewer ? 1 : 0, _pvSt = (dt || 16) / 400;
+  if (pvEnterRaw !== _pvTarget) pvEnterRaw = (pvEnterRaw < _pvTarget) ? Math.min(_pvTarget, pvEnterRaw + _pvSt) : Math.max(_pvTarget, pvEnterRaw - _pvSt);
+  pvEnterT = pvEnterRaw * pvEnterRaw * (3 - 2 * pvEnterRaw);
   const _fiTarget = (musicPlayer && musicPlayer.fullInfo) ? 1 : 0;   // Display full-info fade (~0.5s)
   const _fiSt = (dt || 16) / 500;
   if (mpFullInfoRaw !== _fiTarget) mpFullInfoRaw = (mpFullInfoRaw < _fiTarget) ? Math.min(_fiTarget, mpFullInfoRaw + _fiSt) : Math.max(_fiTarget, mpFullInfoRaw - _fiSt);
@@ -7566,7 +7625,7 @@ function drawXMB(now) {
       // EXCEPTION: content-browser media items (Music/Photo/Video albums + tracks)
       // DO enlarge the focused item to a thumbnail, like the real XMB content
       // view (measured focused track icon ~178px ~= ITEM_ICON_ACTIVE).
-      const contentMedia = DATA[ci].content && (items[i].mtype === 'track' || items[i].mtype === 'album');
+      const contentMedia = DATA[ci].content && (items[i].mtype === 'track' || items[i].mtype === 'album' || items[i].mtype === 'photo');
       const isz = (inSubmenu && !contentMedia)
         ? V.ITEM_ICON_SIZE
         : (isActive ? V.ITEM_ICON_ACTIVE : V.ITEM_ICON_SIZE);
@@ -7651,6 +7710,8 @@ function drawXMB(now) {
         let _desc = items[i].d;
         if (items[i].mtype === 'track') {
           _desc = (items[i].st ? items[i].st : '') + (items[i].dur ? '    ' + items[i].dur : '');
+        } else if (items[i].mtype === 'photo') {
+          _desc = fmtPhotoDate(items[i].date);   // firmware "D/M/YYYY H:MM" capture date
         }
         if (_desc) {
           // Fade in over ITEM_DESC_FADE_MS so the new active description
@@ -7757,6 +7818,11 @@ function drawXMB(now) {
     const srcX = V.ITEM_ICON_X;
     for (let i = 0; i < pItems.length; i++) {
       const sel = (i === pIdx);
+      // Inside a photo album (grid mode), the real XMB shows ONLY the entered
+      // folder breadcrumb + back chevron - NOT the faded sibling album-list column
+      // (which otherwise gathers at SIB_X 455 and collides with the grid's left
+      // thumbnails / crowds the category icons). Suppress siblings once settled.
+      if (sel === false && t >= 0.999 && inPhotoAlbum()) continue;
       // Y morphs from the full carousel layout to the uniform collapsed column.
       const ySrc = itemSlotY(i, pIdx);
       const yDst = V.ITEM_FOCUS_Y + (i - pIdx) * V.PARENT_SPACING;
@@ -7775,7 +7841,11 @@ function drawXMB(now) {
       if (y > V.H - 20) a *= Math.max(0, (V.H - y) / 20);
       const pic = getIcon(pItems[i].i);
       if (a > 0.01 && (pic.loaded || pic.normalMapReady)) {
-        const psz = V.ITEM_ICON_SIZE * iconScale(pItems[i].i);
+        // Photo-folder breadcrumbs (the entered album/month/year card) stay at
+        // roughly their focused-list size (~145px wide) rather than collapsing
+        // to the 78px category-icon breadcrumb, matching album_grid.png.
+        const isPhotoFolder = sel && typeof pItems[i].i === 'string' && pItems[i].i.indexOf('asset:photos/folder/') === 0;
+        const psz = V.ITEM_ICON_SIZE * (isPhotoFolder ? 1.85 : iconScale(pItems[i].i));
         ctx.globalAlpha = a;
         drawIconAt(ctx, pic, pItems[i].i, XCL(cx, psz / 2), y - psz / 2, psz, psz);
       }
@@ -7902,7 +7972,8 @@ function drawXMB(now) {
       drawItemList(catAnim.oldItems, catAnim.oldIi, oldShift, oldAlpha * bootIconReveal, 0);
       drawItemList(curItems(), ii, newShift, newAlpha * bootIconReveal, 0);
     } else {
-      drawItemList(curItems(), ii, 0, 1 * bootIconReveal, 0, animFromIdx, animEase, descFadeProgress, descFromIdx);
+      if (inPhotoAlbum()) drawPhotoGrid(ctx, curItems(), ii, 1 * bootIconReveal);
+      else drawItemList(curItems(), ii, 0, 1 * bootIconReveal, 0, animFromIdx, animEase, descFadeProgress, descFromIdx);
     }
   }
 
@@ -8231,6 +8302,47 @@ function drawCircleGlyph(ctx2, cx, cy, r) {
   ctx2.lineWidth = 2;
   ctx2.beginPath();
   ctx2.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx2.stroke();
+  ctx2.restore();
+}
+
+// PS3 face-button TRIANGLE glyph (filled green), used in button hints.
+function drawTriangleGlyph(ctx2, cx, cy, r) {
+  ctx2.save();
+  ctx2.lineJoin = 'round';
+  const h = r * 1.05;
+  ctx2.beginPath();
+  ctx2.moveTo(cx, cy - h);
+  ctx2.lineTo(cx + h * 0.92, cy + h * 0.7);
+  ctx2.lineTo(cx - h * 0.92, cy + h * 0.7);
+  ctx2.closePath();
+  ctx2.fillStyle = 'rgba(86,193,110,0.98)';      // PS3 triangle green
+  ctx2.fill();
+  ctx2.strokeStyle = 'rgba(40,110,60,0.9)';
+  ctx2.lineWidth = 1.2; ctx2.stroke();
+  ctx2.restore();
+}
+
+// PS (home) button glyph: the PlayStation logo mark inside a rounded square,
+// as shown in the photo-viewer "Home Menu" hint.
+function drawPSGlyph(ctx2, cx, cy, r) {
+  ctx2.save();
+  ctx2.translate(cx, cy);
+  // DARK glossy CIRCULAR button body with a white PS logo -- matches the real
+  // PS3 "Home Menu" hint glyph (xmb-ref/photo/viewer.png), NOT a white square.
+  const g = ctx2.createRadialGradient(-r * 0.3, -r * 0.38, r * 0.1, 0, 0, r * 1.1);
+  g.addColorStop(0, 'rgba(74,74,80,0.98)'); g.addColorStop(0.55, 'rgba(38,38,42,0.98)'); g.addColorStop(1, 'rgba(10,10,12,0.98)');
+  ctx2.beginPath(); ctx2.arc(0, 0, r, 0, Math.PI * 2); ctx2.fillStyle = g; ctx2.fill();
+  ctx2.strokeStyle = 'rgba(185,190,200,0.45)'; ctx2.lineWidth = Math.max(0.8, r * 0.08); ctx2.stroke();
+  // white "PS" mark (P upright + curl)
+  ctx2.strokeStyle = 'rgba(250,250,252,0.98)';
+  ctx2.lineWidth = Math.max(1.2, r * 0.20); ctx2.lineCap = 'round'; ctx2.lineJoin = 'round';
+  ctx2.beginPath();
+  ctx2.moveTo(-r * 0.34, -r * 0.5);
+  ctx2.lineTo(-r * 0.34, r * 0.5);
+  ctx2.moveTo(-r * 0.34, -r * 0.5);
+  ctx2.quadraticCurveTo(r * 0.45, -r * 0.55, r * 0.1, r * 0.02);
+  ctx2.quadraticCurveTo(-r * 0.05, r * 0.12, -r * 0.34, r * 0.05);
   ctx2.stroke();
   ctx2.restore();
 }
@@ -8753,9 +8865,10 @@ function drawDialog(ctx2) {
   const ICON_CY = 175;
   const ICON_SZ = 36;
 
-  // Item icon (small, white-rendered)
+  // Item icon (small, white-rendered, top-left). Photo Information has NO top-left
+  // title/icon - it draws a large CENTERED icon in the body instead (see below).
   const ic = ds.iconId ? getIcon(ds.iconId) : null;
-  if (ic && (ic.loaded || ic.normalMapReady)) {
+  if (ic && !t.photoInfo && (ic.loaded || ic.normalMapReady)) {
     drawIconAt(ctx2, ic, ds.iconId, ICON_CX - ICON_SZ/2, ICON_CY - ICON_SZ/2, ICON_SZ, ICON_SZ);
   }
 
@@ -8787,7 +8900,25 @@ function drawDialog(ctx2) {
   const innerTop = HEADER_DIV_Y;
   const innerBot = FOOTER_DIV_Y;
 
-  if (t.type === 'info') {
+  if (t.type === 'info' && t.photoInfo) {
+    // Photo Information (real RPCS3 finfo.png): a large CENTRED folder/photo icon
+    // (~150px, centred at x~0.43W, y~0.319H) above centred Folder/Images/Size columns
+    // (labels right-aligned, values left-aligned about the icon centreline).
+    const gapC = XCF(V.W * 0.43);
+    if (ic && (ic.loaded || ic.normalMapReady)) {
+      const iw = 150, ih = 138;
+      drawIconAt(ctx2, ic, ds.iconId, gapC - iw / 2, V.H * 0.319 - ih / 2, iw, ih);
+    }
+    ctx2.font = '26px PS3'; ctx2.textBaseline = 'alphabetic';
+    ctx2.fillStyle = 'rgba(255,255,255,0.95)';
+    const lblRight = gapC - XCF(20), valLeft = gapC + XCF(18);
+    let fy = V.H * 0.47;
+    for (const [lbl, val] of (t.fields || [])) {
+      ctx2.textAlign = 'right'; ctx2.fillText(lbl, lblRight, fy);
+      ctx2.textAlign = 'left';  ctx2.fillText(String(val), valLeft, fy);
+      fy += V.H * 0.037;
+    }
+  } else if (t.type === 'info') {
     // Info: title above, body text centered. Optional illustration in the
     // upper-middle of the band, then the body lines below it.
     let centerCY = (innerTop + innerBot) / 2;
@@ -8945,7 +9076,7 @@ function drawDialog(ctx2) {
   // Info dialogs have a single OK hint mapped to Circle (cancel/back), shown
   // in the right slot (matches the audio_output style).
   if (t.type === 'info') {
-    drawHint(HINT_SLOT_CANCEL_CX, 'circle', 'OK');
+    drawHint(HINT_SLOT_CANCEL_CX, 'circle', t.cancelLabel || 'OK');   // photo Information shows "Back"
   } else if (t.type === 'chooser' || t.type === 'chooser_illust') {
     // Audio Output ref shows only Cancel (a notice text occupies the space
     // where Enter would go). Other choosers show Enter+Cancel.
@@ -8957,7 +9088,9 @@ function drawDialog(ctx2) {
     }
   } else if (t.type === 'confirm') {
     drawHint(HINT_SLOT_ENTER_CX,  'cross',  'Enter');
-    drawHint(HINT_SLOT_CANCEL_CX, 'circle', 'Cancel');
+    // O-hint label is dialog-specific: photo-viewer confirms show "Back" (verified
+    // real, xmb-ref/photo/dialog_2d3d.png), system confirms default to "Cancel".
+    drawHint(HINT_SLOT_CANCEL_CX, 'circle', t.cancelLabel || 'Cancel');
   }
 
   ctx2.restore();
@@ -11115,6 +11248,648 @@ function drawVisGlobe(ctx2, bands) {
   }
 }
 
+// ===================== PHOTO VIEWER (firmware photoviewer_plugin.rco) =====================
+// Full-screen photo viewer reached by CROSS on a photo (mtype:'photo'). Firmware controls:
+// LEFT/RIGHT = Previous/Next, TRIANGLE = Control Panel (rotate/zoom/slideshow/etc), SQUARE = 2D/3D,
+// CIRCLE = back. The bottom-right help hint ("Control Panel / Home Menu") shows briefly then fades,
+// exactly as the real viewer (auto-hide). photoViewer = {photos, idx, rot, zoom}.
+let photoViewer = null;
+let pvEnterT = 0, pvEnterRaw = 0;     // enter/exit fade-in from black (~0.4s, eased in drawBG)
+// Photo multi-select (Delete Multiple / Copy Multiple) - a checkbox LIST screen,
+// captured 1:1 from RPCS3 (xmb-ref/photo/live2/multiselect_*.png): checkbox+thumb+
+// name+date rows, "Select images to delete/copy." header, Select All / Clear All /
+// OK side buttons, X toggles a row's check, O backs out.
+let photoMulti = null;   // {mode:'delete'|'copy', items:[photos], sel, checked:{}, btn:-1}
+function pmOpen(mode) {
+  const items = (curItems() || []).filter(x => x.mtype === 'photo');
+  if (!items.length) return;
+  let sel = items.indexOf(curItems()[ii]); if (sel < 0) sel = 0;
+  photoMulti = {mode: mode, items: items, sel: sel, checked: {}, btn: -1};
+  optMenu = null; playNav2();
+}
+function pmMove(d) {
+  const pm = photoMulti; if (!pm) return;
+  if (pm.btn >= 0) { pm.btn = Math.max(0, Math.min(2, pm.btn + d)); playCursor(); return; }
+  pm.sel = Math.max(0, Math.min(pm.items.length - 1, pm.sel + d)); playCursor();
+}
+function pmActivate() {   // X: toggle the focused row, or activate the focused side button
+  const pm = photoMulti; if (!pm) return;
+  if (pm.btn === 0) { pm.items.forEach((_, i) => pm.checked[i] = true); playNav2(); return; }   // Select All
+  if (pm.btn === 1) { pm.checked = {}; playNav2(); return; }                                     // Clear All
+  if (pm.btn === 2) { pmConfirm(); return; }                                                     // OK
+  pm.checked[pm.sel] = !pm.checked[pm.sel]; playCursor();                                        // toggle row
+}
+function pmConfirm() {
+  const pm = photoMulti; if (!pm) return;
+  const n = Object.values(pm.checked).filter(Boolean).length;
+  if (!n) { photoMulti = null; playNav(); return; }   // nothing selected -> just close
+  if (pm.mode === 'delete') {
+    dialogState = { template:{type:'confirm', title:'', body:(n > 1 ? 'The images will be deleted.' : 'The image will be deleted.') + '\nAre you sure you want to continue?', defaultSel:1, cancelLabel:'Back'}, sel:1,
+      onYes: function () { photoMulti = null; dialogState = {template:{type:'info', title:'', body:'Delete completed.'}, sel:0, anim:{start:performance.now(), dur:250}}; playNav2(); },
+      anim:{start:performance.now(), dur:250} };
+  } else {
+    photoMulti = null;
+    dialogState = {template:{type:'info', title:'', body:'Copy completed.'}, sel:0, anim:{start:performance.now(), dur:250}};
+  }
+  playNav2();
+}
+function drawPhotoMulti(ctx2) {
+  const pm = photoMulti; if (!pm) return;
+  const CW = xmbCanvas.width, CH = xmbCanvas.height;
+  ctx2.save(); ctx2.setTransform(1, 0, 0, 1, 0, 0); ctx2.globalAlpha = 1;
+  ctx2.fillStyle = '#000'; ctx2.fillRect(0, 0, CW, CH);
+  const rowH = CH * 0.105, listX = CW * 0.14, thX = CW * 0.175, nameX = CW * 0.275;
+  const cy0 = CH * 0.34;                       // focused row sits ~0.34; others above/below
+  const fs = Math.round(CH * 0.030);
+  ctx2.textBaseline = 'middle';
+  for (let i = 0; i < pm.items.length; i++) {
+    const rel = i - pm.sel; const y = cy0 + rel * rowH;
+    if (y < CH * 0.12 || y > CH * 0.95) continue;
+    const it = pm.items[i], focus = (i === pm.sel && pm.btn < 0);
+    // checkbox
+    const cbS = CH * 0.026, cbx = listX, cby = y - cbS / 2;
+    ctx2.strokeStyle = 'rgba(235,235,235,0.85)'; ctx2.lineWidth = 2;
+    roundRect(ctx2, cbx, cby, cbS, cbS, 3); ctx2.stroke();
+    if (pm.checked[i]) { ctx2.fillStyle = 'rgba(40,120,230,0.95)'; roundRect(ctx2, cbx + 2, cby + 2, cbS - 4, cbS - 4, 2); ctx2.fill();
+      ctx2.strokeStyle = '#fff'; ctx2.lineWidth = 2.4; ctx2.beginPath(); ctx2.moveTo(cbx + cbS * 0.24, cby + cbS * 0.52); ctx2.lineTo(cbx + cbS * 0.43, cby + cbS * 0.72); ctx2.lineTo(cbx + cbS * 0.78, cby + cbS * 0.28); ctx2.stroke(); }
+    // thumbnail
+    const tw = focus ? CW * 0.12 : CW * 0.058, th = tw * 9 / 16;
+    const ic = getIcon(it.i);
+    if (ic && ic.loaded && ic.img) { ctx2.save(); ctx2.beginPath(); ctx2.rect(thX, y - th / 2, tw, th); ctx2.clip(); pgCover(ctx2, ic.img, thX, y - th / 2, tw, th); ctx2.restore();
+      if (focus) { ctx2.strokeStyle = 'rgba(255,255,255,0.95)'; ctx2.lineWidth = 2; ctx2.strokeRect(thX, y - th / 2, tw, th); } }
+    // name + date
+    const nx = thX + tw + CW * 0.012;
+    ctx2.textAlign = 'left'; ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 3;
+    ctx2.font = (focus ? '' : '300 ') + (focus ? Math.round(CH * 0.034) : fs) + 'px PS3';
+    ctx2.fillStyle = focus ? 'rgb(255,255,255)' : 'rgba(220,220,222,0.85)';
+    ctx2.fillText(it.n, nx, y - (focus ? CH * 0.012 : CH * 0.009));
+    ctx2.font = '300 ' + Math.round(CH * 0.020) + 'px PS3'; ctx2.fillStyle = 'rgba(200,200,205,0.8)';
+    ctx2.fillText(fmtPhotoDate(it.date), nx, y + (focus ? CH * 0.020 : CH * 0.016));
+    ctx2.shadowBlur = 0;
+  }
+  // header next to the focused row
+  ctx2.textAlign = 'left'; ctx2.font = Math.round(CH * 0.024) + 'px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.95)';
+  ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 3;
+  ctx2.fillText(pm.mode === 'delete' ? 'Select images to delete.' : 'Select images to copy.', nameX, cy0 - rowH * 0.42);
+  ctx2.shadowBlur = 0;
+  // side buttons: Select All / Clear All / OK
+  const btnLabels = ['Select All', 'Clear All', 'OK'];
+  const bx = CW * 0.72, bw = CW * 0.10, bh = CH * 0.052; let by = CH * 0.58;
+  for (let b = 0; b < 3; b++) {
+    const sel = (pm.btn === b);
+    const g = ctx2.createLinearGradient(bx, by, bx, by + bh);
+    g.addColorStop(0, sel ? 'rgba(150,150,155,0.95)' : 'rgba(95,95,100,0.9)'); g.addColorStop(1, sel ? 'rgba(110,110,115,0.95)' : 'rgba(60,60,65,0.9)');
+    ctx2.fillStyle = g; roundRect(ctx2, bx, by, bw, bh, 5); ctx2.fill();
+    if (sel) { ctx2.strokeStyle = 'rgba(255,255,255,0.7)'; ctx2.lineWidth = 1.5; roundRect(ctx2, bx, by, bw, bh, 5); ctx2.stroke(); }
+    ctx2.fillStyle = 'rgba(245,245,245,0.95)'; ctx2.font = Math.round(CH * 0.022) + 'px PS3'; ctx2.textAlign = 'center';
+    ctx2.fillText(btnLabels[b], bx + bw / 2, by + bh / 2);
+    by += bh + CH * 0.012;
+  }
+  // footer hints
+  ctx2.textAlign = 'left'; ctx2.font = '300 ' + Math.round(CH * 0.020) + 'px PS3'; ctx2.fillStyle = 'rgba(230,230,230,0.9)';
+  drawCrossGlyph(ctx2, CW * 0.40, CH * 0.93, CH * 0.013); ctx2.fillText('Enter', CW * 0.41, CH * 0.93);
+  drawCircleGlyph(ctx2, CW * 0.55, CH * 0.93, CH * 0.013); ctx2.fillText('Back', CW * 0.56, CH * 0.93);
+  ctx2.restore();
+}
+function pvImg(ph) { if (!ph) return null; if (!ph._img) { const im = new Image(); im.src = ph.disp || ph.full; ph._img = im; } return ph._img; }
+function openPhotoViewer(listItems, idx) {
+  const photos = listItems.filter(p => p && p.mtype === 'photo');
+  const target = listItems[idx];
+  let fi = photos.indexOf(target); if (fi < 0) fi = 0;
+  photoViewer = {photos: photos, idx: fi, rot: 0, zoom: 1, hintUntil: performance.now() + 4000};
+  pvImg(photos[fi]); if (photos[fi + 1]) pvImg(photos[fi + 1]); if (photos[fi - 1]) pvImg(photos[fi - 1]);
+  playNav2();
+}
+function closePhotoViewer() { photoViewer = null; playNav(); }
+// SQUARE in the viewer = 2D/3D switch (firmware msg_display_in_3d_now). 3D can't render in the browser, so Yes
+// shows the firmware fallback error (msg_error_switch_3d_display_in_2d) and stays in 2D; No just closes.
+function pvShow3D() {
+  // Firmware defaults the selection to "Yes" (verified by highlight-brightness on two
+  // live RPCS3 captures: Yes is the brighter/focused button). SQUARE opens this dialog.
+  dialogState = { template:{type:'confirm', title:'', body:'Display in 3D will start now.', defaultSel:0, cancelLabel:'Back'}, sel:0,
+    onYes: function () { dialogState = { template:{type:'info', title:'', body:'An error occurred while switching to display in 3D.\nThe screen will go back to display in 2D.'}, sel:0, anim:{start:performance.now(), dur:250} }; playNav2(); },
+    anim:{start:performance.now(), dur:250} };
+  playNav2();
+}
+function pvStep(d) {
+  const pv = photoViewer; if (!pv || !pv.photos.length) return;
+  // Photo-to-photo TRANSITION per the firmware "Change Effect" (Normal = instant cut;
+  // Slide = new photo slides in from the nav direction, old slides out; Fade = crossfade).
+  const eff = pv.effect || 'Normal';
+  pv.trans = (eff === 'Slide' || eff === 'Fade')
+    ? {fromIdx: pv.idx, start: performance.now(), dur: 650, effect: eff, dir: d >= 0 ? 1 : -1}
+    : null;
+  pv.idx = (pv.idx + d + pv.photos.length) % pv.photos.length;
+  pv.rot = 0; pv.zoom = 1; pv.hintUntil = performance.now() + 1500;
+  const n = pv.idx; pvImg(pv.photos[n]); if (pv.photos[n + 1]) pvImg(pv.photos[n + 1]); if (pv.photos[n - 1]) pvImg(pv.photos[n - 1]);
+  playCursor();
+}
+// Photo Viewer CONTROL PANEL (Triangle) - 3-row icon toolbar, upper-left, decoded 1:1 from the real RPCS3
+// capture (xmb-ref/photo/control_panel_clean.png). ic = images/photoviewer/icon_NNN index. gx/gy = grid cell.
+// Row 0: Display Mode, Display, Set as Wallpaper, Slideshow Style, Print, Add to Playlist, Delete, Information.
+// Row 1: Zoom In, Zoom Out, Rotate Left, Rotate Right, Up, Down, Left, Right (pan). Row 2: Previous, Next, Slideshow.
+const PV_CP = [
+  // Row 1 labels/actions corrected 1:1 from a live RPCS3 capture (focus-label per
+  // cell, xmb-ref/photo/live2): the icons were already in firmware order; only the
+  // labels+actions were wrong. col7 "Display" toggles the EXIF info panel.
+  {act:'dispmode', label:'Display Mode',     ic:8,  gx:0, gy:0},
+  {act:'effect',   label:'Change Effect',    ic:21, gx:1, gy:0},
+  {act:'trim',     label:'Trimming',         ic:22, gx:2, gy:0},
+  {act:'addpl',    label:'Add to Playlist',  ic:9,  gx:3, gy:0},
+  {act:'print',    label:'Print',            ic:23, gx:4, gy:0},
+  {act:'wallpaper',label:'Set as Wallpaper', ic:10, gx:5, gy:0},
+  {act:'delete',   label:'Delete',           ic:20, gx:6, gy:0},
+  {act:'showinfo', label:'Display',          ic:0,  gx:7, gy:0},
+  {act:'zoomin',   label:'Zoom In',         ic:11, gx:0, gy:1},
+  {act:'zoomout',  label:'Zoom Out',        ic:12, gx:1, gy:1},
+  {act:'rotl',     label:'Rotate Left',     ic:17, gx:2, gy:1},
+  {act:'rotr',     label:'Rotate Right',    ic:18, gx:3, gy:1},
+  {act:'up',       label:'Up',              ic:13, gx:4, gy:1},
+  {act:'down',     label:'Down',            ic:14, gx:5, gy:1},
+  {act:'left',     label:'Left',            ic:15, gx:6, gy:1},
+  {act:'right',    label:'Right',           ic:16, gx:7, gy:1},
+  {act:'prev',     label:'Previous',        ic:1,  gx:2.5, gy:2},
+  {act:'next',     label:'Next',            ic:2,  gx:3.5, gy:2},
+  {act:'play',     label:'Slideshow',       ic:3,  gx:4.5, gy:2},
+];
+// RUNNING-slideshow control panel (distinct toolbar, appears when a slideshow is
+// playing + Triangle). Captured live from RPCS3 (xmb-ref/photo/live2/FINDINGS.txt):
+// top row Slideshow Speed / Slideshow Style; transport Prev / Next / Play-Pause /
+// Stop; bottom Repeat. Default focus = Pause.
+const PV_SS_CP = [
+  {act:'speed',  label:'Slideshow Speed', ic:7,  gx:3,   gy:0},
+  {act:'sstyle', label:'Slideshow Style', ic:8,  gx:4,   gy:0},
+  {act:'prev',   label:'Previous',        ic:1,  gx:2,   gy:1},
+  {act:'next',   label:'Next',            ic:2,  gx:3,   gy:1},
+  {act:'pause',  label:'Pause',           ic:3,  gx:4,   gy:1},
+  {act:'stop',   label:'Stop',            ic:5,  gx:5,   gy:1},
+  {act:'repeat', label:'Repeat',          ic:6,  gx:3.5, gy:2},
+];
+function pvCP() { const pv = photoViewer; return (pv && pv.slideshow) ? PV_SS_CP : PV_CP; }
+function pvPanelOpen() { const pv = photoViewer; if (!pv) return; pv.panel = true; const cp = pvCP();
+  pv.cpSel = cp.findIndex(b => b.act === (pv.slideshow ? 'pause' : 'play')); if (pv.cpSel < 0) pv.cpSel = 0;
+  // Transition/animation state, mirroring the music player control panel (openMpOpt):
+  // slide+fade-in (panelAnim), focus grow-tween (cpFocusStart/cpSelPrev), invoke pop (cpPress).
+  pv.panelAnim = {start: performance.now(), dur: 200}; pv.panelClosing = null;
+  pv.cpFocusStart = 0; pv.cpSelPrev = pv.cpSel; pv.cpPress = null;
+  pv.hintUntil = 0; playNav2(); }
+function pvPanelClose() { const pv = photoViewer; if (!pv) return; pv.panelClosing = {start: performance.now(), dur: 200}; pv.panel = false; playNav(); }   // reverse slide/fade-out (mirrors closeMpOpt)
+function pvPanelMove(dx, dy) {
+  const pv = photoViewer; if (!pv || !pv.panel) return;
+  if (pv.cpSub) {   // a control submenu is open (e.g. Change Effect) -> UP/DOWN move within it
+    if (dy !== 0) { const n = pv.cpSub.opts.length; pv.cpSub.sel = (pv.cpSub.sel + dy + n) % n; playCursor(); }
+    return;
+  }
+  const cp = pvCP(); const cur = cp[pv.cpSel]; let best = -1, bestd = 1e9;
+  for (let i = 0; i < cp.length; i++) {
+    if (i === pv.cpSel) continue; const b = cp[i];
+    const ddx = b.gx - cur.gx, ddy = b.gy - cur.gy;
+    if (dx > 0 && ddx <= 0) continue; if (dx < 0 && ddx >= 0) continue;
+    if (dy > 0 && ddy <= 0) continue; if (dy < 0 && ddy >= 0) continue;
+    const along = dx !== 0 ? Math.abs(ddx) : Math.abs(ddy);
+    const perp  = dx !== 0 ? Math.abs(ddy) : Math.abs(ddx);
+    const d = along + perp * 3;
+    if (d < bestd) { bestd = d; best = i; }
+  }
+  if (best >= 0) { pv.cpSelPrev = pv.cpSel; pv.cpFocusStart = performance.now(); pv.cpSel = best; playCursor(); }   // grow/shrink focus tween
+}
+function pvPanelActivate() {
+  const pv = photoViewer; if (!pv || !pv.panel) return;
+  if (pv.cpSub) {   // confirm a submenu selection
+    const val = pv.cpSub.opts[pv.cpSub.sel];
+    if (pv.cpSub.kind === 'speed') { pv.slideSpeed = val; pv.slideMs = {Slow: 7000, Normal: 4000, Fast: 2000}[val] || 4000; }
+    else if (pv.cpSub.kind === 'style') { pv.slideStyle = pv.cpSub.sel; }
+    else pv.effect = val;   // Change Effect
+    pv.cpSub = null; playNav2(); return;
+  }
+  const cp = pvCP();
+  pv.cpPress = {start: performance.now(), dur: 240, sel: pv.cpSel};   // invoke pop+flash on the activated control (mirrors mpOptActivate)
+  const a = cp[pv.cpSel] && cp[pv.cpSel].act;
+  if (a === 'rotl')      pv.rot = ((pv.rot - 90) % 360 + 360) % 360;
+  else if (a === 'rotr') pv.rot = (pv.rot + 90) % 360;
+  else if (a === 'zoomin')  pv.zoom = Math.min(8, (pv.zoom || 1) * 1.25);
+  else if (a === 'zoomout') pv.zoom = Math.max(1, (pv.zoom || 1) / 1.25);
+  else if (a === 'prev') pvStep(-1);
+  else if (a === 'next') pvStep(1);
+  else if (a === 'play') { pv.panel = false; pv.slideshow = true; pv.paused = false; pv.slideNext = performance.now() + (pv.slideMs || 4000); }
+  else if (a === 'pause') { pv.paused = !pv.paused; if (!pv.paused) pv.slideNext = performance.now() + (pv.slideMs || 4000); }   // Pause/Play toggle in the running panel
+  else if (a === 'stop') { pv.slideshow = false; pv.paused = false; pv.panel = false; }   // Stop -> back to static viewing
+  else if (a === 'repeat') { pv.repeat = !pv.repeat; showGroupBanner(pv.repeat ? 'Repeat On' : 'Repeat Off'); }
+  else if (a === 'speed') {   // "Slideshow Speed" -> Slow / Normal / Fast (firmware msg_slow/nrml/fast)
+    const opts = ['Slow', 'Normal', 'Fast'];
+    pv.cpSub = {label: 'Slideshow Speed', kind: 'speed', opts: opts, sel: Math.max(0, opts.indexOf(pv.slideSpeed || 'Normal'))};
+    playNav2(); return;
+  }
+  else if (a === 'sstyle') {   // "Slideshow Style" -> the 5 firmware styles
+    const opts = ['Normal', 'Slide', 'Portrait', 'Photo Album', 'Photo Album 2'];
+    pv.cpSub = {label: 'Slideshow Style', kind: 'style', opts: opts, sel: pv.slideStyle || 0};
+    playNav2(); return;
+  }
+  else if (a === 'showinfo' || a === 'info') { pv.info = !pv.info; pv.panel = false; }   // "Display": toggle the EXIF info overlay
+  else if (a === 'effect') {   // "Change Effect": opens a submenu (live RPCS3: Normal / Slide / Fade)
+    const opts = ['Normal', 'Slide', 'Fade'];
+    pv.cpSub = {label: 'Change Effect', kind: 'effect', opts: opts, sel: Math.max(0, opts.indexOf(pv.effect || 'Normal'))};
+    playNav2(); return;
+  }
+  else if (a === 'trim') { pv.panel = false; pv.trimMode = true; pv.wpZoom = 1; pv.hintUntil = 0; }   // "Trimming": same range selector as wallpaper (no header); Enter applies the crop
+  else if (a === 'delete') { pvShowDeleteConfirm(); return; }
+  else if (a === 'wallpaper') { pv.panel = false; pv.wpMode = true; pv.wpZoom = 1; pv.hintUntil = 0; }   // "Set as Wallpaper": open the range selector (live RPCS3 flow)
+  else if (a === 'print') { pv.panel = false; }   // "Print": real flow is a printer/system path not in photoviewer.rco (no printer in env, not captured); close the panel rather than fabricate a dialog
+  else if (a === 'addpl' && typeof mpOpenAddChooser === 'function') { pv.panel = false; }
+  playCursor();
+}
+function pvShowDeleteConfirm() {
+  const pv = photoViewer; if (!pv) return; pv.panel = false;
+  dialogState = { template:{type:'confirm', title:'', body:'The image will be deleted.\nAre you sure you want to continue?', defaultSel:1, cancelLabel:'Back'}, sel:1,
+    onYes: function () { dialogState = {template:{type:'info', title:'', body:'Delete completed.'}, sel:0, anim:{start:performance.now(), dur:250}}; playNav2(); },
+    anim:{start:performance.now(), dur:250} };
+  playNav2();
+}
+// "Set as Wallpaper" overwrite confirm (firmware msg_wallpaper_overwrite_ask),
+// shown after the range selector. Yes -> store the photo as the custom wallpaper,
+// switch Background to "Wallpaper", persist, and apply it live (the XMB background
+// becomes the photo, with the wave still animating over it).
+function pvWallpaperConfirm() {
+  const pv = photoViewer; if (!pv) return; pv.wpMode = false;
+  const ph = pv.photos[pv.idx];
+  const src = ph ? (ph.full || ph.disp || (typeof ph.i === 'string' ? ph.i.replace('asset:', '') : '')) : '';
+  dialogState = { template:{type:'confirm', title:'',
+      body:'Do you want to overwrite the wallpaper?\nIf you do, the current wallpaper will be lost.\nOnly one wallpaper image can be saved.', defaultSel:1, cancelLabel:'Back'}, sel:1,
+    onYes: function () {
+      if (src) {
+        wallpaperSrc = src;
+        try { localStorage.setItem('ps3-xmb-wallpaper', src); } catch (e) { /* ignore */ }
+        const wi = BACKGROUND_OPTIONS.findIndex(o => o.key === 'wallpaper');
+        if (wi >= 0) { bgIdx = wi; _saveThemeState('bg', bgIdx); }
+        applyWallpaper();
+      }
+      dialogState = {template:{type:'info', title:'', body:'The wallpaper has been set.'}, sel:0, anim:{start:performance.now(), dur:250}}; playNav2();
+    },
+    anim:{start:performance.now(), dur:250} };
+  playNav2();
+}
+// "Set as Wallpaper" range selector (live RPCS3 flow: the photo framed in a 16:9
+// crop window, "Specify the range to use as wallpaper." header, stick hints, X
+// Enter / O Back). xmb-ref/photo/live2/wallpaper_range.png.
+function drawPvWallpaper(ctx2) {
+  const pv = photoViewer; if (!pv || (!pv.wpMode && !pv.trimMode)) return;
+  const CW = xmbCanvas.width, CH = xmbCanvas.height;
+  ctx2.save(); ctx2.setTransform(1, 0, 0, 1, 0, 0);
+  ctx2.fillStyle = '#000'; ctx2.fillRect(0, 0, CW, CH);
+  // header (wallpaper only; the trimming crop selector has no header per live capture)
+  if (pv.wpMode) {
+    ctx2.globalAlpha = 1; ctx2.textAlign = 'center'; ctx2.textBaseline = 'alphabetic';
+    ctx2.font = Math.round(CH * 0.026) + 'px PS3'; ctx2.fillStyle = 'rgba(235,235,235,0.95)';
+    ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 4;
+    ctx2.fillText('Specify the range to use as wallpaper.', CW / 2, CH * 0.085);
+    ctx2.shadowBlur = 0;
+  }
+  // 16:9 crop frame, the photo cover-filling it (the selectable wallpaper range)
+  const fw = CW * 0.62, fh = fw * 9 / 16, fx = (CW - fw) / 2, fy = (CH - fh) / 2 + CH * 0.01;
+  const im = pvImg(pv.photos[pv.idx]);
+  if (im && im.complete && im.naturalWidth) {
+    ctx2.save(); ctx2.beginPath(); ctx2.rect(fx, fy, fw, fh); ctx2.clip();
+    const z = pv.wpZoom || 1; const iw = im.naturalWidth, ih = im.naturalHeight;
+    const s = Math.max(fw / iw, fh / ih) * z, dw = iw * s, dh = ih * s;
+    ctx2.drawImage(im, fx + (fw - dw) / 2, fy + (fh - dh) / 2, dw, dh);
+    ctx2.restore();
+  }
+  ctx2.strokeStyle = 'rgba(255,255,255,0.9)'; ctx2.lineWidth = Math.max(2, CH * 0.003);
+  ctx2.strokeRect(fx, fy, fw, fh);
+  // stick hints (firmware msg_help_zoom_scroll_*) -- bottom-left inside the crop frame
+  ctx2.textAlign = 'left'; ctx2.textBaseline = 'alphabetic'; ctx2.font = '300 ' + Math.round(CH * 0.020) + 'px PS3';
+  ctx2.fillStyle = 'rgba(232,232,232,0.9)'; ctx2.shadowColor = 'rgba(0,0,0,0.85)'; ctx2.shadowBlur = 3;
+  ctx2.fillText('Right Stick: Zoom In / Zoom Out', fx + CW * 0.012, fy + fh - CH * 0.052);
+  ctx2.fillText('Left Stick: Scroll', fx + CW * 0.012, fy + fh - CH * 0.020);
+  ctx2.shadowBlur = 0;
+  // Bottom button hints "X Enter / O Back" (real wallpaper_range.png) -- this is the
+  // confirm/exit affordance the selector was missing (the "no way back" the user hit).
+  ctx2.font = Math.round(CH * 0.024) + 'px PS3'; ctx2.textBaseline = 'middle';
+  ctx2.fillStyle = 'rgba(255,255,255,0.95)'; ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 4;
+  ctx2.fillText('✕ Enter', CW * 0.402, CH * 0.935);
+  ctx2.fillText('○ Back', CW * 0.585, CH * 0.935);
+  ctx2.shadowBlur = 0;
+  ctx2.restore();
+}
+function drawPvPanel(ctx2, tOverride) {
+  const pv = photoViewer; if (!pv) return;
+  if (tOverride == null && !pv.panel) return;
+  const CW = xmbCanvas.width, CH = xmbCanvas.height;
+  ctx2.save(); ctx2.setTransform(1, 0, 0, 1, 0, 0);
+  // Open/close TRANSITION (slide-in from the left + fade), mirroring the music player
+  // control panel (drawMpOpt): t 0->1 on open, 1->0 on close (tOverride from the closer).
+  const t = (tOverride != null) ? tOverride
+            : (pv.panelAnim ? Math.min(1, (performance.now() - pv.panelAnim.start) / pv.panelAnim.dur) : 1);
+  // upper-left toolbar geometry (fractions measured from the real capture: start x~0.062, col~0.049W, row~0.075H)
+  const x0 = CW * 0.062 - (1 - t) * CW * 0.012, y0 = CH * 0.40, colW = CW * 0.049, rowH = CH * 0.075, sz = CH * 0.040;
+  const cp = pvCP();
+  const pr = pv.cpPress;   // invoke pop+flash on the activated control
+  const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.0042);   // ~1.5s breathe (shared with music)
+  for (let i = 0; i < cp.length; i++) {
+    const b = cp[i], focus = (i === pv.cpSel);
+    const cx = x0 + b.gx * colW, cy = y0 + b.gy * rowH;
+    // Pause control shows the pause glyph while playing, play glyph while paused.
+    const icn = (b.act === 'pause') ? (pv.paused ? 3 : 4) : b.ic;
+    const ic = getIcon('asset:images/photoviewer/icon_' + String(icn).padStart(3, '0') + '.png');
+    // Focus GROW tween 1.0 -> 1.5 (and the outgoing control shrinks back), mirroring focusStart.
+    let scale = focus ? 1.5 : 1.0;
+    if (pv.cpFocusStart) {
+      const fe = Math.min(1, (performance.now() - pv.cpFocusStart) / 140), fk = 1 - Math.pow(1 - fe, 3);
+      if (focus) scale = 1.0 + 0.5 * fk;
+      else if (i === pv.cpSelPrev) scale = 1.5 - 0.5 * fk;
+    }
+    let ps = scale, flash = 0;
+    if (pr && pr.sel === i) { const e = (performance.now() - pr.start) / pr.dur;
+      if (e < 1) { const sp = Math.sin(e * Math.PI); ps *= (1 - 0.18 * sp); flash = sp * 0.55; } }   // press dip + flash
+    const drawI = (al) => {
+      if (!ic || !ic.loaded || !ic.img) return;
+      const s = sz * ps; ctx2.globalAlpha = t * al; ctx2.drawImage(ic.img, cx - s / 2, cy - s / 2, s, s);
+    };
+    if (focus) {
+      // breathing SELECTION GLOW: a faint halo pass + a crisp glyph on top (preserves icon
+      // detail), exactly the music player's treatment (drawMpOpt).
+      ctx2.shadowOffsetX = 0; ctx2.shadowOffsetY = 0;
+      ctx2.shadowColor = 'rgba(220,235,255,' + (0.22 + 0.18 * pulse).toFixed(3) + ')'; ctx2.shadowBlur = 9 + 6 * pulse;
+      drawI(0.35);
+      ctx2.shadowColor = 'rgba(0,0,0,0)'; ctx2.shadowBlur = 0;
+      drawI(1.0);
+    } else {
+      ctx2.shadowColor = 'rgba(0,0,0,0.5)'; ctx2.shadowBlur = 5; ctx2.shadowOffsetX = 0; ctx2.shadowOffsetY = 2;
+      drawI(0.85);
+      ctx2.shadowColor = 'rgba(0,0,0,0)'; ctx2.shadowBlur = 0; ctx2.shadowOffsetY = 0;
+    }
+    if (flash > 0) drawI(flash);   // brief brightness pop on activate
+  }
+  // focused-item label below the grid + a generic SELECT button-hint pill (mirrors drawMpOpt;
+  // FINDINGS confirm the real photo panel shows the SELECT pill on the focused control).
+  const fb = cp[pv.cpSel];
+  if (fb) {
+    const lbl = (fb.act === 'pause') ? (pv.paused ? 'Play' : 'Pause') : fb.label;
+    ctx2.globalAlpha = t; ctx2.textAlign = 'left'; ctx2.textBaseline = 'alphabetic';
+    ctx2.font = Math.round(CH * 0.024) + 'px PS3'; ctx2.fillStyle = 'rgb(245,245,245)';
+    ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 4;
+    const lx = x0 - colW * 0.4, ly = y0 + 2.9 * rowH;
+    ctx2.fillText(lbl, lx, ly);
+    ctx2.shadowColor = 'rgba(0,0,0,0)'; ctx2.shadowBlur = 0;
+    const lw = ctx2.measureText(lbl).width, pillH = CH * 0.030, gap = CW * 0.006;
+    drawMpPill(ctx2, lx + lw + gap, ly - pillH * 0.82, CW * 0.040, pillH, 'SELECT');
+  }
+  // Control submenu (Change Effect: Normal / Slide / Fade) -- a small list under the label.
+  if (pv.cpSub) {
+    ctx2.globalAlpha = t;
+    const sx = x0 - colW * 0.4, sy = y0 + 3.5 * rowH, lh = CH * 0.045, fs = Math.round(CH * 0.026);
+    const opts = pv.cpSub.opts;
+    let mw = 0; ctx2.font = fs + 'px PS3';
+    for (const o of opts) mw = Math.max(mw, ctx2.measureText(o).width);
+    ctx2.globalAlpha = 1; ctx2.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx2.fillRect(sx - fs * 0.6, sy - lh * 0.7, mw + fs * 1.6, lh * opts.length + lh * 0.3);
+    ctx2.textAlign = 'left'; ctx2.textBaseline = 'middle';
+    for (let i = 0; i < opts.length; i++) {
+      const oy = sy + i * lh + lh * 0.1;
+      const sel = (i === pv.cpSub.sel);
+      if (sel) { ctx2.fillStyle = 'rgba(255,255,255,0.20)'; ctx2.fillRect(sx - fs * 0.4, oy - lh * 0.45, mw + fs * 0.8, lh * 0.9); }
+      ctx2.font = (sel ? '' : '300 ') + fs + 'px PS3';
+      ctx2.fillStyle = sel ? 'rgb(255,255,255)' : 'rgba(225,225,228,0.85)';
+      ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 3;
+      ctx2.fillText(opts[i], sx, oy);
+      ctx2.shadowBlur = 0;
+    }
+  }
+  ctx2.restore();
+}
+
+function drawPhotoViewer(ctx2) {
+  const pv = photoViewer; if (!pv) return;
+  // Slideshow auto-advance (Play in the control panel). Default ~4s/photo (Normal speed); loops.
+  if (pv.slideshow && !pv.paused && pv.slideNext && performance.now() > pv.slideNext) { pvStep(1); pv.slideNext = performance.now() + (pv.slideMs || 4000); }
+  const CW = xmbCanvas.width, CH = xmbCanvas.height;
+  ctx2.save(); ctx2.setTransform(1, 0, 0, 1, 0, 0); ctx2.globalAlpha = 1;
+  ctx2.fillStyle = '#000'; ctx2.fillRect(0, 0, CW, CH);
+  // Draw a single photo fit-to-screen (with rotate/zoom) at a given alpha + x-offset.
+  const drawPhoto = (photo, rot, zoom, alpha, dxPx) => {
+    const im = pvImg(photo);
+    if (!(im && im.complete && im.naturalWidth) || alpha <= 0.001) return;
+    const iw = im.naturalWidth, ih = im.naturalHeight;
+    const swap = (rot === 90 || rot === 270);
+    const bw = swap ? ih : iw, bh = swap ? iw : ih;
+    const fit = Math.min(CW / bw, CH / bh) * (zoom || 1);
+    const dw = iw * fit, dh = ih * fit;
+    ctx2.globalAlpha = alpha;
+    ctx2.imageSmoothingEnabled = true; ctx2.imageSmoothingQuality = 'high';
+    ctx2.translate(CW / 2 + (dxPx || 0), CH / 2); ctx2.rotate((rot || 0) * Math.PI / 180);
+    ctx2.drawImage(im, -dw / 2, -dh / 2, dw, dh);
+    ctx2.setTransform(1, 0, 0, 1, 0, 0);
+  };
+  // Apply the "Change Effect" transition (pv.trans, set in pvStep) when advancing photos.
+  const tr = pv.trans;
+  let tp = 1;
+  if (tr) { tp = Math.min(1, (performance.now() - tr.start) / tr.dur); if (tp >= 1) pv.trans = null; }
+  if (tr && tp < 1) {
+    const e = tp * tp * (3 - 2 * tp);
+    if (tr.effect === 'Slide') {   // new slides in from the nav direction, old slides out
+      drawPhoto(pv.photos[tr.fromIdx], 0, 1, pvEnterT, -e * CW * tr.dir);
+      drawPhoto(pv.photos[pv.idx], pv.rot, pv.zoom, pvEnterT, (1 - e) * CW * tr.dir);
+    } else {   // Fade: crossfade old -> new
+      drawPhoto(pv.photos[tr.fromIdx], 0, 1, pvEnterT * (1 - e), 0);
+      drawPhoto(pv.photos[pv.idx], pv.rot, pv.zoom, pvEnterT * e, 0);
+    }
+  } else {
+    drawPhoto(pv.photos[pv.idx], pv.rot, pv.zoom, pvEnterT, 0);
+  }
+  // Bottom-right help hint, auto-hiding. Firmware: a rounded grey pill with two
+  // rows -- "(green triangle) : Control Panel" and "(PS) : Home Menu"
+  // (xmb-ref/photo/viewer.png).
+  const hintA = Math.max(0, Math.min(1, (pv.hintUntil - performance.now()) / 600)) * pvEnterT;
+  if (hintA > 0.01) {
+    ctx2.save();
+    ctx2.globalAlpha = hintA;
+    // Font sized to the real viewer.png pill: text line pitch ~34px @1080 (was 0.026
+    // = too large by ~30%). 0.021*CH gives lh ~34px, matching the real two-row pill.
+    const fs = Math.round(CH * 0.021);
+    ctx2.font = '300 ' + fs + 'px PS3';
+    ctx2.textAlign = 'left'; ctx2.textBaseline = 'middle';
+    const t1 = ' :  Control Panel', t2 = ' :  Home Menu';
+    const gr = fs * 0.52;                       // glyph radius
+    const padX = fs * 0.9, padY = fs * 0.75, lh = fs * 1.5, gap = fs * 0.5;
+    const tw = Math.max(ctx2.measureText(t1).width, ctx2.measureText(t2).width);
+    const contentW = gr * 2 + gap + tw;
+    const pillW = contentW + padX * 2, pillH = lh * 2 + padY * 2 - (lh - fs);
+    const px = CW - CW * 0.028 - pillW, py = CH - CH * 0.035 - pillH;
+    // pill
+    ctx2.fillStyle = 'rgba(64,64,68,0.82)';
+    roundRect(ctx2, px, py, pillW, pillH, fs * 0.55); ctx2.fill();
+    const gx = px + padX + gr, tx = px + padX + gr * 2 + gap;
+    const y1 = py + padY + fs * 0.5, y2 = y1 + lh;
+    drawTriangleGlyph(ctx2, gx, y1, gr);
+    drawPSGlyph(ctx2, gx, y2, gr * 0.92);
+    ctx2.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx2.fillText(t1, tx, y1);
+    ctx2.fillText(t2, tx, y2);
+    ctx2.restore();
+  }
+  ctx2.restore();
+  if (pv.wpMode || pv.trimMode) drawPvWallpaper(ctx2);   // Set as Wallpaper / Trimming range selector (over the photo)
+  if (pv.info) drawPvInfo(ctx2);     // EXIF Information overlay (toggled by the "Display" control)
+  if (pv.panel) drawPvPanel(ctx2);
+  else if (pv.panelClosing) { const p = (performance.now() - pv.panelClosing.start) / pv.panelClosing.dur; if (p >= 1) pv.panelClosing = null; else drawPvPanel(ctx2, 1 - p); }   // reverse slide/fade-out
+}
+
+// EXIF "Display" information overlay -- a right-anchored dark panel with right-aligned
+// labels + values, captured 1:1 from RPCS3 (xmb-ref/photo/live2/exif_panel.png).
+// Firmware field order + the missing-value convention ("-" for numeric, "Unknown"
+// for the four enum fields). Values come from the photo's own metadata; the test
+// photos carry no camera EXIF, so most read "-"/"Unknown" exactly as the real PS3.
+const PV_EXIF_FIELDS = [
+  'Date taken', 'Manufacturer name', 'Model name', 'Image size', 'MaxApertureValue',
+  'Lens focal length', 'Shutter speed', 'F number', 'Exposure correction value',
+  'Exposure program', 'MeteringMode', 'ISO', 'White balance mode', 'Flash',
+  'Colour space', 'Exif version'
+];
+function pvExifValue(field, ph) {
+  if (field === 'Date taken') { const s = (ph && ph.date) || ''; const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(s); return m ? ((+m[3]) + '/' + (+m[2]) + '/' + m[1] + '  ' + (+m[4]) + ':' + m[5] + ':' + (m[6] || '00')) : '-'; }
+  if (field === 'Image size') return (ph && ph.w && ph.h) ? (ph.w + ' x ' + ph.h) : '-';
+  if (field === 'Exposure program' || field === 'MeteringMode' || field === 'White balance mode' || field === 'Colour space') return 'Unknown';
+  return '-';
+}
+function drawPvInfo(ctx2) {
+  const pv = photoViewer; if (!pv) return;
+  const ph = pv.photos[pv.idx];
+  const CW = xmbCanvas.width, CH = xmbCanvas.height;
+  ctx2.save(); ctx2.setTransform(1, 0, 0, 1, 0, 0); ctx2.globalAlpha = pvEnterT;
+  // panel geometry (fractions measured from the RPCS3 band: bg x~0.58-1.0, rows y~0.17-0.74)
+  const labelX = CW * 0.74;          // right edge of right-aligned labels
+  const valueX = CW * 0.755;         // left edge of values
+  const top = CH * 0.165, rowH = CH * 0.0365;
+  const fs = Math.round(CH * 0.0225);
+  // dark translucent backing. Strength measured 1:1 from the RPCS3 EXIF capture
+  // (fair compare, same nebula photo): the real panel darkens the photo to ~0.21 of
+  // its un-scrimmed brightness => alpha ~0.78. (User 2026-06-14: RPCS3 IS the real
+  // PS3, so its measured panel darkness is the ground truth here.)
+  ctx2.fillStyle = 'rgba(0,0,0,0.78)';
+  ctx2.fillRect(CW * 0.575, top - rowH * 0.7, CW * 0.425, rowH * PV_EXIF_FIELDS.length + rowH * 0.5);
+  ctx2.font = '300 ' + fs + 'px PS3';
+  ctx2.textBaseline = 'middle';
+  ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 3;
+  for (let i = 0; i < PV_EXIF_FIELDS.length; i++) {
+    const y = top + i * rowH;
+    ctx2.textAlign = 'right'; ctx2.fillStyle = 'rgba(225,225,228,0.92)';
+    ctx2.fillText(PV_EXIF_FIELDS[i], labelX, y);
+    ctx2.textAlign = 'left'; ctx2.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx2.fillText(pvExifValue(PV_EXIF_FIELDS[i], ph), valueX, y);
+  }
+  ctx2.restore();
+}
+
+// Inside a photo album the XMB shows a THUMBNAIL GRID (not the vertical list). True only when drilled into a
+// photo album (curItems all mtype:'photo'); strictly gated so the shared Music list renderer is untouched.
+function inPhotoAlbum() {
+  if (!stack.length) return false;
+  const c = DATA[ci]; if (!c || c.content !== 'photo') return false;
+  const it = curItems(); if (!it || !it.length) return false;
+  for (let i = 0; i < it.length; i++) if (it[i].mtype !== 'photo') return false;
+  return true;
+}
+// Grid focus movement inside a photo album. LEFT at the leftmost column exits the album (back); otherwise
+// LEFT/RIGHT step within the row and UP/DOWN step by a full row (cols). dx/dy in {-1,0,1}.
+const PG_COLS = 5;
+// Photo-grid focus tween (mirrors navItem's itemAnim): on a move we ease the
+// newly-focused thumb 1.0->1.45 and the outgoing thumb 1.45->1.0 with easeOutCubic,
+// so the selection grows/settles instead of snapping.
+let pgAnim = null;   // {start, fromIdx, dur}
+function pgGridMove(dx, dy) {
+  const items = curItems(); if (!items) return;
+  const n = items.length, col = ii % PG_COLS;
+  const prev = ii; let moved = false;
+  if (dx < 0) { if (col === 0) { back(); return; } if (ii - 1 >= 0) { ii -= 1; moved = true; } }
+  else if (dx > 0) { if (col === PG_COLS - 1) return; if (ii + 1 < n) { ii += 1; moved = true; } }
+  else if (dy < 0) { if (ii - PG_COLS >= 0) { ii -= PG_COLS; moved = true; } }
+  else if (dy > 0) { if (ii + PG_COLS < n) { ii += PG_COLS; moved = true; } }
+  if (moved) { pgAnim = { start: performance.now(), fromIdx: prev, dur: V.ITEM_ANIM_MS }; playCursor(); }
+}
+// Draw an image cover-cropped (fill the box, center-crop overflow) into [x,y,w,h].
+function pgCover(ctx2, img, x, y, w, h) {
+  const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height; if (!iw || !ih) return;
+  const s = Math.max(w / iw, h / ih), sw = w / s, sh = h / s;
+  ctx2.drawImage(img, (iw - sw) / 2, (ih - sh) / 2, sw, sh, x, y, w, h);
+}
+// In-album thumbnail grid (firmware ref xmb-ref/photo/album_grid.png): 5-col matrix, focused item enlarged
+// with a selection frame + filename/date label below it. Drawn in the logical frame space (ctx already
+// frame-transformed at the call site), to the RIGHT of the parent folder column + back chevron.
+function drawPhotoGrid(ctx2, items, sel, alpha) {
+  const cols = 5;
+  // Measured from xmb-ref/photo/album_grid.png (1920x1080): the grid sits to the
+  // RIGHT of the retained parent folder breadcrumb (PARENT_COL_X 316) + back
+  // chevron (~430). Column centres 611/858/1105/1352/1599. y0 0.468 = real
+  // focused-thumb-top y~428 (clears the category bar / parent breadcrumb).
+  const x0 = 0.318, colStep = 0.1286, y0 = 0.468, rowStep = 0.242;  // fractions of V.W / V.H
+  const bw = V.W * 0.094, bh = V.H * 0.099;                         // base thumb box (non-focused)
+  const now = performance.now();
+  // Focus scale tween (easeOutCubic, mirrors navItem); grows the new thumb, shrinks the old.
+  let e = 1;
+  if (pgAnim) { e = easeOutCubic(Math.min((now - pgAnim.start) / pgAnim.dur, 1)); if (e >= 1) pgAnim = null; }
+  // Breathing white selection glow, identical to the active item-text halo (drawItemList).
+  const settled = !pgAnim;
+  let pulseOuterA = 0.55, pulseInnerA = 0.50;
+  if (settled) {
+    const s = 0.5 * (1 - Math.cos(((now % V.PULSE_PERIOD_MS) / V.PULSE_PERIOD_MS) * 2 * Math.PI));
+    pulseOuterA = V.PULSE_ALPHA_MIN + (V.PULSE_ALPHA_MAX - V.PULSE_ALPHA_MIN) * s;
+    pulseInnerA = V.PULSE_INNER_MIN + (V.PULSE_INNER_MAX - V.PULSE_INNER_MIN) * s;
+  }
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 0; i < items.length; i++) {
+      const focus = (i === sel);
+      const wasFocus = pgAnim && (i === pgAnim.fromIdx) && !focus;
+      // pass 0 = static non-focused; pass 1 = focused + the outgoing (shrinking) thumb, on top
+      if ((pass === 0) === (focus || wasFocus)) continue;
+      const col = i % cols, row = (i / cols) | 0;
+      const cx = XCP(V.W * (x0 + col * colStep)), cy = V.H * (y0 + row * rowStep);
+      let sc = 1.0;
+      if (focus) sc = 1.0 + 0.45 * e;        // grow 1.0 -> 1.45
+      else if (wasFocus) sc = 1.45 - 0.45 * e; // shrink 1.45 -> 1.0
+      const w = XCF(bw) * sc, h = XCF(bh) * sc;
+      const x = cx - w / 2, y = cy - h / 2;
+      ctx2.globalAlpha = (focus ? 1 : 0.92) * alpha;
+      // Opaque card base that casts a soft DROP SHADOW (the clipped photo cannot
+      // cast one). Mirrors the music jacket shadow (rgba(0,0,0,0.55) blur/offset).
+      ctx2.save();
+      ctx2.shadowColor = 'rgba(0,0,0,0.55)'; ctx2.shadowBlur = XCF(10); ctx2.shadowOffsetX = 0; ctx2.shadowOffsetY = XCF(3);
+      ctx2.fillStyle = '#000'; ctx2.fillRect(x - 1, y - 1, w + 2, h + 2);
+      ctx2.restore();
+      const ic = getIcon(items[i].i);
+      if (ic && ic.loaded && ic.img) { ctx2.save(); ctx2.beginPath(); ctx2.rect(x, y, w, h); ctx2.clip(); pgCover(ctx2, ic.img, x, y, w, h); ctx2.restore(); }
+      if (focus) {
+        // Crisp white frame + breathing two-tier white glow halo (same machinery
+        // as the active item-text halo: TEXT_GLOW_RADIUS/INNER + PULSE_* alpha).
+        ctx2.save();
+        ctx2.shadowOffsetX = 0; ctx2.shadowOffsetY = 0;
+        ctx2.strokeStyle = 'rgba(255,255,255,0.95)'; ctx2.lineWidth = Math.max(2, XCF(3));
+        ctx2.shadowColor = 'rgba(255,255,255,' + pulseOuterA.toFixed(3) + ')'; ctx2.shadowBlur = XCF(V.TEXT_GLOW_RADIUS); ctx2.strokeRect(x, y, w, h);
+        ctx2.shadowColor = 'rgba(255,255,255,' + pulseInnerA.toFixed(3) + ')'; ctx2.shadowBlur = XCF(V.TEXT_GLOW_INNER_RADIUS); ctx2.strokeRect(x, y, w, h);
+        ctx2.restore();
+        // filename + capture date/time under the focused thumb. The filename is an
+        // ACTIVE label, so it gets the same breathing white glow halo the XMB applies
+        // to every active item label (drawItemList): two halo passes + crisp text.
+        ctx2.globalAlpha = alpha; ctx2.textAlign = 'left'; ctx2.textBaseline = 'alphabetic';
+        ctx2.font = Math.round(XCF(V.H * 0.026)) + 'px PS3';
+        const ny = y + h + XCF(V.H * 0.035);
+        ctx2.save();
+        ctx2.fillStyle = 'rgb(255,255,255)'; ctx2.shadowOffsetX = 0; ctx2.shadowOffsetY = 0;
+        ctx2.shadowColor = 'rgba(255,255,255,' + pulseOuterA.toFixed(3) + ')'; ctx2.shadowBlur = XCF(V.TEXT_GLOW_RADIUS); ctx2.fillText(items[i].n, x, ny);
+        ctx2.shadowColor = 'rgba(255,255,255,' + pulseInnerA.toFixed(3) + ')'; ctx2.shadowBlur = XCF(V.TEXT_GLOW_INNER_RADIUS); ctx2.fillText(items[i].n, x, ny);
+        ctx2.restore();
+        ctx2.fillStyle = 'rgb(245,245,245)'; ctx2.shadowColor = 'rgba(0,0,0,0.6)'; ctx2.shadowBlur = 3; ctx2.shadowOffsetY = 1;
+        ctx2.fillText(items[i].n, x, ny);
+        ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 4; ctx2.shadowOffsetY = 0;
+        ctx2.font = '300 ' + Math.round(XCF(V.H * 0.020)) + 'px PS3'; ctx2.globalAlpha = 0.8 * alpha;
+        const dt = fmtPhotoDate(items[i].date);   // firmware "D/M/YYYY H:MM"
+        ctx2.fillText(dt, x, y + h + XCF(V.H * 0.060));
+        ctx2.shadowBlur = 0;
+      }
+    }
+  }
+  ctx2.globalAlpha = 1;
+}
+
 function drawMusicPlayer(ctx2) {
   const mp = musicPlayer; if (!mp) return;
   const bands = mpBands();
@@ -11520,26 +12295,48 @@ function sortFieldForGroup(mode) {
 function buildOptRows() {
   const items = curItems(); const it = items && items[ii]; const cat = DATA[ci];
   const inContent = !!cat.content; const inside = stack.length > 0;
+  const isPhotoCat = cat.content === 'photo';
+  const inPlaylist = inside && mpPlaylists.some(p => p.ch === curItems());   // inside a specific playlist's track folder
+  const media = it && (it.mtype === 'album' || it.mtype === 'track' || it.mtype === 'photo');
+  // Firmware-captured photo bits (RPCS3 live, xmb-ref/photo/live2): Sort By = "Film
+  // Date" (default ascending); Slideshow START with the 5 styles.
+  const photoStyles = [{label:'Normal',sstyle:0},{label:'Slide',sstyle:1},{label:'Portrait',sstyle:2},{label:'Photo Album',sstyle:3},{label:'Photo Album 2',sstyle:4}];
+  const photoSortBy = {label:'Sort By', subDef:1, sub:[{label:'Film Date ▼',sort:'desc'},{label:'Film Date ▲',sort:'asc'}]};
   const rows = [];
+  // ---- TOP GROUP ----
   if (inContent && !inside) {
-    const sf = sortFieldForGroup(cat.groupModes[cat._groupIdx || 0]);
-    rows.push({label:'Sort By', sub:[{label:sf+' ▼', sort:'desc'},{label:sf+' ▲', sort:'asc'}]});
+    if (isPhotoCat) rows.push(photoSortBy);
+    else { const sf = sortFieldForGroup(cat.groupModes[cat._groupIdx || 0]); rows.push({label:'Sort By', sub:[{label:sf+' ▼', sort:'desc'},{label:sf+' ▲', sort:'asc'}]}); }
     rows.push({label:'Group Content', icon:true, sub: cat.groupModes.map((m,i)=>({label:m, group:i}))});
     rows.push({sep:1});
   } else if (inside && inContent) {
     rows.push({label:'Delete Multiple', act:'delmulti'});
     rows.push({label:'Copy Multiple', act:'copymulti'});
+    // Photo in-album (grid) options ALSO carry Sort By + Slideshow START at the top
+    // (firmware-captured); music in-album does not.
+    if (isPhotoCat) { rows.push(photoSortBy); rows.push({label:'Slideshow', act:'slideshow', start:true, sub:photoStyles}); }
     rows.push({sep:1});
   }
-  const inPlaylist = inside && mpPlaylists.some(p => p.ch === curItems());   // inside a specific playlist's track folder
-  const media = it && (it.mtype === 'album' || it.mtype === 'track');
+  // ---- BOTTOM GROUP (per-item actions) ----
   if (media || (inContent && it)) {
-    rows.push({label:'Play', act:'play'});
-    rows.push({label:'Copy', act:'copy'});
-    if (inPlaylist) rows.push({label:'Remove from Playlist', act:'rmpl'});   // playlist management
-    else rows.push({label:'Add to Playlist', act:'addpl'});
-    rows.push({label:'Delete', act:'delete'});
-    rows.push({label:'Information', act:'info'});
+    if (isPhotoCat) {
+      // In an album: "View" opens the focused photo. At folder level: "Slideshow"
+      // (START) of the folder. In-album also has "Print" (firmware-captured).
+      if (inside) rows.push({label:'View', act:'view'});
+      else rows.push({label:'Slideshow', act:'slideshow', start:true, sub:photoStyles});
+      rows.push({label:'Copy', act:'copy'});
+      rows.push({label:'Add to Playlist', act:'addpl'});
+      if (inside) rows.push({label:'Print', act:'print'});
+      rows.push({label:'Delete', act:'delete'});
+      rows.push({label:'Information', act:'info'});
+    } else {
+      rows.push({label:'Play', act:'play'});
+      rows.push({label:'Copy', act:'copy'});
+      if (inPlaylist) rows.push({label:'Remove from Playlist', act:'rmpl'});   // playlist management
+      else rows.push({label:'Add to Playlist', act:'addpl'});
+      rows.push({label:'Delete', act:'delete'});
+      rows.push({label:'Information', act:'info'});
+    }
   } else if (it) {
     rows.push({label:'Information', act:'info'});
   }
@@ -11547,13 +12344,23 @@ function buildOptRows() {
 }
 
 function openOptMenu() {
+  if (photoMulti) return;   // multi-select screen owns its own input
+  // Photo Viewer: TRIANGLE toggles the viewer CONTROL PANEL (rotate/zoom/slideshow/etc).
+  if (photoViewer) { if (photoViewer.panel) pvPanelClose(); else pvPanelOpen(); return; }
   if (musicPlayer && !wizState && !dialogState) {   // Now Playing: TRIANGLE TOGGLES the control/options panel (firmware show/hide)
     if (optMenu && optMenu.player) closeMpOpt(); else openMpOpt();
     return;
   }
   if (optMenu || dialogState || wizState || landingState || submenuAnim) return;
   const rows = buildOptRows(); if (!rows) return;
-  let sel = 0; while (rows[sel] && rows[sel].sep) sel++;
+  // Firmware default cursor (RPCS3 live, xmb-ref/photo/live2/inalbum_options_real.png):
+  // the XMB options menu lands on the first per-ITEM action, i.e. the first row after
+  // the leading list-level group's separator (View for a photo, Play for a track),
+  // NOT on the top "Sort By / Delete Multiple" group. Same shared widget for all cats.
+  let sel = 0;
+  const sepIdx = rows.findIndex(r => r.sep);
+  if (sepIdx >= 0 && sepIdx + 1 < rows.length) sel = sepIdx + 1;
+  while (rows[sel] && rows[sel].sep) sel++;
   optMenu = {rows, sel, subOpen:false, subRows:null, subSel:0, anim:{start:performance.now(), dur:180}};
   playNav2();
 }
@@ -11569,7 +12376,7 @@ function optMove(dir) {
 function optOpenSub() {
   const o = optMenu; if (!o || o.subOpen) return false;
   const r = o.rows[o.sel];
-  if (r.sub) { o.subOpen = true; o.subRows = r.sub; o.subSel = 0; playNav2(); return true; }
+  if (r.sub) { o.subOpen = true; o.subRows = r.sub; o.subSel = r.subDef || 0; playNav2(); return true; }
   return false;
 }
 function optEnter() {
@@ -11590,11 +12397,31 @@ function applyOptSub(sr) {
   const cat = DATA[ci];
   if (sr.group != null) { cat._groupIdx = sr.group; regroupContent(cat); groupReflow = {start: performance.now()}; showGroupBanner(cat.groupModes[sr.group]); }
   else if (sr.sort) { cat._sortDir = sr.sort; }
+  else if (sr.sstyle != null) { pgStartSlideshow(sr.sstyle); return; }   // photo Slideshow style -> start the show
   closeOptMenu();
+}
+// Start a slideshow of the focused photo / photo album with the chosen style (0=Normal..4=Photo Album 2).
+function pgStartSlideshow(style) {
+  const items = curItems(); const it = items && items[ii]; if (!it) return;
+  let photos = null, idx = 0;
+  if (it.mtype === 'photo') { photos = items.filter(x => x.mtype === 'photo'); idx = photos.indexOf(it); }
+  else if (it.mtype === 'album' && it.ch) { photos = it.ch.filter(x => x.mtype === 'photo'); }
+  if (!photos || !photos.length) { closeOptMenu(); return; }
+  closeOptMenu();
+  openPhotoViewer(photos, idx < 0 ? 0 : idx);
+  if (photoViewer) { photoViewer.slideStyle = style; photoViewer.slideshow = true; photoViewer.paused = false; photoViewer.slideNext = performance.now() + (photoViewer.slideMs || 4000); photoViewer.hintUntil = 0; }
 }
 function doOptAction(act) {
   const items = curItems(); const it = items[ii];
   if (act === 'info') { optMenu = null; openContentInfo(it); return; }
+  if (act === 'view') {   // photo in-album "View": open the focused photo in the viewer
+    optMenu = null;
+    const photos = (items || []).filter(x => x.mtype === 'photo');
+    const idx = photos.indexOf(it);
+    if (photos.length) openPhotoViewer(photos, idx < 0 ? 0 : idx);
+    return;
+  }
+  if (act === 'print') { optMenu = null; return; }   // Print: printer/system path, no printer in env (see viewer-panel Print)
   if (act === 'play') {
     optMenu = null;
     if (it && it.mtype === 'track') openMusicPlayer(items, ii);
@@ -11604,6 +12431,11 @@ function doOptAction(act) {
   if (act === 'addpl') {
     // Add to Playlist: open the chooser (pick existing / create new). A track adds itself; an album adds all.
     optMenu = null;
+    // Photos use a SEPARATE (photo/slideshow) playlist namespace, not the music
+    // chooser. Its exact UI is not in the extractable firmware strings and was not
+    // capturable in the RPCS3 test context (no photo playlists), so for photos we
+    // do not show the (wrong) music chooser -- left as a no-op pending capture.
+    if (DATA[ci].content === 'photo') return;
     mpOpenAddChooser(it && it.mtype === 'album' && it.ch ? it.ch : it);
     return;
   }
@@ -11616,21 +12448,62 @@ function doOptAction(act) {
     else { mpSyncPlaylistItem(); if (pl && ii >= pl.ch.length) ii = Math.max(0, pl.ch.length - 1); showGroupBanner('Removed from the playlist'); playNav2(); }
     return;
   }
+  if (act === 'delete' && DATA[ci].content === 'photo' && it &&
+      (it.mtype === 'photo' || it.mtype === 'album')) {
+    // Photo browser Delete: firmware shows the same confirm as the viewer
+    // (msg_del_image_ask -> msg_deleted). Simulated (does not mutate the set).
+    optMenu = null;
+    dialogState = { template:{type:'confirm', title:'', body:'The image will be deleted.\nAre you sure you want to continue?', defaultSel:1, cancelLabel:'Back'}, sel:1,
+      onYes: function () { dialogState = {template:{type:'info', title:'', body:'Delete completed.'}, sel:0, anim:{start:performance.now(), dur:250}}; playNav2(); },
+      anim:{start:performance.now(), dur:250} };
+    playNav2();
+    return;
+  }
+  if ((act === 'delmulti' || act === 'copymulti') && DATA[ci].content === 'photo') {
+    pmOpen(act === 'delmulti' ? 'delete' : 'copy');   // photo multi-select checkbox screen
+    return;
+  }
   closeOptMenu();   // copy / delete / multi: simulated no-ops
 }
+// PS3 size formatting (e.g. "54 MB"), used by the photo-folder Information screen.
+function fmtFileSize(b) {
+  if (b >= 1024 * 1024) return Math.round(b / (1024 * 1024)) + ' MB';
+  if (b >= 1024) return Math.round(b / 1024) + ' KB';
+  return (b || 0) + ' B';
+}
 function openContentInfo(it) {
-  let body;
-  if (it && it.mtype === 'track')
+  let body, fields = null;
+  const isPhotoCat = DATA[ci] && DATA[ci].content === 'photo';
+  if (isPhotoCat && it && it.mtype === 'album') {
+    // Photo folder Information (live RPCS3 finfo.png: a centred folder icon + a
+    // Folder / Images / Size column screen, NOT the music Album/Artist/Genre fields).
+    const photos = (it.ch || []).filter(x => x.mtype === 'photo');
+    const total = photos.reduce((s, p) => s + (p.sz || 0), 0);
+    fields = [['Folder', it.n], ['Images', String(photos.length)], ['Size', fmtFileSize(total)]];
+  }
+  else if (isPhotoCat && it && it.mtype === 'photo')
+    fields = [['File', it.n], ['Date taken', fmtPhotoDate(it.date)], ['Image size', (it.w && it.h ? it.w + ' x ' + it.h : '-')], ['Size', fmtFileSize(it.sz)]];
+  else if (it && it.mtype === 'track')
     body = 'Title          ' + it.n + '\nArtist         ' + (it.a||'-') + '\nStage          ' + (it.st||'-') + '\nPlaying Time   ' + (it.dur||'-') + '\nFormat         MP3';
   else if (it && it.mtype === 'album')
     body = 'Album          ' + it.n + '\nArtist         ' + (it.artist||'-') + '\nGenre          ' + (it.genre||'-') + '\nRelease Year   ' + (it.year||'-') + '\nTracks         ' + (it.ch?it.ch.length:0);
   else body = (it && it.d) || 'No information is available.';
-  dialogState = {item:it, iconId:it?it.i:null, template:{type:'info', title:'Information', body:body}, sel:0,
-                 anim:{start:performance.now(), dur:250}};
+  if (fields) {
+    // Photo Information screen = NO top-left title, a CENTERED folder/photo icon, the
+    // field columns centred below it, and "O Back" (1:1 with real RPCS3 finfo.png).
+    dialogState = {item:it, iconId:it?it.i:null,
+      template:{type:'info', title:'', photoInfo:true, fields:fields, cancelLabel:'Back'},
+      sel:0, anim:{start:performance.now(), dur:250}};
+  } else {
+    dialogState = {item:it, iconId:it?it.i:null, template:{type:'info', title:'Information', body:body}, sel:0,
+                   anim:{start:performance.now(), dur:250}};
+  }
   playNav2();
 }
 
 function cycleGroup() {
+  if (photoMulti) return;   // multi-select screen owns its own input
+  if (photoViewer && !dialogState) { if (!photoViewer.wpMode && !photoViewer.trimMode) pvShow3D(); return; }   // Square = 2D/3D switch (not during a range selector)
   if (musicPlayer) { mpCycleVis(); return; }   // Square toggles the Now Playing visualizer
   const cat = DATA[ci];
   if (!cat.content || !cat.groupModes || stack.length || dialogState || wizState || optMenu) return;
@@ -11642,6 +12515,18 @@ function cycleGroup() {
 }
 function showGroupBanner(text) { groupBanner = {text, start:performance.now()}; }
 
+// Format a photo capture date the way the firmware photo list does:
+// stored "YYYY-MM-DD HH:MM" -> displayed "D/M/YYYY H:MM" (day, month and
+// hour have no leading zero; minute keeps it). Verified against the real
+// XMB "All" group list (e.g. 2014-07-03 15:09 -> "3/7/2014 15:09").
+function fmtPhotoDate(s) {
+  if (!s) return '';
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/.exec(s);
+  if (!m) return s;
+  const d = (+m[3]) + '/' + (+m[2]) + '/' + m[1];
+  return m[4] != null ? d + '  ' + (+m[4]) + ':' + m[5] : d;
+}
+
 // Rebuild a content category's item list for the current Group Content mode.
 function regroupContent(cat) {
   if (!cat._album) {
@@ -11652,6 +12537,31 @@ function regroupContent(cat) {
   const tracks = album.ch || [];
   const mode = cat.groupModes[cat._groupIdx || 0];
   let grouped = [];
+  if (cat.content === 'photo') {
+    // Photo grouping (firmware Group Content: By Month / By Year / By Album / All).
+    const photos = tracks;   // the album's children are photo items here
+    const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const cnt = a => a.length + (a.length > 1 ? ' Images' : ' Image');
+    // Group folder = the firmware photo-folder frame (explore_category_photo.rco
+    // icon 021: white folder, top-left tab) with the cover photo composited into
+    // its body. Pre-rendered per photo at photos/folder/<name>.png.
+    const cover = a => (a[0] && a[0].n) ? ('asset:photos/folder/' + a[0].n + '.png') : 'asset:images/icon_fw_folder.png';
+    if (mode === 'All') grouped = photos.slice();                       // flat list of individual photos
+    else if (mode === 'By Album') grouped = [{n: 'Unknown', mtype: 'album', photoGroup: true,
+        d: cnt(photos), i: cover(photos), ch: photos}];                 // no album EXIF -> firmware shows "Unknown"
+    else if (mode === 'By Month') {
+      const m = {}; photos.forEach(p => { const k = (p.date || '').slice(0, 7); (m[k] = m[k] || []).push(p); });
+      grouped = Object.keys(m).sort().map(k => ({n: MON[(+k.slice(5, 7)) - 1] + ' ' + k.slice(0, 4),
+        mtype: 'album', photoGroup: true, d: cnt(m[k]), i: cover(m[k]), ch: m[k]}));
+    }
+    else if (mode === 'By Year') {
+      const m = {}; photos.forEach(p => { const k = (p.date || '').slice(0, 4); (m[k] = m[k] || []).push(p); });
+      grouped = Object.keys(m).sort().map(k => ({n: k, mtype: 'album', photoGroup: true, d: cnt(m[k]), i: cover(m[k]), ch: m[k]}));
+    }
+    cat.items = cat._special.concat(grouped);
+    if (ii >= cat.items.length) ii = cat.items.length - 1;
+    return;
+  }
   if (mode === 'By Album') grouped = [album];
   else if (mode === 'By Track' || mode === 'All') grouped = tracks.slice();
   else if (mode === 'By Artist') {
@@ -11681,16 +12591,26 @@ function drawLavenderPanel(ctx2, leftX, rightX, ap) {
   ctx2.fillRect(leftX, frameTopV(), rightX - leftX, frameHV());
 }
 
-// Options-menu panel: measured from /work/music.mp4 frame 0169 (lavender over
-// black) -> a semi-transparent purple, sharp left edge at x~0.69W, peak at
-// x~0.71W (color (150,125,195) @ ~0.70 alpha -> (101,84,129) over black),
-// fading out by x~0.90W. Drawn source-over so it blends with any wallpaper.
+// Options-menu side panel = the firmware Theme/Colour LAVENDER side-panel gradient.
+// Color VIDEO-validated 1:1 from /work/music.mp4 (user's real PS3): the panel reads
+// RGB[70,59,89] = hue 263, sat 0.34 (purple/lavender). Do NOT re-measure this from
+// RPCS3 present captures: RPCS3 renders the XMB theme/panel hue shifted toward blue
+// (real June theme is teal hue 173 in june.mp4 but RPCS3 shows it blue ~210), so a
+// prior RPCS3-based "blue-grey" was a regression. See feedback_rpcs3_hue_unreliable.
+// Drawn source-over so it still blends with the wallpaper behind it. (Shared with
+// the Music browser - both match the real firmware.)
 function drawOptPanel(ctx2, dx, ap) {
   const L = XCF(V.W * 0.685) + dx, R = XCF(V.W * 0.92) + dx;
   const g = ctx2.createLinearGradient(L, 0, R, 0);
   // [normalised t over L..R, alpha]
   const prof = [[0.00,0.0],[0.03,0.62],[0.12,0.70],[0.21,0.70],[0.30,0.66],
                 [0.44,0.55],[0.58,0.44],[0.72,0.29],[0.86,0.08],[1.00,0.0]];
+  // The options side panel is the firmware Theme/Colour LAVENDER gradient. Color is
+  // VIDEO-validated from /work/music.mp4 (user's real PS3): RGB[70,59,89] hue 263,
+  // sat 0.34 = purple. Do NOT match RPCS3 present captures for this: RPCS3 renders
+  // the XMB theme/panel HUE shifted toward blue (proven: real June theme is teal
+  // hue 173 in june.mp4 but RPCS3 presents it as blue hue ~210). RPCS3 is reliable
+  // for layout/structure/text, NOT for theme/panel HUE -- use the videos for color.
   for (const [t,al] of prof) g.addColorStop(t, 'rgba(150,125,195,' + (al*ap).toFixed(3) + ')');
   ctx2.fillStyle = g;
   ctx2.fillRect(L, frameTopV(), R - L, frameHV());
@@ -11723,7 +12643,10 @@ function drawOptMenu(ctx2) {
   for (let i = 0; i < o.rows.length; i++) {
     const r = o.rows[i];
     if (r.sep) { y += 200; continue; }   // gap between the view group and actions
-    drawOptRow(ctx2, r.label, TX + xs, y, (i === o.sel && !o.subOpen), !!r.sub, r.icon, o.subOpen);
+    // Submenu ">" arrows are RIGHT-ALIGNED to a fixed column (RPCS3 live: both the
+    // Sort By and Slideshow arrows sit at the same x, ~0.815 of screen width = vx1565),
+    // NOT trailing the label.
+    drawOptRow(ctx2, r.label, TX + xs, y, (i === o.sel && !o.subOpen), !!r.sub, r.icon, o.subOpen, r.start, XCP(1565) + xs);
     y += PITCH;
   }
   if (o.subOpen) {
@@ -11749,38 +12672,46 @@ function drawOptHighlight(ctx2, x, y, w) {
   ctx2.restore();
 }
 
-// Small "Group Content" pictogram (purple tile with a lighter grid), like the
-// firmware icon next to that row.
+// "Group Content" glyph = the PS3 SQUARE button (magenta hollow square), i.e. a
+// button hint meaning "press Square to cycle the grouping". MEASURED 1:1 from real
+// xmb-ref/photo/folder_options.png (a pink/magenta hollow square, NOT a purple grid
+// tile). Shared with the Music browser (both cycle group on Square) so both match.
 function drawGroupIcon(ctx2, x, y) {
-  ctx2.save(); ctx2.shadowColor = 'rgba(0,0,0,0)';
-  const s = 18, gx = x, gy = y - s/2;
-  ctx2.fillStyle = 'rgba(150,70,200,0.95)'; roundRect(ctx2, gx, gy, s, s, 3); ctx2.fill();
-  ctx2.strokeStyle = 'rgba(220,200,245,0.95)'; ctx2.lineWidth = 1.4;
-  ctx2.strokeRect(gx + 3.5, gy + 3.5, s - 7, s - 7);
-  ctx2.beginPath(); ctx2.moveTo(gx + s/2, gy + 3.5); ctx2.lineTo(gx + s/2, gy + s - 3.5);
-  ctx2.moveTo(gx + 3.5, gy + s/2); ctx2.lineTo(gx + s - 3.5, gy + s/2); ctx2.stroke();
+  ctx2.save(); ctx2.shadowColor = 'rgba(0,0,0,0)'; ctx2.lineJoin = 'round';
+  const s = 18, gx = x, gy = y - s/2, m = s * 0.27;
+  // faint dark recess so the hollow square reads over the bright panel
+  ctx2.fillStyle = 'rgba(15,15,20,0.45)'; roundRect(ctx2, gx, gy, s, s, s*0.18); ctx2.fill();
+  // magenta/pink Square-button outline
+  ctx2.strokeStyle = 'rgba(214,99,170,0.98)'; ctx2.lineWidth = Math.max(1.6, s * 0.12);
+  ctx2.strokeRect(gx + m, gy + m, s - 2*m, s - 2*m);
   ctx2.restore();
 }
 
 // Options row matching the real XMB options menu: uniform-size white labels,
 // the SELECTED row gets a glossy highlight bar (not larger text). `dim` fades
 // the parent column when a submenu is open.
-function drawOptRow(ctx2, label, x, y, sel, arrow, icon, dim) {
+function drawOptRow(ctx2, label, x, y, sel, arrow, icon, dim, start, arrowX) {
   ctx2.save(); ctx2.textBaseline = 'middle'; ctx2.textAlign = 'left';
   ctx2.font = '23px PS3';
   const w = ctx2.measureText(label).width;
-  const iconGap = icon ? 28 : 0, arrGap = arrow ? 26 : 0;
-  if (sel) drawOptHighlight(ctx2, x, y, w + iconGap + arrGap);
+  // START button-hint pill (firmware: the photo-folder "Slideshow START" row).
+  let pillW = 0, pillH = 22;
+  if (start) { ctx2.font = Math.round(pillH * 0.46) + 'px PS3'; pillW = ctx2.measureText('START').width + 18; ctx2.font = '23px PS3'; }
+  const iconGap = icon ? 28 : 0, startGap = start ? pillW + 16 : 0, arrGap = arrow ? 26 : 0;
+  if (sel) drawOptHighlight(ctx2, x, y, w + iconGap + startGap + arrGap);
   let a = sel ? 1.0 : 0.86; if (dim) a *= 0.5;
   if (!sel) { ctx2.shadowColor = 'rgba(0,0,0,0.5)'; ctx2.shadowBlur = 3; ctx2.shadowOffsetY = 1; }
   ctx2.fillStyle = 'rgba(255,255,255,' + a.toFixed(3) + ')';
   ctx2.fillText(label, x, y);
   if (icon) drawGroupIcon(ctx2, x + w + 10, y);
+  if (start) { ctx2.shadowColor = 'rgba(0,0,0,0)'; drawMpPill(ctx2, x + w + 12, y - pillH / 2, pillW, pillH, 'START'); }
   if (arrow) {
     ctx2.shadowColor = 'rgba(0,0,0,0)';
     ctx2.fillStyle = 'rgba(255,255,255,' + (sel?0.95:0.6).toFixed(2) + ')';
     ctx2.font = '16px PS3';
-    ctx2.fillText('▶', x + w + iconGap + 8, y);
+    // Fixed right-aligned column (firmware), falling back to trailing the label.
+    const ax = (arrowX != null) ? arrowX : (x + w + iconGap + startGap + 8);
+    ctx2.fillText('▶', ax, y);
   }
   ctx2.restore();
 }
@@ -12401,6 +13332,11 @@ function queueOrLock(lockMs) {
 }
 
 function navCat(dir, fromRepeat) {
+  // Photo Viewer: when the control panel is open the D-pad moves the toolbar focus; else LEFT/RIGHT = Previous/Next.
+  if (photoViewer && !dialogState) {
+    if (photoViewer.panel) pvPanelMove(dir > 0 ? 1 : -1, 0); else pvStep(dir > 0 ? 1 : -1);
+    return;
+  }
   // Music player: if the control panel is OPEN, LEFT/RIGHT moves the button focus;
   // only with the panel closed does LEFT/RIGHT skip track (else the panel can't be navigated).
   if (musicPlayer && !dialogState && !wizState) {   // a player dialog (delete/quit) or OSK takes the D-pad when open
@@ -12419,6 +13355,8 @@ function navCat(dir, fromRepeat) {
   }
   // Landing: no left/right navigation, just consume the input.
   if (landingState) return;
+  // Photo album thumbnail grid: LEFT/RIGHT move the grid focus within the row (LEFT at col 0 exits the album).
+  if (inPhotoAlbum()) { pgGridMove(dir, 0); return; }
 
   // For non-repeat input (single user press), respect the input lock so
   // mashed double-taps don't pile up. For key-held repeats, processKeyRepeat
@@ -12507,6 +13445,8 @@ function navCat(dir, fromRepeat) {
 }
 
 function navItem(dir, fromRepeat) {
+  // Photo Viewer: UP/DOWN moves the control-panel focus when open; otherwise consumed.
+  if (photoViewer && !dialogState) { if (photoViewer.panel) pvPanelMove(0, dir > 0 ? 1 : -1); return; }
   // Music player: if the control panel is OPEN, UP/DOWN moves the button focus;
   // with the panel closed the player ignores up/down.
   if (musicPlayer && !dialogState && !wizState) {
@@ -12525,6 +13465,8 @@ function navItem(dir, fromRepeat) {
     return;
   }
   if (landingState) return;
+  // Photo album thumbnail grid: UP/DOWN move the grid focus by a full row.
+  if (inPhotoAlbum()) { pgGridMove(0, dir); return; }
 
   // See navCat: repeats bypass the input lock so processKeyRepeat's
   // firmware-derived cadence drives the actual rate.
@@ -12579,6 +13521,16 @@ function navItem(dir, fromRepeat) {
 }
 
 function enter() {
+  // Photo multi-select: Cross toggles the focused row's checkbox or activates a side button.
+  if (photoMulti && !dialogState) { pmActivate(); return; }
+  // Photo Viewer: when the control panel is open, Cross ACTIVATES the focused control; else Cross is consumed.
+  // A 2D/3D or delete dialog open over the viewer falls through to the generic dialog handler below.
+  if (photoViewer && !dialogState) {
+    if (photoViewer.wpMode) { pvWallpaperConfirm(); return; }   // wallpaper range -> overwrite confirm
+    if (photoViewer.trimMode) { photoViewer.zoom = photoViewer.wpZoom || 1; photoViewer.trimMode = false; playNav2(); return; }   // trimming -> apply crop to the view
+    if (photoViewer.panel) pvPanelActivate();
+    return;
+  }
   // Now Playing CONTROL PANEL (Triangle) owns Cross = ACTIVATE the focused button. This must be checked
   // BEFORE the play/pause toggle below, otherwise Cross toggles playback and the panel buttons can never
   // be selected (the user's "can't select any of the icons").
@@ -12685,6 +13637,8 @@ function enter() {
     mpOpenNameOSK('Enter a name for the playlist', function (nm) { mpCreatePlaylist(nm); mpSyncPlaylistItem(); });
     return;
   }
+  // Photo (mtype:'photo'): CROSS opens the full-screen Photo Viewer on the current list of photos.
+  if (it.mtype === 'photo') { openPhotoViewer(items, ii); return; }
   if (!it.ch) return;
   const parentItems = items;
   const parentIdx = ii;
@@ -12708,6 +13662,16 @@ function enter() {
 }
 
 function back() {
+  // Photo multi-select: Circle exits the checkbox screen back to the grid.
+  if (photoMulti && !dialogState) { photoMulti = null; playNav(); return; }
+  // Photo Viewer: Circle closes the control panel first, then stops a running slideshow, then exits the viewer.
+  if (photoViewer && !dialogState) {
+    if (photoViewer.wpMode || photoViewer.trimMode) { photoViewer.wpMode = false; photoViewer.trimMode = false; playNav(); return; }   // exit the wallpaper/trimming range selector
+    if (photoViewer.cpSub) { photoViewer.cpSub = null; playNav(); return; }   // close a control submenu first
+    if (photoViewer.panel) { pvPanelClose(); return; }
+    if (photoViewer.slideshow) { photoViewer.slideshow = false; photoViewer.hintUntil = performance.now() + 1500; return; }
+    closePhotoViewer(); return;
+  }
   // Now Playing CONTROL PANEL / Volume submenu: Circle/Back closes those FIRST (optBack: volume -> panel ->
   // player), and only THEN does Circle exit Now Playing. This must precede the closeMusicPlayer line below,
   // otherwise Circle in the open panel exits the whole player instead of just closing the panel.
@@ -12832,6 +13796,42 @@ const KEY_ACCEL_FACTOR = V.INPUT_ACCEL_MULT;         // firmware: 1.4x accelerat
 // firmware-derived processKeyRepeat schedule can drive chained motion without
 // the inputLock clamping it down to the animation duration.
 function getKeyAction(key, fromRepeat) {
+  // Photo multi-select: Up/Down move the list (or the side-button column), Right enters
+  // the Select All/Clear All/OK buttons, Left returns to the list.
+  if (photoMulti && !dialogState) {
+    switch (key) {
+      case 'ArrowUp':    return () => pmMove(-1);
+      case 'ArrowDown':  return () => pmMove(1);
+      case 'ArrowRight': return () => { if (photoMulti.btn < 0) { photoMulti.btn = 0; playCursor(); } };
+      case 'ArrowLeft':  return () => { if (photoMulti.btn >= 0) { photoMulti.btn = -1; playCursor(); } };
+      default: return null;
+    }
+  }
+  // Photo Viewer: panel open -> D-pad moves toolbar focus; panel closed -> LEFT/RIGHT = Previous/Next.
+  if (photoViewer && !dialogState) {
+    if (photoViewer.wpMode || photoViewer.trimMode) {   // wallpaper/trimming range selector: Up/Down stand in for the analog zoom (sticks unavailable on keyboard)
+      switch (key) {
+        case 'ArrowUp':    return () => { photoViewer.wpZoom = Math.min(4, (photoViewer.wpZoom || 1) * 1.1); };
+        case 'ArrowDown':  return () => { photoViewer.wpZoom = Math.max(1, (photoViewer.wpZoom || 1) / 1.1); };
+        default: return () => {};
+      }
+    }
+    if (photoViewer.panel) {
+      switch (key) {
+        case 'ArrowLeft':  return () => pvPanelMove(-1, 0);
+        case 'ArrowRight': return () => pvPanelMove(1, 0);
+        case 'ArrowUp':    return () => pvPanelMove(0, -1);
+        case 'ArrowDown':  return () => pvPanelMove(0, 1);
+        default: return null;
+      }
+    }
+    switch (key) {
+      case 'ArrowLeft':  return () => pvStep(-1);
+      case 'ArrowRight': return () => pvStep(1);
+      case 'ArrowUp': case 'ArrowDown': return () => {};
+      default: return null;
+    }
+  }
   // Music player: when the control panel is OPEN the D-pad navigates the button grid;
   // with the panel closed, LEFT/RIGHT skip track (UP/DOWN ignored). This is the keyboard
   // path -- it previously hard-mapped arrows to prev/next, so the panel couldn't be navigated.
@@ -12868,6 +13868,16 @@ function getKeyAction(key, fromRepeat) {
       case 'ArrowRight': return () => wizNavCat(1);
       case 'ArrowUp':    return () => wizNavItem(-1);
       case 'ArrowDown':  return () => wizNavItem(1);
+      default: return null;
+    }
+  }
+  // Photo album thumbnail grid: arrows move the grid focus (LEFT at col 0 exits the album).
+  if (inPhotoAlbum()) {
+    switch (key) {
+      case 'ArrowLeft':  return () => pgGridMove(-1, 0);
+      case 'ArrowRight': return () => pgGridMove(1, 0);
+      case 'ArrowUp':    return () => pgGridMove(0, -1);
+      case 'ArrowDown':  return () => pgGridMove(0, 1);
       default: return null;
     }
   }
@@ -13020,13 +14030,15 @@ function pollGP() {
 
     // D-pad: 12=up, 13=down, 14=left, 15=right
     if (jp(14)) {
-      if (wizState) navCat(-1);                 // wizard owns L/R (no XMB back)
+      if (photoViewer || inPhotoAlbum()) navCat(-1);   // viewer prev / grid focus (navCat routes both)
+      else if (wizState) navCat(-1);                 // wizard owns L/R (no XMB back)
       else if (dialogState || landingState) navCat(-1);
       else if (stack.length) back();
       else navCat(-1);
     }
     if (jp(15)) {
-      if (wizState) {
+      if (photoViewer || inPhotoAlbum()) navCat(1);   // viewer next / grid focus
+      else if (wizState) {
         navCat(1);
       } else if (dialogState || landingState) {
         navCat(1);
@@ -13928,6 +14940,7 @@ function frame(now) {
   const dt = Math.min(now - lastT, 50); // cap delta to avoid jumps
   lastT = now;
   processKeyRepeat(now);
+  applyWallpaper();   // keep the custom-wallpaper / wave visibility synced with context
 
   // BOOT INTRO: the firmware-derived coldboot animation. The logo/footer/blur
   // draw on the dedicated z-index-3 overlay (bootCanvas); the wave + gradient
@@ -14157,6 +15170,13 @@ function frame(now) {
   // modal-overlay block ABOVE drawMusicPlayer, so the player overdraws it. Re-draw it on top here so the
   // OSK is visible and the user isn't stranded on a blank player (user 2026-06-13: "no OSK or dialog showed").
   if (musicPlayer && wizState) drawWizard(ctx);
+  // Photo Viewer (full-screen image, firmware photoviewer_plugin.rco) renders on top of the XMB, like the
+  // music player. Draw while open OR while the exit fade is still running (pvEnterT > 0).
+  if (photoViewer || pvEnterT > 0.001) drawPhotoViewer(ctx);
+  // Photo multi-select (Delete/Copy Multiple) checkbox screen, over the browser.
+  if (photoMulti) drawPhotoMulti(ctx);
+  // Re-draw an open dialog (the 2D/3D confirm, or the multi-select delete confirm) over the photo overlays.
+  if ((photoViewer || photoMulti) && dialogState) drawDialog(ctx);
   if (musicPlayer && _chromeVis > 0.001) {
     // ENTER: drawMusicPlayer already cleared the canvas; overlay the fading-OUT chrome on top of the player.
     ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -14185,6 +15205,8 @@ initWebGL();
 initIconGlass();
 resize();
 mpSyncPlaylistItem();   // make the Music column "Playlists" item a folder with the "Create New Playlist" entry
+{ const _pc = DATA.find(c => c.id === 'photo'); if (_pc && _pc.content) regroupContent(_pc); }   // apply default photo grouping (By Month)
+applyWallpaper();   // restore a persisted custom wallpaper (Background == Wallpaper) on load
 
 // Wait for PS3 Rodin fonts to load before starting the render loop
 // so the first frame uses Rodin instead of the sans-serif fallback.

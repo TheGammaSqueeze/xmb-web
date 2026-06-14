@@ -1,9 +1,10 @@
 # xmb-web
 
 A pixel-accurate, browser-based recreation of the **PlayStation 3 XMB**
-(XrossMediaBar) — the wave, the per-month gradient, the cold-boot intro, the
-3D-rendered icons, the menus, dialogs and side-panel choosers — running entirely
-in a single HTML file with no build step and no dependencies.
+(XrossMediaBar): the wave, the per-month gradient, the cold-boot intro, the
+3D-rendered icons, the menus, dialogs and side-panel choosers, plus working
+**Music** and **Photo** apps, all running entirely in a single HTML file with
+no build step and no dependencies.
 
 **Live:** https://thegammasqueeze.github.io/xmb-web/
 
@@ -20,14 +21,15 @@ or capture wherever a value came from.
 
 - [Quick start](#quick-start)
 - [Controls](#controls)
+- [Apps and features](#apps-and-features)
 - [URL parameters](#url-parameters)
-- [Screen scenarios](#screen-scenarios) ← aspect ratios, portrait, resolution
-  simulation, integer scaling, HiDPI
+- [Screen scenarios](#screen-scenarios) (aspect ratios, portrait, resolution
+  simulation, integer scaling, HiDPI)
 - [How the rendering works](#how-the-rendering-works)
 - [The responsive layout model](#the-responsive-layout-model)
 - [Repository layout](#repository-layout)
-- [Provenance & accuracy](#provenance--accuracy)
-- [License & disclaimer](#license--disclaimer)
+- [Provenance and accuracy](#provenance-and-accuracy)
+- [License and disclaimer](#license-and-disclaimer)
 
 ---
 
@@ -49,7 +51,7 @@ Any static host works (the live copy is GitHub Pages). The entire app is
 
 ## Controls
 
-The XMB is driven like a real PS3 — a cursor that moves across a horizontal
+The XMB is driven like a real PS3: a cursor that moves across a horizontal
 **category bar** with a vertical **item list** dropping out of the active
 category.
 
@@ -57,13 +59,13 @@ category.
 
 | Key | Action |
 |-----|--------|
-| **← / →** | Move between categories (or go back / into a submenu when one is open) |
-| **↑ / ↓** | Move the item cursor up / down |
-| **Enter** / **X** | Confirm — open the selected item / submenu / dialog |
-| **Esc** / **Backspace** / **Z** | Back — close a dialog or pop out of a submenu |
+| **Left / Right** | Move between categories (or go back / into a submenu when one is open) |
+| **Up / Down** | Move the item cursor up / down |
+| **Enter** / **X** | Confirm: open the selected item / submenu / dialog |
+| **Esc** / **Backspace** / **Z** | Back: close a dialog or pop out of a submenu |
 | **Tab** | Cycle the **aspect ratio** (Shift+Tab goes backwards) |
 | **O** | Toggle **portrait / landscape** orientation |
-| **N** | Toggle **true-1×** vs **normal** rendering for a simulated resolution |
+| **N** | Toggle **true-1x** vs **normal** rendering for a simulated resolution |
 
 Holding a direction auto-repeats with the firmware's exact cadence (300 ms
 initial delay, accelerating from 200 ms toward a 50 ms floor).
@@ -74,7 +76,56 @@ Pressing any key during the boot intro skips straight to the XMB.
 
 If a controller is connected it is polled automatically: D-pad / left stick for
 navigation, the bottom face button for **X (enter)** and the right face button
-for **O (back)** — matching the PS3's button layout.
+for **O (back)**, matching the PS3's button layout.
+
+---
+
+## Apps and features
+
+Beyond the bare XMB shell, two of the PS3's built-in apps are reproduced end to
+end, matched against the firmware and against RPCS3 capture for layout, icons,
+spacing and animation.
+
+### Music
+
+- A content browser (the **Music** category) listing albums and their tracks,
+  with the firmware's group icons and the triangle options / square group
+  menus.
+- A now-playing screen with the PS3 control panel (play / pause, scan, repeat,
+  shuffle and the rest), reproducing the real panel's open / close slide, the
+  breathing focus glow, the focus grow tween and the button-press flash.
+- Three visualizers reachable with the square button: the **XMB Waves** (the
+  gradient-flip wave plus particles), the **Canyon** fly-through, and the
+  cinematic 3D **Globe** (a textured earth with atmosphere, stars and per-scene
+  lighting).
+
+### Photo
+
+- A photo browser (the **Photo** category, "Photo Gallery") with date-grouped
+  albums drawn as the firmware's stacked-thumbnail folder cards, and a thumbnail
+  grid inside each album that uses the same focus glow, drop shadow, focus scale
+  and filename animations as the rest of the XMB.
+- The full options set from the real plugin: **View**, **Slideshow** (with the
+  effect and speed choosers), **Sort By**, **Copy**, **Add to Playlist**,
+  **Print**, **Delete** (including multi-select Delete / Copy), **Information**
+  and **Set as Wallpaper**, with the options cursor defaulting to the primary
+  action and the submenu arrows aligned to a fixed column as on the real PS3.
+- A full-screen **Photo viewer** with zoom, rotate, the slideshow transition
+  effects (fade / slide) and an **Information** screen laid out with the EXIF
+  fields the PS3 reports.
+
+### Set as Wallpaper
+
+Choosing **Set as Wallpaper**, from the photo viewer or from
+**Settings > Theme Settings > Background**, sets the selected photo as the XMB
+background: it replaces the wave behind the menu and is remembered across
+reloads. The wave returns automatically inside the Music player.
+
+### Settings
+
+The settings columns are navigable with their firmware labels, including the
+Theme Settings choosers (theme / colour / background / font) and a full Network
+Settings internet-connection wizard.
 
 ---
 
@@ -86,33 +137,33 @@ All of these can be combined, e.g.
 | Parameter | Values | Meaning |
 |-----------|--------|---------|
 | `aspect` | `1:1`, `4:3`, `3:2`, `16:9`, `21:9` (or a number like `1.333`) | Target display aspect ratio. Default `16:9`. |
-| `orientation` / `portrait` | `portrait` / `landscape` (`?portrait` is shorthand) | Rotate the layout (e.g. `16:9` → `9:16`). |
-| `res` / `resolution` | `1280x720`, or a preset: `480p`, `576p`, `720p`, `1080p`, `1440p`, `4k`, … | Simulate a fixed screen resolution regardless of the real window. |
+| `orientation` / `portrait` | `portrait` / `landscape` (`?portrait` is shorthand) | Rotate the layout (e.g. `16:9` to `9:16`). |
+| `res` / `resolution` | `1280x720`, or a preset: `480p`, `576p`, `720p`, `1080p`, `1440p`, `4k`, ... | Simulate a fixed screen resolution regardless of the real window. |
 | `dpr` | a number | Override the device pixel ratio (super/sub-sample the backing). |
-| `scale` / `native` | `1x` / `native` (`?native` is shorthand) | Start in **true-1×** mode (see below). |
+| `scale` / `native` | `1x` / `native` (`?native` is shorthand) | Start in **true-1x** mode (see below). |
 | `noboot` | (flag) | Skip the cold-boot intro and land straight on the XMB. |
 
 Two debug hooks are also available from the JS console:
 
-- `window.PIN_TIME = new Date('2026-08-16T14:56:00').getTime()` — pin the clock
+- `window.PIN_TIME = new Date('2026-08-16T14:56:00').getTime()` pins the clock
   to a fixed instant (the clock and the day/night + per-month gradient follow it).
-- `window._monthOverride = 7` — force the gradient's month (0 = January … 11 =
+- `window._monthOverride = 7` forces the gradient's month (0 = January to 11 =
   December) independently of the date.
 
 ---
 
 ## Screen scenarios
 
-The XMB is natively a 16:9 design (an internal `1920 × 1080` virtual canvas).
+The XMB is natively a 16:9 design (an internal `1920 x 1080` virtual canvas).
 Everything else is re-laid-out responsively rather than stretched. The behaviour
 differs by scenario; here is exactly what each one does.
 
-### 1. 16:9 — native
+### 1. 16:9 (native)
 
-The reference case. The virtual `1920 × 1080` design fills the frame uniformly.
-No compression, no offsets — what the real PS3 outputs over HDMI.
+The reference case. The virtual `1920 x 1080` design fills the frame uniformly.
+No compression, no offsets, exactly what the real PS3 outputs over HDMI.
 
-### 2. Narrower than 16:9 (4:3, 3:2, 1:1) — landscape
+### 2. Narrower than 16:9 (4:3, 3:2, 1:1), landscape
 
 The PS3 does **not** squash the picture into a narrower frame; it performs a
 **native re-layout**. We reproduce this with a two-factor model:
@@ -131,7 +182,7 @@ slightly left so long item names and subtitles get more room on the right.
 
 Try: `?aspect=4:3`, `?aspect=1:1`.
 
-### 3. Wider than 16:9 (21:9) — landscape
+### 3. Wider than 16:9 (21:9), landscape
 
 The frame is wider than the design, so the layout **expands** to fill it: the
 category bar spreads out, the background/wave and any full-screen card cover the
@@ -142,14 +193,15 @@ Try: `?aspect=21:9`.
 
 ### 4. Portrait (any ratio)
 
-Press **O** or add `?portrait`. The ratio inverts (16:9 → 9:16) so the frame is
+Press **O** or add `?portrait`. The ratio inverts (16:9 to 9:16) so the frame is
 taller than wide. Here we:
 
 - **Zoom in** (the UI is larger so it reads well on a tall, narrow screen).
 - Scale to **fill the width** (uniform, never squashed); right-anchored content
   re-flows to the narrower right edge.
-- Park the focus row ~44 % down the frame and let the **item list run far down
-  it** — so portrait shows a long vertical list instead of a short centred band.
+- Park the focus row about 44% down the frame and let the **item list run far
+  down it**, so portrait shows a long vertical list instead of a short centred
+  band.
 - Fill the rest of the tall frame with the wave and gradient.
 
 Dialogs, side-panel choosers and full-screen cards are **centred in the visible
@@ -160,7 +212,7 @@ Try: `?portrait`, `?aspect=4:3&portrait`.
 
 ### 5. Low-resolution / small frames
 
-On small frames (e.g. `640×480`, `480×800`, `720×720`) the whole UI is **zoomed
+On small frames (e.g. `640x480`, `480x800`, `720x720`) the whole UI is **zoomed
 in for legibility**, vertically centred, and the **item subtitle font is
 enlarged** so secondary text stays readable. The subtitle also wraps to the full
 available width instead of scrunching into a narrow column.
@@ -171,9 +223,9 @@ Try: `?res=640x480&aspect=4:3`, `?res=720x720&aspect=1:1`.
 
 `?res=WxH` (or a preset) renders the app as if the screen were exactly that
 size, **independent of your actual window**. For display it is scaled by the
-**largest whole-number factor** that fits the window (1×, 2×, 3× …), centred,
-with **pillar/letterboxing** around it, using nearest-neighbour filtering — so
-each rendered pixel becomes a clean N×N block instead of the browser's blurry
+**largest whole-number factor** that fits the window (1x, 2x, 3x ...), centred,
+with **pillar/letterboxing** around it, using nearest-neighbour filtering, so
+each rendered pixel becomes a clean NxN block instead of the browser's blurry
 fractional resample. It is recomputed on every resize, so it stays responsive.
 
 By default the backing is rendered at your **device pixel ratio**, so on a
@@ -182,17 +234,17 @@ half-resolution image). `?dpr=N` overrides this for explicit super/sub-sampling.
 
 Try: `?res=720p`, `?res=1080p`, `?res=480x800&portrait`.
 
-### 7. True-1× — the literal target screen
+### 7. True-1x: the literal target screen
 
 Press **N** (or start with `?scale=1x`). This shows a `?res` frame at its
 **exact native pixel size with no magnification at all**: each native pixel maps
 to exactly **one physical device pixel**, centred and letterboxed. It is the
-pixel-for-pixel preview of what a real `480×800` panel would output.
+pixel-for-pixel preview of what a real `480x800` panel would output.
 
-This is implemented with the canonical pixel-perfect canvas mapping — the CSS
-box is sized to `native ÷ devicePixelRatio` with a native-size backing and **no
-transform** — so even on a Windows/Chrome display-scaled (HiDPI) setup there is
-no intermediate 2× upscale or blur. Press **N** again to return to the normal
+This is implemented with the canonical pixel-perfect canvas mapping, where the
+CSS box is sized to `native / devicePixelRatio` with a native-size backing and
+**no transform**, so even on a Windows/Chrome display-scaled (HiDPI) setup there
+is no intermediate 2x upscale or blur. Press **N** again to return to the normal
 integer-scaled, device-resolution rendering.
 
 Try: `?res=480x800&portrait&scale=1x`.
@@ -210,15 +262,17 @@ Each frame composites **three stacked canvases** inside a centred `#scr` box:
 | 2 | `#xmb` | Canvas 2D | Category bar, item lists, clock, dialogs, side panels, landing cards |
 
 A fourth offscreen `bootCanvas` (z-index 3) draws the cold-boot logo, footer and
-the epilepsy-warning text on top during the intro.
+the epilepsy-warning text on top during the intro. When a photo wallpaper is
+active in the menu it is shown as a background image behind these layers in place
+of the wave.
 
 The main loop is `frame()` near the bottom of `index.html`:
 
-1. `drawBootIntro()` runs the firmware-derived cold-boot sequence (black hold →
-   logo bloom → epilepsy warning → wave swell → hand-off) and gates the XMB UI
+1. `drawBootIntro()` runs the firmware-derived cold-boot sequence (black hold to
+   logo bloom to epilepsy warning to wave swell to hand-off) and gates the XMB UI
    in/out. After boot it does nothing.
 2. `drawBG()` renders the gradient and the wave through the WebGL pipeline
-   (scene FBO → HDR glare/bloom → tonemap), driven by the time of day, the
+   (scene FBO to HDR glare/bloom to tonemap), driven by the time of day, the
    calendar month, and a spring-physics impulse system that reacts to navigation.
 3. `drawXMB()` paints the 2D UI: the category bar, the active item list (with the
    submenu breadcrumb collapse, descriptions and values), the clock, and any open
@@ -239,9 +293,9 @@ globals, so individual draw calls never worry about the device:
 
 | Global | Meaning |
 |--------|---------|
-| `scale` | virtual → CSS pixel scale (uniform; never anamorphic) |
+| `scale` | virtual to CSS pixel scale (uniform; never anamorphic) |
 | `dpr` | canvas backing multiplier (device pixel ratio, or the `?dpr` override) |
-| `LAYOUT_FIT` | frame width ÷ `V.W` — where the right edge sits. `XCF(x)` maps right-anchored / centred / frame-spanning x by it |
+| `LAYOUT_FIT` | frame width / `V.W`, i.e. where the right edge sits. `XCF(x)` maps right-anchored / centred / frame-spanning x by it |
 | `LAYOUT_XC` | horizontal **position** compression for left-anchored content. `XCP(x)` / `XCL(centre,halfW)` apply it (sizes are never compressed) |
 | `LAYOUT_XSHIFT` | extra left shift on frames narrower than 4:3 (folded into `XCP`/`XCL`) |
 | `LAYOUT_VFIT` / `LAYOUT_VOFF` | vertical analogues for the portrait branch; `frameTopV()` / `frameHV()` give the full visible frame bounds |
@@ -253,7 +307,7 @@ offsets `0`), so the model is a no-op and the reference layout is exact. Each
 scenario above is just a different set of these values computed in `resize()`.
 
 The display scaling for `?res` (integer factor, letterboxing, pixelated vs
-smooth, true-1× CSS sizing) is also all in `resize()`, which is the single source
+smooth, true-1x CSS sizing) is also all in `resize()`, which is the single source
 of truth and is re-run on every `window.resize`.
 
 ---
@@ -267,18 +321,22 @@ index.html            The entire application (markup, CSS, JS, shaders).
 assets/               Environment / ambient-occlusion maps for icon lighting.
 normalmaps/           PS3 XMB icon normal-map textures (re-lit at runtime).
 icons/                Flat icon/thumbnail PNGs used directly by the UI.
+images/               Music and Photo app icons (firmware-extracted glyphs).
 backgrounds/          PSN / Store / content-info card backgrounds.
 boot/                 Cold-boot logo, footer and bloom plates (HD + SD, v2).
 dialogs/              Dialog illustration assets.
+photos/               Sample photo library for the Photo app:
+                        full-res images, plus disp/ (display), thumb/
+                        (thumbnails) and folder/ (stacked album cards).
 month_bg_00..23.png   Per-month "Original" gradient source textures.
 ps3-rodin-*.ttf       The PS3 UI font (Rodin) in light / regular / bold.
 wave_geo.bin          Captured clip-space cloth geometry for the wave.
 wave_seq*.bin/.json   Captured wave keyframe sequences (idle + boot).
-texture_*.png, noise.png, starfield.png, …  Wave / particle textures.
+texture_*.png, noise.png, starfield.png, ...  Wave / particle textures.
 snd_*.mp3             Navigation sounds (disabled by default).
 ```
 
-Inside `index.html` the code is organised into clearly headered sections — search
+Inside `index.html` the code is organised into clearly headered sections; search
 for the `====` banners: layout constants, theme/gradient system, menu data,
 state, icon cache, the WebGL wave + shaders, the icon-glass context, XMB
 rendering, dialogs / side panels / landing, navigation, input handling, and the
@@ -286,27 +344,27 @@ boot intro.
 
 ---
 
-## Provenance & accuracy
+## Provenance and accuracy
 
 - **Firmware is the source of truth.** Geometry, shaders, gradients, timings and
   layout constants are extracted from decrypted PS3 firmware (`vsh`,
   `explore_plugin.prx`, `xmb_plugin.prx`, `lines.qrc`) or measured from an
   instrumented RPCS3 build that logs RSX draw-call state. Videos are used only to
   validate, never as an implementation source.
-- Comments cite their origin: a firmware virtual address (`vaddr 0x…`) for ported
-  constants, or the specific RPCS3 capture for measured values.
+- Comments cite their origin: a firmware virtual address (`vaddr 0x...`) for
+  ported constants, or the specific RPCS3 capture for measured values.
 
 This makes the reproduction faithful at the level of the actual shader math and
 UI metrics rather than an eyeballed lookalike.
 
 ---
 
-## License & disclaimer
+## License and disclaimer
 
 This is an independent, non-commercial recreation for preservation and
 educational purposes. "PlayStation", "PS3" and "XMB" are trademarks of Sony
 Interactive Entertainment; this project is **not affiliated with or endorsed by
-Sony**. No firmware, BIOS or copyrighted system code is redistributed here — only
+Sony**. No firmware, BIOS or copyrighted system code is redistributed here, only
 an original reimplementation. The bundled Rodin font and any extracted assets
 remain the property of their respective owners and are included for authenticity;
 remove them if you fork this for any purpose where that is not appropriate.
