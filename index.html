@@ -1379,8 +1379,8 @@ const DATA = [
     content:'photo',
     groupModes:['By Month','By Year','By Album','All'],
     items:[
-      {n:'Search for Media Servers',i:'xmb_icon_035',d:'Scans the network and connects to a media server. To use this function, a media server must be set up to allow connections from the PS3\u2122 system.'},
-      {n:'Photo Gallery',i:'asset:icons/hakoniwa.png',d:'Create a space to enjoy and enhance your photos.\nTurn the photos on your PS3\u2122 system into great albums in minutes.\nYou can sort your photos by themes, add music to enhance a slideshow or add custom frames to your photos. The more photos you add, the more fun you can have - the possibilities are endless!'},
+      {n:'Search for Media Servers',i:'xmb_icon_035'},
+      {n:'Photo Gallery',i:'asset:icons/hakoniwa.png'},
       {n:'Playlists',i:'xmb_icon_037'},
       {n:'Photos',mtype:'album',d:'10 Images',album:'Photos',i:'asset:photos/thumb/358972.jpg',ch:[
         {n:'358972',mtype:'photo',date:'2014-07-03 15:09',w:1920,h:1200,sz:1712234,i:'asset:photos/thumb/358972.jpg',disp:'photos/disp/358972.jpg',full:'photos/358972.jpg'},
@@ -11298,43 +11298,52 @@ function drawPhotoMulti(ctx2) {
   const CW = xmbCanvas.width, CH = xmbCanvas.height;
   ctx2.save(); ctx2.setTransform(1, 0, 0, 1, 0, 0); ctx2.globalAlpha = 1;
   ctx2.fillStyle = '#000'; ctx2.fillRect(0, 0, CW, CH);
-  const rowH = CH * 0.105, listX = CW * 0.14, thX = CW * 0.175, nameX = CW * 0.275;
-  const cy0 = CH * 0.34;                       // focused row sits ~0.34; others above/below
-  const fs = Math.round(CH * 0.030);
+  // Geometry REMEASURED 1:1 from live2/multiselect_delete.png (ruler + per-row fit):
+  // checkbox centre 0.206W, thumbnail left 0.274W (w 0.080W, centred col 0.314W), filename
+  // FIXED column 0.444W. Rows are VARIABLE height: focused anchor cy0=0.467H, non-focused
+  // pitch 0.074H, the focused row sits 0.159H from its neighbours (room for its enlarged
+  // thumb). Side buttons centred 0.736W, first centre 0.667H pitch 0.0556H. Footer 0.843H.
+  // (The old 0.14/0.175/0.275 + uniform 0.105 rowH layout was compressed left + too wide.)
+  const cbCx = CW * 0.206, thX = CW * 0.274, twNF = CW * 0.080, thCx = thX + twNF / 2, nameX = CW * 0.444;
+  const cy0 = CH * 0.467, pitch = CH * 0.074, focusGap = CH * 0.159;
+  const cbS = CH * 0.030, fs = Math.round(CH * 0.026);
   ctx2.textBaseline = 'middle';
+  const rowY = (i) => { const rel = i - pm.sel; if (rel === 0) return cy0; const s = rel > 0 ? 1 : -1; return cy0 + s * (focusGap + pitch * (Math.abs(rel) - 1)); };
   for (let i = 0; i < pm.items.length; i++) {
-    const rel = i - pm.sel; const y = cy0 + rel * rowH;
-    if (y < CH * 0.12 || y > CH * 0.95) continue;
+    const y = rowY(i);
+    if (y < CH * 0.10 || y > CH * 0.91) continue;
     const it = pm.items[i], focus = (i === pm.sel && pm.btn < 0);
-    // checkbox
-    const cbS = CH * 0.026, cbx = listX, cby = y - cbS / 2;
+    // checkbox (centred on cbCx)
+    const cbx = cbCx - cbS / 2, cby = y - cbS / 2;
     ctx2.strokeStyle = 'rgba(235,235,235,0.85)'; ctx2.lineWidth = 2;
     roundRect(ctx2, cbx, cby, cbS, cbS, 3); ctx2.stroke();
     if (pm.checked[i]) { ctx2.fillStyle = 'rgba(40,120,230,0.95)'; roundRect(ctx2, cbx + 2, cby + 2, cbS - 4, cbS - 4, 2); ctx2.fill();
       ctx2.strokeStyle = '#fff'; ctx2.lineWidth = 2.4; ctx2.beginPath(); ctx2.moveTo(cbx + cbS * 0.24, cby + cbS * 0.52); ctx2.lineTo(cbx + cbS * 0.43, cby + cbS * 0.72); ctx2.lineTo(cbx + cbS * 0.78, cby + cbS * 0.28); ctx2.stroke(); }
-    // thumbnail
-    const tw = focus ? CW * 0.12 : CW * 0.058, th = tw * 9 / 16;
+    // thumbnail. Non-focused: left-anchored at thX, centred col thCx. Focused: REMEASURED
+    // 1:1 from the focused-row white border (multiselect_delete.png) = w 0.1007W centred at
+    // 0.2816W (it grows LEFT toward the checkbox, NOT centred on the non-focused column).
+    const tw = focus ? CW * 0.1007 : twNF, th = tw * 9 / 16;
+    const tcx = focus ? CW * 0.2816 : thCx, tx = tcx - tw / 2;
     const ic = getIcon(it.i);
-    if (ic && ic.loaded && ic.img) { ctx2.save(); ctx2.beginPath(); ctx2.rect(thX, y - th / 2, tw, th); ctx2.clip(); pgCover(ctx2, ic.img, thX, y - th / 2, tw, th); ctx2.restore();
-      if (focus) { ctx2.strokeStyle = 'rgba(255,255,255,0.95)'; ctx2.lineWidth = 2; ctx2.strokeRect(thX, y - th / 2, tw, th); } }
-    // name + date
-    const nx = thX + tw + CW * 0.012;
+    if (ic && ic.loaded && ic.img) { ctx2.save(); ctx2.beginPath(); ctx2.rect(tx, y - th / 2, tw, th); ctx2.clip(); pgCover(ctx2, ic.img, tx, y - th / 2, tw, th); ctx2.restore();
+      if (focus) { ctx2.strokeStyle = 'rgba(255,255,255,0.95)'; ctx2.lineWidth = 2; ctx2.strokeRect(tx, y - th / 2, tw, th); } }
+    // name + date at the FIXED filename column (the focused thumb grows left, not into the name)
     ctx2.textAlign = 'left'; ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 3;
-    ctx2.font = (focus ? '' : '300 ') + (focus ? Math.round(CH * 0.034) : fs) + 'px PS3';
+    ctx2.font = (focus ? '' : '300 ') + (focus ? Math.round(CH * 0.032) : fs) + 'px PS3';
     ctx2.fillStyle = focus ? 'rgb(255,255,255)' : 'rgba(220,220,222,0.85)';
-    ctx2.fillText(it.n, nx, y - (focus ? CH * 0.012 : CH * 0.009));
-    ctx2.font = '300 ' + Math.round(CH * 0.020) + 'px PS3'; ctx2.fillStyle = 'rgba(200,200,205,0.8)';
-    ctx2.fillText(fmtPhotoDate(it.date), nx, y + (focus ? CH * 0.020 : CH * 0.016));
+    ctx2.fillText(it.n, nameX, y - (focus ? CH * 0.013 : CH * 0.010));
+    ctx2.font = '300 ' + Math.round(CH * 0.019) + 'px PS3'; ctx2.fillStyle = 'rgba(200,200,205,0.8)';
+    ctx2.fillText(fmtPhotoDate(it.date), nameX, y + (focus ? CH * 0.019 : CH * 0.015));
     ctx2.shadowBlur = 0;
   }
-  // header next to the focused row
+  // header above the focused row
   ctx2.textAlign = 'left'; ctx2.font = Math.round(CH * 0.024) + 'px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.95)';
   ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 3;
-  ctx2.fillText(pm.mode === 'delete' ? 'Select images to delete.' : 'Select images to copy.', nameX, cy0 - rowH * 0.42);
+  ctx2.fillText(pm.mode === 'delete' ? 'Select images to delete.' : 'Select images to copy.', nameX, cy0 - focusGap * 0.5);
   ctx2.shadowBlur = 0;
-  // side buttons: Select All / Clear All / OK
+  // side buttons: Select All / Clear All / OK (centred col 0.736W, first centre 0.667H)
   const btnLabels = ['Select All', 'Clear All', 'OK'];
-  const bx = CW * 0.72, bw = CW * 0.10, bh = CH * 0.052; let by = CH * 0.58;
+  const bw = CW * 0.10, bh = CH * 0.044, bx = CW * 0.736 - bw / 2, bpitch = CH * 0.0556; let by = CH * 0.667 - bh / 2;
   for (let b = 0; b < 3; b++) {
     const sel = (pm.btn === b);
     const g = ctx2.createLinearGradient(bx, by, bx, by + bh);
@@ -11343,12 +11352,12 @@ function drawPhotoMulti(ctx2) {
     if (sel) { ctx2.strokeStyle = 'rgba(255,255,255,0.7)'; ctx2.lineWidth = 1.5; roundRect(ctx2, bx, by, bw, bh, 5); ctx2.stroke(); }
     ctx2.fillStyle = 'rgba(245,245,245,0.95)'; ctx2.font = Math.round(CH * 0.022) + 'px PS3'; ctx2.textAlign = 'center';
     ctx2.fillText(btnLabels[b], bx + bw / 2, by + bh / 2);
-    by += bh + CH * 0.012;
+    by += bpitch;
   }
   // footer hints
   ctx2.textAlign = 'left'; ctx2.font = '300 ' + Math.round(CH * 0.020) + 'px PS3'; ctx2.fillStyle = 'rgba(230,230,230,0.9)';
-  drawCrossGlyph(ctx2, CW * 0.40, CH * 0.93, CH * 0.013); ctx2.fillText('Enter', CW * 0.41, CH * 0.93);
-  drawCircleGlyph(ctx2, CW * 0.55, CH * 0.93, CH * 0.013); ctx2.fillText('Back', CW * 0.56, CH * 0.93);
+  drawCrossGlyph(ctx2, CW * 0.40, CH * 0.843, CH * 0.013); ctx2.fillText('Enter', CW * 0.41, CH * 0.843);
+  drawCircleGlyph(ctx2, CW * 0.55, CH * 0.843, CH * 0.013); ctx2.fillText('Back', CW * 0.56, CH * 0.843);
   ctx2.restore();
 }
 function pvImg(ph) { if (!ph) return null; if (!ph._img) { const im = new Image(); im.src = ph.disp || ph.full; ph._img = im; } return ph._img; }
@@ -11427,7 +11436,10 @@ const PV_SS_CP = [
 ];
 function pvCP() { const pv = photoViewer; return (pv && pv.slideshow) ? PV_SS_CP : PV_CP; }
 function pvPanelOpen() { const pv = photoViewer; if (!pv) return; pv.panel = true; const cp = pvCP();
-  pv.cpSel = cp.findIndex(b => b.act === (pv.slideshow ? 'pause' : 'play')); if (pv.cpSel < 0) pv.cpSel = 0;
+  // Default focus: the real static panel opens on col0 "Display Mode" (control_panel_clean.png
+  // label reads "Display Mode" right after Triangle) - NOT "Slideshow" (that was a music==photo
+  // assumption). The running-slideshow panel opens on Pause (verified live).
+  pv.cpSel = pv.slideshow ? cp.findIndex(b => b.act === 'pause') : 0; if (pv.cpSel < 0) pv.cpSel = 0;
   // Transition/animation state, mirroring the music player control panel (openMpOpt):
   // slide+fade-in (panelAnim), focus grow-tween (cpFocusStart/cpSelPrev), invoke pop (cpPress).
   pv.panelAnim = {start: performance.now(), dur: 200}; pv.panelClosing = null;
@@ -11580,8 +11592,14 @@ function drawPvPanel(ctx2, tOverride) {
   // control panel (drawMpOpt): t 0->1 on open, 1->0 on close (tOverride from the closer).
   const t = (tOverride != null) ? tOverride
             : (pv.panelAnim ? Math.min(1, (performance.now() - pv.panelAnim.start) / pv.panelAnim.dur) : 1);
-  // upper-left toolbar geometry (fractions measured from the real capture: start x~0.062, col~0.049W, row~0.075H)
-  const x0 = CW * 0.062 - (1 - t) * CW * 0.012, y0 = CH * 0.40, colW = CW * 0.049, rowH = CH * 0.075, sz = CH * 0.040;
+  // upper-left toolbar geometry, REMEASURED 1:1 from the real RPCS3 capture
+  // (xmb-ref/photo/control_panel_clean.png + control_panel.png, identical):
+  // col0 centre x=305.1, col7 x=778.8 => pitch 67.7px (0.03526*W), start 0.1589*W;
+  // row1 y=447.9, row2 y=513.8, row3 y=579.3 => row pitch 65.9px (0.061*H), y0=0.4148*H;
+  // real icon glyph ~57-63px (nearly fills the cell) => sz 0.060*H. The earlier
+  // 0.062/0.049/0.075/0.040 set placed the toolbar ~186px too far left, spaced ~40%
+  // too wide, and the icons ~35% too small. (drawPvPanel is photo-only; music = drawMpOpt.)
+  const x0 = CW * 0.1589 - (1 - t) * CW * 0.012, y0 = CH * 0.4148, colW = CW * 0.03526, rowH = CH * 0.061, sz = CH * 0.060;
   const cp = pvCP();
   const pr = pv.cpPress;   // invoke pop+flash on the activated control
   const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.0042);   // ~1.5s breathe (shared with music)
@@ -11628,7 +11646,7 @@ function drawPvPanel(ctx2, tOverride) {
     ctx2.globalAlpha = t; ctx2.textAlign = 'left'; ctx2.textBaseline = 'alphabetic';
     ctx2.font = Math.round(CH * 0.024) + 'px PS3'; ctx2.fillStyle = 'rgb(245,245,245)';
     ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 4;
-    const lx = x0 - colW * 0.4, ly = y0 + 2.9 * rowH;
+    const lx = x0 + colW * 0.1, ly = y0 + 2.9 * rowH;   // label left-aligns under col0 (real "Display Mode" left x=312 ~= x0)
     ctx2.fillText(lbl, lx, ly);
     ctx2.shadowColor = 'rgba(0,0,0,0)'; ctx2.shadowBlur = 0;
     const lw = ctx2.measureText(lbl).width, pillH = CH * 0.030, gap = CW * 0.006;
@@ -11637,7 +11655,7 @@ function drawPvPanel(ctx2, tOverride) {
   // Control submenu (Change Effect: Normal / Slide / Fade) -- a small list under the label.
   if (pv.cpSub) {
     ctx2.globalAlpha = t;
-    const sx = x0 - colW * 0.4, sy = y0 + 3.5 * rowH, lh = CH * 0.045, fs = Math.round(CH * 0.026);
+    const sx = x0 + colW * 0.1, sy = y0 + 3.5 * rowH, lh = CH * 0.045, fs = Math.round(CH * 0.026);   // submenu aligns under the label
     const opts = pv.cpSub.opts;
     let mw = 0; ctx2.font = fs + 'px PS3';
     for (const o of opts) mw = Math.max(mw, ctx2.measureText(o).width);
@@ -11703,18 +11721,20 @@ function drawPhotoViewer(ctx2) {
   if (hintA > 0.01) {
     ctx2.save();
     ctx2.globalAlpha = hintA;
-    // Font sized to the real viewer.png pill: text line pitch ~34px @1080 (was 0.026
-    // = too large by ~30%). 0.021*CH gives lh ~34px, matching the real two-row pill.
-    const fs = Math.round(CH * 0.021);
+    // Font + position REMEASURED 1:1 from viewer.png: real text cap height ~14.5px
+    // (the prior 0.021 rendered ~17px, ~15% too large), real row pitch ~35px, real
+    // two-row block at y~940/975 (pill bottom ~1000). So fs=0.018*CH (cap ~14.5),
+    // lh=fs*1.8 to keep the 35px pitch with the smaller font, bottom margin 0.074*CH.
+    const fs = Math.round(CH * 0.018);
     ctx2.font = '300 ' + fs + 'px PS3';
     ctx2.textAlign = 'left'; ctx2.textBaseline = 'middle';
     const t1 = ' :  Control Panel', t2 = ' :  Home Menu';
     const gr = fs * 0.52;                       // glyph radius
-    const padX = fs * 0.9, padY = fs * 0.75, lh = fs * 1.5, gap = fs * 0.5;
+    const padX = fs * 0.9, padY = fs * 0.75, lh = fs * 1.8, gap = fs * 0.5;
     const tw = Math.max(ctx2.measureText(t1).width, ctx2.measureText(t2).width);
     const contentW = gr * 2 + gap + tw;
     const pillW = contentW + padX * 2, pillH = lh * 2 + padY * 2 - (lh - fs);
-    const px = CW - CW * 0.028 - pillW, py = CH - CH * 0.035 - pillH;
+    const px = CW - CW * 0.028 - pillW, py = CH - CH * 0.074 - pillH;
     // pill
     ctx2.fillStyle = 'rgba(64,64,68,0.82)';
     roundRect(ctx2, px, py, pillW, pillH, fs * 0.55); ctx2.fill();
@@ -11756,9 +11776,13 @@ function drawPvInfo(ctx2) {
   const ph = pv.photos[pv.idx];
   const CW = xmbCanvas.width, CH = xmbCanvas.height;
   ctx2.save(); ctx2.setTransform(1, 0, 0, 1, 0, 0); ctx2.globalAlpha = pvEnterT;
-  // panel geometry (fractions measured from the RPCS3 band: bg x~0.58-1.0, rows y~0.17-0.74)
-  const labelX = CW * 0.74;          // right edge of right-aligned labels
-  const valueX = CW * 0.755;         // left edge of values
+  // panel geometry, REMEASURED 1:1 from the RPCS3 EXIF band (live2/exif_panel.png,
+  // scaled to 1920): value column left edge x=1375 (rock-solid 1374-1376 across all
+  // rows) => 0.7161*W; label/value gap ~24px => label right edge x=1351 => 0.7037*W;
+  // panel scrim left edge x~1088 => 0.567*W. The earlier 0.74/0.755 placed the text
+  // columns ~75px too far right within the panel.
+  const labelX = CW * 0.7037;        // right edge of right-aligned labels
+  const valueX = CW * 0.7161;        // left edge of values
   const top = CH * 0.165, rowH = CH * 0.0365;
   const fs = Math.round(CH * 0.0225);
   // dark translucent backing. Strength measured 1:1 from the RPCS3 EXIF capture
@@ -11766,7 +11790,7 @@ function drawPvInfo(ctx2) {
   // its un-scrimmed brightness => alpha ~0.78. (User 2026-06-14: RPCS3 IS the real
   // PS3, so its measured panel darkness is the ground truth here.)
   ctx2.fillStyle = 'rgba(0,0,0,0.78)';
-  ctx2.fillRect(CW * 0.575, top - rowH * 0.7, CW * 0.425, rowH * PV_EXIF_FIELDS.length + rowH * 0.5);
+  ctx2.fillRect(CW * 0.567, top - rowH * 0.7, CW * 0.433, rowH * PV_EXIF_FIELDS.length + rowH * 0.5);
   ctx2.font = '300 ' + fs + 'px PS3';
   ctx2.textBaseline = 'middle';
   ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 3;
