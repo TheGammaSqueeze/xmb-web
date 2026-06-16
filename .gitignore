@@ -15,3 +15,5 @@ wave_bg_raw*
 xmb_bg*
 _*.txt
 _uvtest_*.html
+video/test/
+server_range.py

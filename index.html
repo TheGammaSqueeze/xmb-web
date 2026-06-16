@@ -11395,6 +11395,8 @@ let pvEnterT = 0, pvEnterRaw = 0;     // enter/exit fade-in from black (~0.4s, e
 let videoPlayer = null;               // {videos, idx, playing, rate, screenMode, ...} null when closed
 let vidEnterT = 0, vidEnterRaw = 0;   // enter/exit fade-in from black (~0.4s, eased in drawBG), mirrors pvEnterT
 let vidEl = null;                     // the single HTMLVideoElement, created lazily + reused
+let vidAux = null;                    // single reused <audio> for the SECONDARY audio track (synced to vidEl); track 0 = the video's own audio
+let vidSubCache = {};                 // file path -> parsed cues [{t,d,text}] | 'loading' | 'error' (embedded-extracted + external .vtt/.srt)
 // Photo multi-select (Delete Multiple / Copy Multiple) - a checkbox LIST screen,
 // captured 1:1 from RPCS3 (xmb-ref/photo/live2/multiselect_*.png): checkbox+thumb+
 // name+date rows, "Select images to delete/copy." header, Select All / Clear All /
@@ -12196,6 +12198,15 @@ const VIDEO_CP_DEF = Math.max(0, VIDEO_CP.findIndex(b => b.act === 'play'));   /
 const VID_SCREEN_MODES = ['Normal', 'Full Screen', 'Original', 'Zoom', 'Double Scale'];   // msg_normal/full_screen/original/zoom/double
 const VID_REPEAT_MODES = ['Repeat Off', 'Repeat On', 'Title Repeat', 'A-B Repeat', 'Folder Repeat'];   // msg_repeat_off/on/title/ab + msg_folder_repeat
 const VID_AVSET = ['Block Noise Reduction', 'Frame Noise Reduction', 'Mosquito Noise Reduction', 'Upscale'];   // msg_bnoise/fnoise/mosquito_noise_reduction + msg_upconvert
+const VID_AVSET_KEYS = ['bnr', 'fnr', 'mnr', 'upscale'];   // independent On/Off toggles, aligned with VID_AVSET
+// One-time inject an SVG sharpen filter used by the Upscale AV setting (Canvas2D ctx.filter supports url(#id)).
+function vidEnsureFilters() {
+  if (document.getElementById('vidSharpen')) return;
+  const d = document.createElement('div');
+  d.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden';
+  d.innerHTML = '<svg><filter id="vidSharpen"><feConvolveMatrix order="3" preserveAlpha="true" kernelMatrix="0 -0.4 0  -0.4 2.6 -0.4  0 -0.4 0"/></filter></svg>';
+  document.body.appendChild(d);
+}
 function vidCP() { return VIDEO_CP; }
 function vidIcon(n) { return getIcon('asset:images/videoplayer/icon_' + String(n).padStart(3, '0') + '.png'); }
 
@@ -12207,10 +12218,108 @@ function vidEnsureEl() {
   document.body.appendChild(vidEl);
   return vidEl;
 }
+function vidAuxEl() {   // secondary-audio-track element (synced to vidEl); created lazily + reused
+  if (vidAux) return vidAux;
+  vidAux = document.createElement('audio');
+  vidAux.crossOrigin = 'anonymous'; vidAux.preload = 'auto';
+  vidAux.style.cssText = 'position:absolute;left:-99999px;top:-99999px;';
+  document.body.appendChild(vidAux);
+  return vidAux;
+}
+// --- subtitle parsing (WebVTT + SubRip), unified for embedded-extracted AND external sidecars ---
+function vidParseTime(s) {
+  s = String(s).trim().replace(',', '.'); const p = s.split(':'); let h = 0, m = 0, sec = 0;
+  if (p.length === 3) { h = +p[0]; m = +p[1]; sec = parseFloat(p[2]); }
+  else if (p.length === 2) { m = +p[0]; sec = parseFloat(p[1]); }
+  else { sec = parseFloat(p[0]); }
+  return h * 3600 + m * 60 + (isFinite(sec) ? sec : 0);
+}
+function vidParseCues(text) {   // handles both .vtt and .srt (scans each block for the "-->" line)
+  const cues = []; text = String(text || '').replace(/\r/g, '');
+  for (const blk of text.split(/\n\n+/)) {
+    const lines = blk.split('\n'); let ai = -1;
+    for (let j = 0; j < lines.length; j++) { if (lines[j].indexOf('-->') >= 0) { ai = j; break; } }
+    if (ai < 0) continue;
+    const arrow = lines[ai].split('-->'); if (arrow.length < 2) continue;
+    const start = vidParseTime(arrow[0]), end = vidParseTime(arrow[1].trim().split(/\s+/)[0]);
+    const txt = lines.slice(ai + 1).join('\n').replace(/<[^>]+>/g, '').replace(/\|/g, '\n').trim();
+    if (txt && isFinite(start) && isFinite(end) && end > start) cues.push({ t: start, d: end - start, text: txt });
+  }
+  return cues;
+}
+function vidLoadCues(file) {   // lazily fetch + parse a subtitle file into vidSubCache (async; renderer reads the cache next frame)
+  if (!file || vidSubCache[file]) return;
+  vidSubCache[file] = 'loading';
+  fetch(file).then(r => r.ok ? r.text() : Promise.reject(r.status))
+    .then(t => { vidSubCache[file] = vidParseCues(t); })
+    .catch(() => { vidSubCache[file] = 'error'; });
+}
+function vidBuildSubList(item) {   // unified track list: inline-cue (legacy clip1/clip2) + embedded (extracted) + external sidecars
+  const list = [];
+  // legacy inline model: subTracks = string[] of names, subCues = {name: [{t,d,text}]}
+  if (item.subTracks && item.subTracks.length && item.subCues) {
+    item.subTracks.forEach(nm => { if (typeof nm === 'string') list.push({ name: nm, cues: item.subCues[nm] || [], ext: false }); });
+  }
+  (item.subEmbedded || []).forEach(s => list.push({ name: s.name, file: s.file, ext: false }));   // extracted-from-container .vtt/.srt
+  (item.subExternal || []).forEach(s => list.push({ name: s.name, file: s.file, ext: true }));     // declared external sidecars
+  return list;
+}
+function vidProbeExtSubs(item) {   // drop-in support: probe same-name .srt/.vtt sidecars and append any that exist
+  const v = videoPlayer; if (!v || !item || !item.file) return;
+  const base = item.file.replace(/\.[^.\/]+$/, '');
+  ['.vtt', '.srt', '.en.vtt', '.en.srt'].forEach(ext => {
+    const f = base + ext;
+    if ((v.subList || []).some(s => s.file === f)) return;   // already declared
+    fetch(f, { method: 'GET' }).then(r => {
+      if (!r.ok) return; if (vidCur() !== item || !videoPlayer) return;
+      if ((v.subList || []).some(s => s.file === f)) return;
+      v.subList.push({ name: 'Sidecar (' + ext.replace(/^\./, '') + ')', file: f, ext: true, probed: true });
+    }).catch(() => {});
+  });
+}
+function vidSetAudioTrack(idx) {   // track 0 = the video's OWN audio; tracks 1+ = a synced <audio> file (mute the video)
+  const v = videoPlayer, it = vidCur(); if (!v || !it) return;
+  v.audioTrack = idx; const el = vidEnsureEl();
+  const files = it.audioFiles || [];
+  if (idx > 0 && files[idx]) {
+    const aux = vidAuxEl(); el.muted = true;
+    if (aux.src.indexOf(files[idx]) < 0) aux.src = files[idx];
+    try { aux.currentTime = el.currentTime || 0; } catch (e) {}
+    aux.playbackRate = el.playbackRate || 1;
+    if (isFinite(el.volume)) aux.volume = el.volume;
+    if (v.playing && !v.stopped && !el.paused) { const p = aux.play(); if (p && p.catch) p.catch(() => {}); }
+  } else {
+    el.muted = false; if (vidAux) { try { vidAux.pause(); } catch (e) {} }
+  }
+  if (it.audioTracks && it.audioTracks[idx]) { v.dispModeName = 'Audio: ' + it.audioTracks[idx]; v.dispModeUntil = performance.now() + 1800; }
+}
+function vidSetSubTrack(idx) {   // idx into v.subList; -1 = Off. Lazily loads the selected track's cues.
+  const v = videoPlayer; if (!v) return;
+  v.subTrack = idx;
+  const t = (idx >= 0 && v.subList) ? v.subList[idx] : null;
+  if (t && t.file && !t.cues) vidLoadCues(t.file);
+  v.dispModeName = t ? ('Subtitle: ' + t.name + (t.ext ? ' (External)' : '')) : 'Subtitle: Off';
+  v.dispModeUntil = performance.now() + 1800;
+}
+function vidSyncAux() {   // keep the secondary-audio element locked to the video (called every frame from vidTick)
+  const v = videoPlayer, el = vidEl; if (!v || !el || !vidAux) return;
+  if (isFinite(el.volume) && vidAux.volume !== el.volume) vidAux.volume = el.volume;   // Volume Control applies to the active audio track
+  if (v.audioTrack > 0) {
+    if (v.playing && !v.stopped && !el.paused && (el.playbackRate === 1 || el.playbackRate === 1.5 || el.playbackRate === 0.5)) {
+      if (vidAux.playbackRate !== el.playbackRate) vidAux.playbackRate = el.playbackRate;
+      if (vidAux.paused) { const p = vidAux.play(); if (p && p.catch) p.catch(() => {}); }
+    } else if (!vidAux.paused) { try { vidAux.pause(); } catch (e) {} }
+    if (isFinite(el.currentTime) && Math.abs(vidAux.currentTime - el.currentTime) > 0.3) { try { vidAux.currentTime = el.currentTime; } catch (e) {} }
+  } else if (!vidAux.paused) { try { vidAux.pause(); } catch (e) {} }
+}
 function vidLoad(item) {
   const el = vidEnsureEl();
   el.src = item.file; try { el.currentTime = 0; } catch (e) {}
-  el.playbackRate = 1;
+  el.playbackRate = 1; el.muted = false;
+  // reset audio + subtitle state for the new title; build the unified subtitle list + probe sidecars
+  if (videoPlayer) { videoPlayer.audioTrack = 0; videoPlayer.subTrack = -1; videoPlayer.subList = vidBuildSubList(item); }
+  if (vidAux) { try { vidAux.pause(); } catch (e) {} vidAux.removeAttribute('src'); }
+  vidProbeExtSubs(item);
   el.onloadedmetadata = () => { if (videoPlayer && videoPlayer.videos[videoPlayer.idx] === item) { item.dur = el.duration; item.w = el.videoWidth; item.h = el.videoHeight; } };
   el.onwaiting = () => { if (videoPlayer) videoPlayer.buffering = true; };
   el.onplaying = () => { if (videoPlayer) videoPlayer.buffering = false; };
@@ -12229,16 +12338,18 @@ function openVideoPlayer(listItems, idx) {
   if (!vids.length) return;
   const clicked = listItems[idx]; let vi = vids.indexOf(clicked); if (vi < 0) vi = 0;
   videoPlayer = { videos: vids, idx: vi, playing: true, rate: 1, stopped: false,
-    screenMode: 0, zoom: 1, panX: 0, panY: 0, audioTrack: 0, subTrack: -1, ccOn: false, chapter: 0,
+    screenMode: 0, zoom: 1, panX: 0, panY: 0, audioTrack: 0, subTrack: -1, subList: [], ccOn: false, chapter: 0,
+    avSettings: {bnr: false, fnr: false, mnr: false, upscale: false},
     repeat: 0, abA: null, abB: null, panel: false, panelAnim: null, panelClosing: null,
     cpSel: VIDEO_CP_DEF, cpSelPrev: -1, cpFocusStart: 0, cpPress: null, cpSub: null,
     osd: false, hintUntil: performance.now() + 4000, dispModeName: '', dispModeUntil: 0,
     transient: null, buffering: false, _lastTick: 0 };
   if (vids[vi]) vids[vi].timesPlayed = (vids[vi].timesPlayed || 0) + 1;
   try { VIDEO_CP.forEach(b => vidIcon(b.ic)); vidIcon(114); } catch (e) {}   // warm the control-panel glyphs so they're decoded before Triangle opens the panel
+  vidEnsureFilters();   // inject the SVG sharpen filter used by AV Settings -> Upscale
   vidLoad(vids[vi]); playNav2();
 }
-function closeVideoPlayer() { if (vidEl) { try { vidEl.pause(); } catch (e) {} } videoPlayer = null; playNav(); }
+function closeVideoPlayer() { if (vidEl) { try { vidEl.pause(); } catch (e) {} } if (vidAux) { try { vidAux.pause(); } catch (e) {} } videoPlayer = null; playNav(); }
 function vidCur() { const v = videoPlayer; return v ? v.videos[v.idx] : null; }
 // Change Icon: capture the current scene as the content's XMB thumbnail. The real PS3 stores a
 // 15s animated clip; in the browser a single representative frame is the faithful stand-in (the
@@ -12416,6 +12527,7 @@ function vidTick() {   // per-frame: drive high-rate/reverse scan + A-B repeat (
   }
   v._lastTick = now;
   if (v.repeat === 3 && v.abA != null && v.abB != null && el.currentTime >= v.abB) { try { el.currentTime = v.abA; } catch (e) {} }   // A-B Repeat
+  vidSyncAux();   // keep the secondary audio track locked to the video
 }
 
 // --- control panel (Triangle) ---
@@ -12444,9 +12556,9 @@ function vidSubOpts(kind) {
   if (kind === 'screenmode') return VID_SCREEN_MODES.slice();
   if (kind === 'repeat') return VID_REPEAT_MODES.slice();
   if (kind === 'volume') return ['100%', '80%', '60%', '40%', '20%', '0%'];   // msg_volume_control level
-  if (kind === 'avset') return VID_AVSET.slice();
+  if (kind === 'avset') { const s = (v && v.avSettings) || {}; return VID_AVSET.map((n, i) => n + '   ' + (s[VID_AVSET_KEYS[i]] ? 'On' : 'Off')); }
   if (kind === 'audio') return (it && it.audioTracks && it.audioTracks.length) ? it.audioTracks.slice() : ['Language 1'];   // msg_lang_1
-  if (kind === 'subtitle') return ['Off'].concat((it && it.subTracks) ? it.subTracks : []);   // msg_off + sub langs
+  if (kind === 'subtitle') return ['Off'].concat((v && v.subList) ? v.subList.map(s => s.name + (s.ext ? '  (External)' : '')) : []);   // msg_off + embedded/external sub tracks
   return [];
 }
 function vidPanelActivate() {
@@ -12463,10 +12575,15 @@ function vidPanelActivate() {
       } else { v.repeat = sel; v.abA = v.abB = null; v.dispModeName = VID_REPEAT_MODES[sel]; }
       v.dispModeUntil = performance.now() + 1800;
     }
-    else if (k === 'volume') { const vol = 1 - sel * 0.2; const el = vidEnsureEl(); el.volume = Math.max(0, Math.min(1, vol)); el.muted = (vol <= 0); v.dispModeName = 'Volume ' + v.cpSub.opts[sel]; v.dispModeUntil = performance.now() + 1800; }
-    else if (k === 'audio') { v.audioTrack = sel; }
-    else if (k === 'subtitle') { v.subTrack = sel - 1; }   // 0 = Off -> -1
-    else if (k === 'avset') { v.transient = { label: VID_AVSET[sel] + ' (demo)', until: performance.now() + 1600 }; }   // FLAG: real firmware video filter / upscale has no browser equivalent
+    else if (k === 'volume') { const vol = 1 - sel * 0.2; const el = vidEnsureEl(); const _it = vidCur(); const _auxOn = (v.audioTrack > 0 && _it && _it.audioFiles && _it.audioFiles[v.audioTrack]); el.volume = Math.max(0, Math.min(1, vol)); el.muted = _auxOn ? true : (vol <= 0); if (vidAux) vidAux.volume = el.volume; v.dispModeName = 'Volume ' + v.cpSub.opts[sel]; v.dispModeUntil = performance.now() + 1800; }   // mute the video ONLY when a real aux track is playing (else volume would silence single-track clips)
+    else if (k === 'audio') { vidSetAudioTrack(sel); }   // 0 = video's own audio; 1+ = synced aux track
+    else if (k === 'subtitle') { vidSetSubTrack(sel - 1); }   // 0 = Off -> -1; else index into v.subList
+    else if (k === 'avset') {   // independent On/Off toggle; toggles the real canvas filter + KEEPS the submenu open
+      const key = VID_AVSET_KEYS[sel]; v.avSettings[key] = !v.avSettings[key];
+      v.cpSub.opts = vidSubOpts('avset');
+      v.dispModeName = VID_AVSET[sel] + ': ' + (v.avSettings[key] ? 'On' : 'Off'); v.dispModeUntil = performance.now() + 1800;
+      playNav2(); return;   // do NOT close (multi-toggle); the effect applies to the rendered video frame
+    }
     v.cpSub = null; playNav2(); return;
   }
   const cp = vidCP(); const a = cp[v.cpSel] && cp[v.cpSel].act; const el = vidEnsureEl();
@@ -12491,7 +12608,7 @@ function vidPanelActivate() {
   else if (a === 'repeat')     openSub('repeat', 'Repeat', v.repeat);
   else if (a === 'volume')     openSub('volume', 'Volume Control', Math.max(0, Math.min(5, Math.round((1 - (isFinite(el.volume) ? el.volume : 1)) / 0.2))));
   else if (a === 'audio')      { const it = vidCur(); if (!it || !it.audioTracks || !it.audioTracks.length) { v.panel = false; dialogState = {template:{type:'info', title:'', body:'There is no audio.'}, sel:0, anim:{start:performance.now(), dur:250}}; playNav2(); } else openSub('audio', 'Audio Options', v.audioTrack); }   // msg_error_no_audio
-  else if (a === 'subtitle')   { const it = vidCur(); if (!it || !it.subTracks || !it.subTracks.length) { v.panel = false; dialogState = {template:{type:'info', title:'', body:'There are no subtitle options available.'}, sel:0, anim:{start:performance.now(), dur:250}}; playNav2(); } else openSub('subtitle', 'Subtitle Options', v.subTrack + 1); }   // msg_error_no_subtitle
+  else if (a === 'subtitle')   { if (!v.subList || !v.subList.length) { v.panel = false; dialogState = {template:{type:'info', title:'', body:'There are no subtitle options available.'}, sel:0, anim:{start:performance.now(), dur:250}}; playNav2(); } else openSub('subtitle', 'Subtitle Options', v.subTrack + 1); }   // msg_error_no_subtitle
   else if (a === 'avset')      openSub('avset', 'AV Settings', 0);
   else if (a === 'goto')  vidGoToOpen();   // msg_goto: time-search (H:MM:SS entry -> seek; bounds -> msg_error_overlimit_goto)
   else if (a === 'scene') vidSceneOpen();   // Scene Search = chapter navigation (firmware); grid UI is an approximation (firmware doesn't specify grid vs list), flagged
@@ -12601,17 +12718,35 @@ function drawVideoPlayer(ctx2) {
     fit *= (v ? (v.zoom || 1) : 1);
     const dw = vw * fit, dh = vh * fit, dx = (CW - dw) / 2 + (v ? (v.panX || 0) : 0), dy = (CH - dh) / 2 + (v ? (v.panY || 0) : 0);
     ctx2.globalAlpha = vidEnterT;
+    // AV Settings: real canvas video post-processing. Noise reduction (Block/Frame/Mosquito) = cumulative
+    // edge-preserving softening; Upscale = SVG unsharp + slight contrast/saturation. (Browser approximation of
+    // the PS3 hardware filters - the EFFECT is genuine and toggleable; the exact HW algorithm cannot be ported.)
+    const av = v && v.avSettings; let _vf = '';
+    if (av) {
+      const blur = (av.bnr ? 0.45 : 0) + (av.fnr ? 0.3 : 0) + (av.mnr ? 0.3 : 0);
+      if (blur > 0) _vf += 'blur(' + blur.toFixed(2) + 'px) ';
+      if (av.upscale) _vf += 'url(#vidSharpen) contrast(1.06) saturate(1.05) ';
+    }
+    ctx2.filter = _vf || 'none';
     try { ctx2.drawImage(el, dx, dy, dw, dh); } catch (e) {}
+    ctx2.filter = 'none';
     ctx2.globalAlpha = 1;
   }
   if (!v) { ctx2.restore(); return; }   // exit fade after close: black frame only
-  // 1b. subtitle render: the active cue of the selected sub track (real caption rendering; demo cue text)
-  if (v.subTrack >= 0 && el && isFinite(el.currentTime)) {
-    const it = vidCur(), tn = it && it.subTracks && it.subTracks[v.subTrack], cues = it && it.subCues && tn && it.subCues[tn];
-    if (cues) { const tc = el.currentTime; let txt = null; for (const c of cues) if (tc >= c.t && tc < c.t + c.d) { txt = c.text; break; }
-      if (txt) { ctx2.globalAlpha = vidEnterT; ctx2.textAlign = 'center'; ctx2.textBaseline = 'alphabetic'; ctx2.font = Math.round(CH * 0.040) + 'px PS3';
+  // 1b. subtitle render: active cue of the selected track (embedded-extracted OR external sidecar, unified via vidSubCache)
+  if (v.subTrack >= 0 && v.subList && v.subList[v.subTrack] && el && isFinite(el.currentTime)) {
+    const _tr = v.subList[v.subTrack], cues = _tr.cues || vidSubCache[_tr.file];   // inline (legacy) or lazily-loaded file cues
+    if (cues && cues !== 'loading' && cues !== 'error') {
+      const tc = el.currentTime; let txt = null;
+      for (const c of cues) if (tc >= c.t && tc < c.t + c.d) { txt = c.text; break; }
+      if (txt) {
+        ctx2.globalAlpha = vidEnterT; ctx2.textAlign = 'center'; ctx2.textBaseline = 'alphabetic'; ctx2.font = Math.round(CH * 0.040) + 'px PS3';
         ctx2.lineWidth = CH * 0.006; ctx2.strokeStyle = 'rgba(0,0,0,0.9)'; ctx2.fillStyle = 'rgba(255,255,255,0.98)';
-        ctx2.strokeText(txt, CW / 2, CH * 0.855); ctx2.fillText(txt, CW / 2, CH * 0.855); ctx2.globalAlpha = 1; } }
+        const ls = txt.split('\n'), lh = CH * 0.05, y0s = CH * 0.855 - (ls.length - 1) * lh;   // multi-line cues stack upward from the baseline
+        ls.forEach((ln, li) => { const yy = y0s + li * lh; ctx2.strokeText(ln, CW / 2, yy); ctx2.fillText(ln, CW / 2, yy); });
+        ctx2.globalAlpha = 1;
+      }
+    }
   }
   // 2. buffering spinner
   if (v.buffering) { const ic = vidIcon(114); if (ic && ic.loaded && ic.img) { const s = CH * 0.06; ctx2.save(); ctx2.translate(CW / 2, CH / 2); ctx2.rotate((now / 600) % (Math.PI * 2)); ctx2.globalAlpha = vidEnterT * 0.9; ctx2.drawImage(ic.img, -s / 2, -s / 2, s, s); ctx2.restore(); }
@@ -16146,6 +16281,15 @@ resize();
 mpSyncPlaylistItem();   // make the Music column "Playlists" item a folder with the "Create New Playlist" entry
 { const _pc = DATA.find(c => c.id === 'photo'); if (_pc && _pc.content) regroupContent(_pc); }   // apply default photo grouping (By Month)
 applyWallpaper();   // restore a persisted custom wallpaper (Background == Wallpaper) on load
+// Local-only video test set: if video/test/manifest.json exists (gitignored), append its items to the
+// Video column so real multi-audio / multi-subtitle clips can be tried locally. Inert (404 -> no-op) on
+// the committed / GitHub Pages build, which ships only clip1/clip2. Touches ONLY the Video category.
+fetch('video/test/manifest.json').then(r => r.ok ? r.json() : null).then(list => {
+  if (!Array.isArray(list)) return;
+  const vc = DATA.find(c => c.id === 'video');
+  if (!vc || !Array.isArray(vc.items)) return;
+  list.forEach(it => { if (it && it.mtype === 'video') vc.items.push(it); });
+}).catch(() => {});
 
 // Wait for PS3 Rodin fonts to load before starting the render loop
 // so the first frame uses Rodin instead of the sans-serif fallback.
