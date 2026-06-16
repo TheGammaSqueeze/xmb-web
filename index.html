@@ -142,6 +142,27 @@ const V = {
   ITEM_ICON_X: 566,             // measured from RPCS3 1080p capture (not in binary)
   ITEM_ICON_SIZE: 78,           // firmware: explore vaddr 0x2715C8, 0x271D34, 0x271E24 = 78.0 (PARENT_ICON_SIZE)
   ITEM_ICON_ACTIVE: 180,        // measured from RPCS3 1080p capture (not in binary)
+  ITEM_ICON_ACTIVE_PHOTOFOLDER: 151,  // photo date/album folders enlarge LESS than music thumbs: RPCS3 grp_by_month focused "Jul 2014" folder = 151x133 (vs inactive 79x69), ~1.9x not 2.3x
+  // Individual photos in the "All" flat list (mtype photo, not photoGroup) render
+  // a LANDSCAPE thumbnail bigger than a standard list icon, measured 1:1 from
+  // grp_all.png (1920x1080): focused 258x145 (16:9), inactive 107x60; the name/date
+  // column shifts right to 720 to clear the wider thumb (standard ITEM_TEXT_X 683).
+  PHOTO_LIST_ACTIVE: 258,
+  PHOTO_LIST_INACTIVE: 107,
+  PHOTO_LIST_TEXT_X: 720,
+  // grp_all.png: the focused photo thumb+name center sits at y=504 (11px above the music/normal
+  // anchor 515; the focused name text band is y492-517 -> center 504, thumb box y425-584 -> 504),
+  // and the focused->first-inactive gap is larger (real inactives 679/759/840/919/999, pitch 80).
+  // PAD 95 + FOCUS_Y 504 reproduce all six grp_all rows to <=1px. Used for the whole photo column
+  // (flat photos AND date/album folders: grp_by_month focused folder frame-body center is also 504).
+  // Music keeps 515/87 (never has mtype 'photo'/photoGroup).
+  PHOTO_LIST_FOCUS_Y: 504,
+  PHOTO_LIST_ACTIVE_PAD: 95,
+  // Photo date/album GROUP FOLDER name/subtitle column: measured 707/710/710 across
+  // grp_by_month/year/album.png (1920x1080) = 708, vs standard ITEM_TEXT_X 683. The
+  // folders' cover-composite icon pushes their text column ~25px right. Menu items
+  // (Search/Photo Gallery) + music verified at 683, so this is photoGroup-only.
+  PHOTO_FOLDER_TEXT_X: 708,
   ITEM_TEXT_X: 683,             // measured from RPCS3 1080p capture (not in binary)
   ITEM_TEXT_SIZE: 30,           // firmware: explore vaddr 0x270898, 0x271488, 0x271398 = 30.0 (inactive font px)
   ITEM_TEXT_ACTIVE_SIZE: 34,    // firmware: explore vaddr 0x271120, 0x2713A0, 0x271AA0, 0x271BA8, 0x271BFC = 34.0 (active font px)
@@ -1177,6 +1198,13 @@ const HOVER_BG = {
   'What\'s New':                   'backgrounds/cinfo-bg-whatsnew.jpg',
   'Photo Gallery':                 'backgrounds/cinfo-bg-photogallery.jpg'
 };
+// Content-info DESCRIPTION text shown with the cinfo background when the mapped
+// item is focused (title + multi-paragraph body, drawn over the bg). Photo Gallery
+// text extracted verbatim from firmware hknw_plugin.rco (the PS3-logo glyphs decode
+// to "PS3™"). \n separates the firmware paragraphs; the last paragraph word-wraps.
+const CINFO_DESC = {
+  'Photo Gallery': 'Create a space to enjoy and enhance your photos.\nTurn the photos on your PS3™ system into great albums in minutes.\nYou can sort your photos by themes, add music to enhance a slideshow or add custom frames to your photos. The more photos you add, the more fun you can have - the possibilities are endless!'
+};
 // Dwell time before the hover bg fades in. The PS3's Info::cbActivate
 // callback fires after this focus-stable interval (see
 // /work/ps3/xmb-ref/hover_backgrounds.md "Trigger timing" section). The
@@ -1443,11 +1471,24 @@ const DATA = [
     ]
   },
   {
-    id:'video', name:'Video', icon:'xmb_icon_004', color:'#ffaa55',
+    id:'video', name:'Video', icon:'xmb_icon_004', color:'#ffaa55', content:'video',
     items:[
       {n:'BD Data Utility',i:'xmb_icon_062',d:'Delete BD data saved on the system storage.'},
       {n:'Search for Media Servers',i:'xmb_icon_035',d:'Scans the network and connects to a media server. To use this function, a media server must be set up to allow connections from the PS3\u2122 system.'},
-      {n:'Video Editor & Uploader',i:'xmb_icon_067',d:'You can edit a video that you like, upload it to a video sharing website, and then invite your friends to view the video.'}
+      {n:'Video Editor & Uploader',i:'xmb_icon_067',d:'You can edit a video that you like, upload it to a video sharing website, and then invite your friends to view the video.'},
+      // Video FILE items (mtype:'video') open the full-screen video player on Cross. Real H.264/AAC test
+      // clips (ffmpeg-generated, CC0-style) so playback is genuinely demonstrable. dur/w/h are filled from
+      // the <video> element at load; codec/tracks/chapters/date are authored demo metadata (flagged).
+      {n:'Welcome Clip',mtype:'video',file:'video/clip1.mp4',i:'asset:video/clip1.jpg',d:'AVC  640x360',
+        vcodec:'AVC',acodec:'AAC',filetype:'AVC',audioTracks:['English 2 Ch.'],subTracks:['English'],
+        chapters:[0,6,12],chapterThumbs:['asset:video/clip1_ch0.jpg','asset:video/clip1_ch6.jpg','asset:video/clip1_ch12.jpg'],
+        subCues:{English:[{t:0.5,d:3.2,text:'Welcome to the PS3 video player.'},{t:4.2,d:3.4,text:'Reverse-engineered 1:1 from the firmware.'},{t:8.5,d:3,text:'Press TRIANGLE for the control panel.'},{t:13,d:4,text:'Subtitles render from the selected track.'}]},
+        produced:'2026',timesPlayed:0,szTxt:'937 KB',dur:0,w:0,h:0},
+      {n:'Fractal Dive',mtype:'video',file:'video/clip2.mp4',i:'asset:video/clip2.jpg',d:'AVC  640x360',
+        vcodec:'AVC',acodec:'AAC',filetype:'AVC',audioTracks:['English 2 Ch.','Japanese 2 Ch.'],subTracks:['English','Japanese'],
+        chapters:[0,3,6],chapterThumbs:['asset:video/clip2_ch0.jpg','asset:video/clip2_ch3.jpg','asset:video/clip2_ch6.jpg'],
+        subCues:{English:[{t:0.5,d:2.6,text:'Fractal Dive'},{t:3.3,d:2.6,text:'Mandelbrot zoom sequence'}],Japanese:[{t:0.5,d:2.6,text:'フラクタル・ダイブ'},{t:3.3,d:2.6,text:'マンデルブロのズーム'}]},
+        produced:'2026',timesPlayed:0,szTxt:'5.9 MB',dur:0,w:0,h:0}
     ]
   },
   {
@@ -7238,6 +7279,10 @@ function drawBG(dt) {
   const _pvTarget = photoViewer ? 1 : 0, _pvSt = (dt || 16) / 400;
   if (pvEnterRaw !== _pvTarget) pvEnterRaw = (pvEnterRaw < _pvTarget) ? Math.min(_pvTarget, pvEnterRaw + _pvSt) : Math.max(_pvTarget, pvEnterRaw - _pvSt);
   pvEnterT = pvEnterRaw * pvEnterRaw * (3 - 2 * pvEnterRaw);
+  // Video player presence fade (~0.4s): the video fades in from black on open, out on close.
+  const _vidTarget = videoPlayer ? 1 : 0, _vidSt = (dt || 16) / 400;
+  if (vidEnterRaw !== _vidTarget) vidEnterRaw = (vidEnterRaw < _vidTarget) ? Math.min(_vidTarget, vidEnterRaw + _vidSt) : Math.max(_vidTarget, vidEnterRaw - _vidSt);
+  vidEnterT = vidEnterRaw * vidEnterRaw * (3 - 2 * vidEnterRaw);
   const _fiTarget = (musicPlayer && musicPlayer.fullInfo) ? 1 : 0;   // Display full-info fade (~0.5s)
   const _fiSt = (dt || 16) / 500;
   if (mpFullInfoRaw !== _fiTarget) mpFullInfoRaw = (mpFullInfoRaw < _fiTarget) ? Math.min(_fiTarget, mpFullInfoRaw + _fiSt) : Math.max(_fiTarget, mpFullInfoRaw - _fiSt);
@@ -7330,6 +7375,40 @@ function drawCinfoBg(ctx2) {
   else { sw = im.width; sh = sw / fr; sx = 0; sy = (im.height - sh) / 2; }
   ctx2.drawImage(im, sx, sy, sw, sh, 0, frameTopV(), fw, fh);
   ctx2.restore();
+
+  // Content-info TITLE + DESCRIPTION over the cinfo bg (firmware text), fading in
+  // with the bg. Geometry measured 1:1 from cap_photo_live.png (framing verified
+  // via the silver cat-bar mask: active icon at 0.2947W == ITEM_ICON_X): left x
+  // 0.3427W, title cap-mid 0.4384H (~34px), desc line1 0.490H, line pitch 0.0345H
+  // (~26px), wrap width 0.527W. Paragraph-aware (\n) word-wrap.
+  let descKey = null;
+  for (const k in HOVER_BG) { if (HOVER_BG[k] === cinfoBg.currentUrl && CINFO_DESC[k]) { descKey = k; break; } }
+  if (descKey) {
+    ctx2.save();
+    ctx2.globalAlpha = cinfoBg.alpha;
+    const lx = XCP(V.W * 0.3427);
+    ctx2.textAlign = 'left'; ctx2.textBaseline = 'middle';
+    ctx2.shadowColor = 'rgba(0,0,0,0.55)'; ctx2.shadowBlur = 4; ctx2.shadowOffsetX = 0; ctx2.shadowOffsetY = 1;
+    ctx2.fillStyle = 'rgb(255,255,255)';
+    ctx2.font = Math.round(XCF(V.H * 0.0315)) + 'px PS3';
+    ctx2.fillText(descKey, lx, V.H * 0.4384);
+    ctx2.font = '300 ' + Math.round(XCF(V.H * 0.0241)) + 'px PS3';
+    ctx2.fillStyle = 'rgb(240,240,240)';
+    const wrapW = XCF(V.W * 0.527), lineH = V.H * 0.0345;
+    let y = V.H * 0.490;
+    const paras = CINFO_DESC[descKey].split('\n');
+    for (let pi = 0; pi < paras.length; pi++) {
+      const words = paras[pi].split(' ');
+      let line = '';
+      for (let wi = 0; wi < words.length; wi++) {
+        const test = line ? line + ' ' + words[wi] : words[wi];
+        if (line && ctx2.measureText(test).width > wrapW) { ctx2.fillText(line, lx, y); y += lineH; line = words[wi]; }
+        else line = test;
+      }
+      if (line) { ctx2.fillText(line, lx, y); y += lineH; }
+    }
+    ctx2.restore();
+  }
 }
 
 // =====================================================
@@ -7520,13 +7599,18 @@ function drawXMB(now) {
   // its position in the previous-selectedIdx layout and the current layout, so
   // items above and below the cursor slide at independent (correct) rates.
   const ITEM_ABOVE_BASE_Y = 120;  // measured: item-above-1 center y in PS3 ref
-  function itemSlotY(idx, sel) {
-    if (idx === sel) return V.ITEM_FOCUS_Y;
+  function itemSlotY(idx, sel, photoList) {
+    // Flat photo lists (the "All" view + any list whose focused item is an individual photo)
+    // anchor the enlarged thumb+name 11px higher and stack the items below with a slightly
+    // larger pad, matching grp_all.png exactly. Music and photo group-folder lists keep 515/87.
+    const focusY = photoList ? V.PHOTO_LIST_FOCUS_Y : V.ITEM_FOCUS_Y;
+    const pad = photoList ? V.PHOTO_LIST_ACTIVE_PAD : V.ITEM_ACTIVE_PAD;
+    if (idx === sel) return focusY;
     if (idx < sel) {
       const k = sel - idx;  // k=1 for item-above-1, k=2 for item-above-2, etc.
       return ITEM_ABOVE_BASE_Y - (k - 1) * V.ITEM_SPACING;
     }
-    return V.ITEM_FOCUS_Y + V.ITEM_ACTIVE_PAD + (idx - sel) * V.ITEM_SPACING;
+    return focusY + pad + (idx - sel) * V.ITEM_SPACING;
   }
 
   function drawItemList(items, selectedIdx, xShift, alphaMul, yOffset, animFromIdx, animEase, descFadeProgress, descFromIdx) {
@@ -7579,6 +7663,16 @@ function drawXMB(now) {
     // contrast (the PS3 applies a soft text shadow). nightShadow ramps 0->1 with
     // the day/night blend; at day it stays 0 so the daytime look is unchanged.
     const nightShadow = (typeof currentNightDayBlend !== 'undefined') ? currentNightDayBlend : 0.0;
+    // Photo column lists (the flat "All" photo list AND the date/album group-folder lists) anchor the
+    // enlarged focused item 11px higher than music. Measured: focused photo thumb+name center y=504
+    // (grp_all.png) and focused folder white-frame body center y=504 (grp_by_month.png) -- both 504, vs
+    // the music/normal 515. Music never has mtype 'photo'/photoGroup, so it keeps 515/87 untouched.
+    // Anchor is COLUMN-WIDE, not per-focused-item: the XMB uses a consistent focus anchor within a
+    // column, so the whole photo list (incl. the Photo Gallery / Playlists / Search header items)
+    // uses 504. Gating per focused-item-type would hitch the cursor 11px when moving between the
+    // header items and the photos/folders. Identify the photo list by it containing any photo
+    // content (unique to the Photo column), so music/settings/etc. keep 515/87.
+    const photoFocusList = items.some(it => it && (it.mtype === 'photo' || it.photoGroup));
     for (let i = 0; i < items.length; i++) {
       const isActive = (i === selectedIdx);
       const isPrevActive = descFading && i === descFromIdx;
@@ -7589,11 +7683,11 @@ function drawXMB(now) {
       // slide and idle).
       let y;
       if (useAnim) {
-        const newY = itemSlotY(i, selectedIdx);
-        const oldY = itemSlotY(i, animFromIdx);
+        const newY = itemSlotY(i, selectedIdx, photoFocusList);
+        const oldY = itemSlotY(i, animFromIdx, photoFocusList);
         y = newY + (oldY - newY) * (1 - animEase);
       } else {
-        y = itemSlotY(i, selectedIdx) + yOffset;
+        y = itemSlotY(i, selectedIdx, photoFocusList) + yOffset;
       }
 
       // Cull and edge-fade against the FULL visible frame (portrait extends well
@@ -7625,10 +7719,35 @@ function drawXMB(now) {
       // EXCEPTION: content-browser media items (Music/Photo/Video albums + tracks)
       // DO enlarge the focused item to a thumbnail, like the real XMB content
       // view (measured focused track icon ~178px ~= ITEM_ICON_ACTIVE).
-      const contentMedia = DATA[ci].content && (items[i].mtype === 'track' || items[i].mtype === 'album' || items[i].mtype === 'photo');
+      const contentMedia = DATA[ci].content && (items[i].mtype === 'track' || items[i].mtype === 'album' || items[i].mtype === 'photo' || items[i].mtype === 'video');
+      // Individual photo in the "All" flat list: a landscape thumbnail, larger than
+      // a standard list icon, with the text column shifted right to clear it
+      // (grp_all.png 1:1). Date/album group folders (photoGroup) keep their own sizing.
+      const isPhotoItem = items[i].mtype === 'photo' && !items[i].photoGroup;
+      // Photo date/album group folders enlarge less than music thumbnails on focus
+      // (RPCS3 grp_by_month: focused folder 151 vs music thumb 180).
+      const activeIconSz = items[i].photoGroup ? V.ITEM_ICON_ACTIVE_PHOTOFOLDER
+                         : isPhotoItem ? V.PHOTO_LIST_ACTIVE : V.ITEM_ICON_ACTIVE;
+      const inactiveIconSz = isPhotoItem ? V.PHOTO_LIST_INACTIVE : V.ITEM_ICON_SIZE;
+      const textXv = isPhotoItem ? V.PHOTO_LIST_TEXT_X
+                   : items[i].photoGroup ? V.PHOTO_FOLDER_TEXT_X
+                   : V.ITEM_TEXT_X;
+      // When the content-info panel is fading in for this focused item (e.g. Photo
+      // Gallery), its name relocates to the cinfo title position (drawn over the bg
+      // in drawCinfoBg), so suppress the in-column name to avoid a duplicate -- the
+      // firmware shows the title once. Gated to items with a CINFO_DESC entry.
+      const cinfoTitleActive = isActive && typeof CINFO_DESC !== 'undefined' && CINFO_DESC[items[i].n] &&
+        cinfoBg.currentUrl === HOVER_BG[items[i].n] && cinfoBg.alpha > 0.4;
+      // Preload a photo album's thumbnails as soon as it is focused, so entering it
+      // lands on a fully-populated grid with no thumbnail pop-in (seamless entry,
+      // user 2026-06-15). Guarded so it runs once per album.
+      if (isActive && items[i].photoGroup && items[i].ch && !items[i]._thumbsPre) {
+        items[i]._thumbsPre = true;
+        for (let q = 0; q < items[i].ch.length; q++) getIcon(items[i].ch[q].i);
+      }
       const isz = (inSubmenu && !contentMedia)
         ? V.ITEM_ICON_SIZE
-        : (isActive ? V.ITEM_ICON_ACTIVE : V.ITEM_ICON_SIZE);
+        : (isActive ? activeIconSz : inactiveIconSz);
       ctx.globalAlpha = alpha;
       if (ic.loaded || ic.normalMapReady) {
         // Per-icon visual scale (PSN/PS Store have less transparent padding).
@@ -7657,6 +7776,7 @@ function drawXMB(now) {
         // screenshots are 3-4 px wide which matches Regular at this size
         // (Bold strokes would be 6-8 px). The visual emphasis on active
         // comes from the pure-white color (vs gray inactive) plus the halo.
+        if (!cinfoTitleActive) {
         const activeSize = V.ITEM_TEXT_ACTIVE_SIZE;
         ctx.font = activeSize + 'px PS3';
         ctx.textAlign = 'left';
@@ -7673,7 +7793,7 @@ function drawXMB(now) {
         ctx.shadowBlur = V.TEXT_GLOW_RADIUS;
         ctx.shadowOffsetX = 0;
         ctx.shadowOffsetY = 0;
-        ctx.fillText(items[i].n, XCP(V.ITEM_TEXT_X + xShift), y - 1);
+        ctx.fillText(items[i].n, XCP(textXv + xShift), y - 1);
         // Pass 2: tighter inner halo (the steep near-text falloff: 89 -> 25
         // over 5 pixels). Same fill, smaller blur radius accumulates close
         // to the strokes without widening the existing outer halo. Both
@@ -7681,7 +7801,7 @@ function drawXMB(now) {
         // computed once per drawItemList call above.
         ctx.shadowColor = glowInnerColor;
         ctx.shadowBlur = V.TEXT_GLOW_INNER_RADIUS;
-        ctx.fillText(items[i].n, XCP(V.ITEM_TEXT_X + xShift), y - 1);
+        ctx.fillText(items[i].n, XCP(textXv + xShift), y - 1);
         // Pass 3: final crisp text on top. By day there is no dark shadow (the
         // white halo provides ample contrast against the dark background and an
         // extra drop shadow would erode it). At night, the bright bloomed wave
@@ -7692,7 +7812,8 @@ function drawXMB(now) {
         ctx.shadowBlur = 4 * nightShadow;
         ctx.shadowOffsetY = nightShadow;
         ctx.fillStyle = 'rgb(255,255,255)';
-        ctx.fillText(items[i].n, XCP(V.ITEM_TEXT_X + xShift), y - 1);
+        ctx.fillText(items[i].n, XCP(textXv + xShift), y - 1);
+        }   // end !cinfoTitleActive (name suppressed while content-info title shows)
 
         // Music tracks: artist/source line ABOVE the bold title (PS3 layout).
         if (items[i].mtype === 'track' && items[i].a) {
@@ -7723,10 +7844,10 @@ function drawXMB(now) {
           // frame's right edge (minus a small margin) -- so on narrow frames it
           // makes proper use of the space instead of scrunching into a tiny
           // column. The old 0.60-of-frame cap left only ~130px at 1:1.
-          const descStartX = XCP(V.ITEM_TEXT_X + xShift);
+          const descStartX = XCP(textXv + xShift);
           const maxWidth = (LAYOUT_FIT < 0.999)
             ? Math.max(180, XCF(V.W) - descStartX - 50)
-            : (V.W - (V.ITEM_TEXT_X + xShift) - 200);
+            : (V.W - (textXv + xShift) - 200);
           drawWrappedText(ctx, _desc, descStartX,
                           y + V.ITEM_DESC_OFFSET + 4, maxWidth, descSize + 4, 3);
         }
@@ -7757,15 +7878,18 @@ function drawXMB(now) {
         ctx.font = V.ITEM_TEXT_SIZE + 'px PS3';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillText(items[i].n, XCP(V.ITEM_TEXT_X + xShift), y);
+        ctx.fillText(items[i].n, XCP(textXv + xShift), y);
         // PS3 shows short status descriptions on inactive items (e.g. "8 Images",
         // "*User"), but NOT long help text (e.g. "Adjusts settings for games.").
-        // Heuristic: only short status strings (< 20 chars).
-        if (items[i].d && items[i].d.length < 20) {
+        // Heuristic: only short status strings (< 20 chars). Individual photos show
+        // their capture DATE here (RPCS3 grp_all.png: every photo row in a list =
+        // filename + date, on inactive rows too, not just the focused one).
+        const _idesc = (items[i].mtype === 'photo') ? fmtPhotoDate(items[i].date) : items[i].d;
+        if (_idesc && _idesc.length < 20) {
           const prevAlpha = ctx.globalAlpha;
           ctx.globalAlpha = 0.6 * alpha;
           ctx.font = '300 ' + (V.ITEM_TEXT_SIZE - 8) + 'px PS3';
-          ctx.fillText(items[i].d, XCP(V.ITEM_TEXT_X + xShift), y + 22);
+          ctx.fillText(_idesc, XCP(textXv + xShift), y + 22);
           ctx.globalAlpha = prevAlpha;
         }
         // Inactive submenu items also show their value (suppressed while a
@@ -7844,7 +7968,7 @@ function drawXMB(now) {
         // Photo-folder breadcrumbs (the entered album/month/year card) stay at
         // roughly their focused-list size (~145px wide) rather than collapsing
         // to the 78px category-icon breadcrumb, matching album_grid.png.
-        const isPhotoFolder = sel && typeof pItems[i].i === 'string' && pItems[i].i.indexOf('asset:photos/folder/') === 0;
+        const isPhotoFolder = sel && typeof pItems[i].i === 'string' && pItems[i].i.indexOf('asset:photos/folder') === 0;   // matches both the cover composites (photos/folder/<n>.png) and the no-cover fallback (photos/folder_icon054.png)
         const psz = V.ITEM_ICON_SIZE * (isPhotoFolder ? 1.85 : iconScale(pItems[i].i));
         ctx.globalAlpha = a;
         drawIconAt(ctx, pic, pItems[i].i, XCL(cx, psz / 2), y - psz / 2, psz, psz);
@@ -7889,9 +8013,20 @@ function drawXMB(now) {
     // Collapse factor: 1 = fully settled in the submenu, 0 = full parent list.
     const t = (submenuAnim.dir === 1) ? p : (1 - p);
     drawParentLayer(submenuAnim.parentItems, submenuAnim.parentIdx, t);
-    // Children slide in from the right and fade in as the parent collapses.
-    const childShift = SLIDE_DIST * (1 - t);
-    drawItemList(submenuAnim.childItems, 0, childShift, t, 0);
+    // If the child level is a photo album, transition STRAIGHT into the thumbnail
+    // GRID (fading in/out with the collapse factor) instead of the text item list,
+    // so opening a photo folder lands seamlessly on thumbnails with no list flash
+    // (user 2026-06-15). Non-photo submenus keep the normal list slide-in.
+    const childIsPhotoAlbum = DATA[ci] && DATA[ci].content === 'photo'
+      && submenuAnim.childItems && submenuAnim.childItems.length
+      && submenuAnim.childItems.every(x => x && x.mtype === 'photo');
+    if (childIsPhotoAlbum) {
+      drawPhotoGrid(ctx, submenuAnim.childItems, submenuAnim.childSel || 0, t);   // enter: childSel undefined -> 0 (first photo); leave: the photo that was focused
+    } else {
+      // Children slide in from the right and fade in as the parent collapses.
+      const childShift = SLIDE_DIST * (1 - t);
+      drawItemList(submenuAnim.childItems, 0, childShift, t, 0);
+    }
     drawBackChevron(t);
   } else {
     const parentFrame = stack.length ? stack[stack.length - 1] : null;
@@ -9075,7 +9210,7 @@ function drawDialog(ctx2) {
 
   // Info dialogs have a single OK hint mapped to Circle (cancel/back), shown
   // in the right slot (matches the audio_output style).
-  if (t.type === 'info') {
+  if (t.type === 'info' && !t.busy) {   // busy/progress dialogs (e.g. "Creating icon...") show no button
     drawHint(HINT_SLOT_CANCEL_CX, 'circle', t.cancelLabel || 'OK');   // photo Information shows "Back"
   } else if (t.type === 'chooser' || t.type === 'chooser_illust') {
     // Audio Output ref shows only Cancel (a notice text occupies the space
@@ -11255,6 +11390,11 @@ function drawVisGlobe(ctx2, bands) {
 // exactly as the real viewer (auto-hide). photoViewer = {photos, idx, rot, zoom}.
 let photoViewer = null;
 let pvEnterT = 0, pvEnterRaw = 0;     // enter/exit fade-in from black (~0.4s, eased in drawBG)
+// VIDEO PLAYER (full-screen playback). State + the single reused <video> element.
+// Reverse-engineered 1:1 from firmware videoplayer_plugin.rco (the RPCS3 video player is broken).
+let videoPlayer = null;               // {videos, idx, playing, rate, screenMode, ...} null when closed
+let vidEnterT = 0, vidEnterRaw = 0;   // enter/exit fade-in from black (~0.4s, eased in drawBG), mirrors pvEnterT
+let vidEl = null;                     // the single HTMLVideoElement, created lazily + reused
 // Photo multi-select (Delete Multiple / Copy Multiple) - a checkbox LIST screen,
 // captured 1:1 from RPCS3 (xmb-ref/photo/live2/multiselect_*.png): checkbox+thumb+
 // name+date rows, "Select images to delete/copy." header, Select All / Clear All /
@@ -11298,13 +11438,13 @@ function drawPhotoMulti(ctx2) {
   const CW = xmbCanvas.width, CH = xmbCanvas.height;
   ctx2.save(); ctx2.setTransform(1, 0, 0, 1, 0, 0); ctx2.globalAlpha = 1;
   ctx2.fillStyle = '#000'; ctx2.fillRect(0, 0, CW, CH);
-  // Geometry REMEASURED 1:1 from live2/multiselect_delete.png (ruler + per-row fit):
-  // checkbox centre 0.206W, thumbnail left 0.274W (w 0.080W, centred col 0.314W), filename
-  // FIXED column 0.444W. Rows are VARIABLE height: focused anchor cy0=0.467H, non-focused
-  // pitch 0.074H, the focused row sits 0.159H from its neighbours (room for its enlarged
-  // thumb). Side buttons centred 0.736W, first centre 0.667H pitch 0.0556H. Footer 0.843H.
-  // (The old 0.14/0.175/0.275 + uniform 0.105 rowH layout was compressed left + too wide.)
-  const cbCx = CW * 0.206, thX = CW * 0.274, twNF = CW * 0.080, thCx = thX + twNF / 2, nameX = CW * 0.444;
+  // Geometry RE-MEASURED 1:1 from live2/multiselect_delete.png (1440x810) 2026-06-15 via
+  // a clean single-row 3-cluster scan: checkbox cx 0.2365W (x332-349), inactive thumb
+  // x431-503 -> centre 0.3243W (16:9, 78x44 = 0.0542W), name x585 -> 0.406W. Focused thumb
+  // 194x109 centred 0.325W (== inactive centre: enlarges in place). Rows VARIABLE height:
+  // focused anchor cy0=0.467H, non-focused pitch 0.074H, focusGap 0.159H. Side buttons
+  // centred 0.760W, first centre 0.667H pitch 0.0556H.
+  const cbCx = CW * 0.2365, thX = CW * 0.2972, twNF = CW * 0.0542, thCx = thX + twNF / 2, nameX = CW * 0.406;
   const cy0 = CH * 0.467, pitch = CH * 0.074, focusGap = CH * 0.159;
   const cbS = CH * 0.030, fs = Math.round(CH * 0.026);
   ctx2.textBaseline = 'middle';
@@ -11322,8 +11462,8 @@ function drawPhotoMulti(ctx2) {
     // thumbnail. Non-focused: left-anchored at thX, centred col thCx. Focused: REMEASURED
     // 1:1 from the focused-row white border (multiselect_delete.png) = w 0.1007W centred at
     // 0.2816W (it grows LEFT toward the checkbox, NOT centred on the non-focused column).
-    const tw = focus ? CW * 0.1007 : twNF, th = tw * 9 / 16;
-    const tcx = focus ? CW * 0.2816 : thCx, tx = tcx - tw / 2;
+    const tw = focus ? CW * 0.135 : twNF, th = tw * 9 / 16;
+    const tcx = focus ? CW * 0.325 : thCx, tx = tcx - tw / 2;
     const ic = getIcon(it.i);
     if (ic && ic.loaded && ic.img) { ctx2.save(); ctx2.beginPath(); ctx2.rect(tx, y - th / 2, tw, th); ctx2.clip(); pgCover(ctx2, ic.img, tx, y - th / 2, tw, th); ctx2.restore();
       if (focus) { ctx2.strokeStyle = 'rgba(255,255,255,0.95)'; ctx2.lineWidth = 2; ctx2.strokeRect(tx, y - th / 2, tw, th); } }
@@ -11343,7 +11483,7 @@ function drawPhotoMulti(ctx2) {
   ctx2.shadowBlur = 0;
   // side buttons: Select All / Clear All / OK (centred col 0.736W, first centre 0.667H)
   const btnLabels = ['Select All', 'Clear All', 'OK'];
-  const bw = CW * 0.10, bh = CH * 0.044, bx = CW * 0.736 - bw / 2, bpitch = CH * 0.0556; let by = CH * 0.667 - bh / 2;
+  const bw = CW * 0.10, bh = CH * 0.044, bx = CW * 0.760 - bw / 2, bpitch = CH * 0.0556; let by = CH * 0.667 - bh / 2;
   for (let b = 0; b < 3; b++) {
     const sel = (pm.btn === b);
     const g = ctx2.createLinearGradient(bx, by, bx, by + bh);
@@ -11365,7 +11505,7 @@ function openPhotoViewer(listItems, idx) {
   const photos = listItems.filter(p => p && p.mtype === 'photo');
   const target = listItems[idx];
   let fi = photos.indexOf(target); if (fi < 0) fi = 0;
-  photoViewer = {photos: photos, idx: fi, rot: 0, zoom: 1, hintUntil: performance.now() + 4000};
+  photoViewer = {photos: photos, idx: fi, rot: 0, zoom: 1, panX: 0, panY: 0, hintUntil: performance.now() + 4000};
   pvImg(photos[fi]); if (photos[fi + 1]) pvImg(photos[fi + 1]); if (photos[fi - 1]) pvImg(photos[fi - 1]);
   playNav2();
 }
@@ -11389,7 +11529,7 @@ function pvStep(d) {
     ? {fromIdx: pv.idx, start: performance.now(), dur: 650, effect: eff, dir: d >= 0 ? 1 : -1}
     : null;
   pv.idx = (pv.idx + d + pv.photos.length) % pv.photos.length;
-  pv.rot = 0; pv.zoom = 1; pv.hintUntil = performance.now() + 1500;
+  pv.rot = 0; pv.zoom = 1; pv.panX = 0; pv.panY = 0; pv.hintUntil = performance.now() + 1500;
   const n = pv.idx; pvImg(pv.photos[n]); if (pv.photos[n + 1]) pvImg(pv.photos[n + 1]); if (pv.photos[n - 1]) pvImg(pv.photos[n - 1]);
   playCursor();
 }
@@ -11480,7 +11620,16 @@ function pvPanelActivate() {
   if (a === 'rotl')      pv.rot = ((pv.rot - 90) % 360 + 360) % 360;
   else if (a === 'rotr') pv.rot = (pv.rot + 90) % 360;
   else if (a === 'zoomin')  pv.zoom = Math.min(8, (pv.zoom || 1) * 1.25);
-  else if (a === 'zoomout') pv.zoom = Math.max(1, (pv.zoom || 1) / 1.25);
+  else if (a === 'zoomout') { pv.zoom = Math.max(1, (pv.zoom || 1) / 1.25); if (pv.zoom <= 1) { pv.panX = 0; pv.panY = 0; } }
+  // Pan the zoomed view (control-panel arrow controls, firmware Up/Down/Left/Right).
+  // The view scrolls in the arrow direction (Up reveals the top), i.e. the photo
+  // shifts opposite; drawPhoto clamps to the photo edges so panning past is impossible.
+  // Step ~15% of the viewport per press (the real PS3 uses the analog stick; discrete
+  // step value is a reasonable default, flagged - not a firmware constant).
+  else if (a === 'up')    pv.panY = (pv.panY || 0) + xmbCanvas.height * 0.15;
+  else if (a === 'down')  pv.panY = (pv.panY || 0) - xmbCanvas.height * 0.15;
+  else if (a === 'left')  pv.panX = (pv.panX || 0) + xmbCanvas.width * 0.15;
+  else if (a === 'right') pv.panX = (pv.panX || 0) - xmbCanvas.width * 0.15;
   else if (a === 'prev') pvStep(-1);
   else if (a === 'next') pvStep(1);
   else if (a === 'play') { pv.panel = false; pv.slideshow = true; pv.paused = false; pv.slideNext = performance.now() + (pv.slideMs || 4000); }
@@ -11498,6 +11647,11 @@ function pvPanelActivate() {
     playNav2(); return;
   }
   else if (a === 'showinfo' || a === 'info') { pv.info = !pv.info; pv.panel = false; }   // "Display": toggle the EXIF info overlay
+  else if (a === 'dispmode') {   // "Display Mode": cycles the display mode (firmware bottom-left pill "Zoom/Normal NN%"). First press = Zoom, repeat toggles to Normal (live RPCS3). The NN% is the real fit scale from the photo's native dims; the visual mode effect on single images is minimal (flagged) so we show the faithful indicator without altering the image.
+    pv.panel = false;
+    pv.dispModeName = (pv.dispModeName === 'Zoom') ? 'Normal' : 'Zoom';
+    pv.dispModeUntil = performance.now() + 3000;
+  }
   else if (a === 'effect') {   // "Change Effect": opens a submenu (live RPCS3: Normal / Slide / Fade)
     const opts = ['Normal', 'Slide', 'Fade'];
     pv.cpSub = {label: 'Change Effect', kind: 'effect', opts: opts, sel: Math.max(0, opts.indexOf(pv.effect || 'Normal'))};
@@ -11508,6 +11662,23 @@ function pvPanelActivate() {
   else if (a === 'wallpaper') { pv.panel = false; pv.wpMode = true; pv.wpZoom = 1; pv.hintUntil = 0; }   // "Set as Wallpaper": open the range selector (live RPCS3 flow)
   else if (a === 'print') { pv.panel = false; }   // "Print": real flow is a printer/system path not in photoviewer.rco (no printer in env, not captured); close the panel rather than fabricate a dialog
   else if (a === 'addpl' && typeof mpOpenAddChooser === 'function') { pv.panel = false; }
+  playCursor();
+}
+// SELECT button shortcut: on the real PS3 photo viewer, SELECT toggles the EXIF/Information
+// overlay directly (the "Display" control, col7). That binding is why the panel shows the
+// SELECT pill only on that control. Not active during the wallpaper/trim range selector or a dialog.
+function pvSelectInfo() {
+  const pv = photoViewer;
+  if (!pv || pv.wpMode || pv.trimMode || dialogState) return;
+  pv.info = !pv.info; pv.panel = false; playCursor();
+}
+// START button shortcut: during a running slideshow, START toggles play/pause directly (the running-
+// slideshow panel shows the START pill on the Play/Pause control to advertise this). No-op otherwise.
+function pvStartToggle() {
+  const pv = photoViewer;
+  if (!pv || !pv.slideshow || pv.wpMode || pv.trimMode || dialogState) return;
+  pv.paused = !pv.paused;
+  if (!pv.paused) pv.slideNext = performance.now() + (pv.slideMs || 4000);
   playCursor();
 }
 function pvShowDeleteConfirm() {
@@ -11638,8 +11809,11 @@ function drawPvPanel(ctx2, tOverride) {
     }
     if (flash > 0) drawI(flash);   // brief brightness pop on activate
   }
-  // focused-item label below the grid + a generic SELECT button-hint pill (mirrors drawMpOpt;
-  // FINDINGS confirm the real photo panel shows the SELECT pill on the focused control).
+  // focused-item label below the grid. The SELECT button-hint pill is NOT generic on the
+  // photo panel: the real XMB shows it ONLY on the "Display" control (col7, act 'showinfo'),
+  // because SELECT is the shortcut that toggles the EXIF/Information overlay. FINDINGS.txt
+  // (live RPCS3) annotates "col7 Display (ic0, has SELECT pill)", and both control-panel
+  // captures (col0 "Display Mode" focused) show the label with NO pill. So gate it to showinfo.
   const fb = cp[pv.cpSel];
   if (fb) {
     const lbl = (fb.act === 'pause') ? (pv.paused ? 'Play' : 'Pause') : fb.label;
@@ -11650,7 +11824,17 @@ function drawPvPanel(ctx2, tOverride) {
     ctx2.fillText(lbl, lx, ly);
     ctx2.shadowColor = 'rgba(0,0,0,0)'; ctx2.shadowBlur = 0;
     const lw = ctx2.measureText(lbl).width, pillH = CH * 0.030, gap = CW * 0.006;
-    drawMpPill(ctx2, lx + lw + gap, ly - pillH * 0.82, CW * 0.040, pillH, 'SELECT');
+    // The button-hint pill shows ONLY on a control that has a physical-button shortcut, and not while a
+    // submenu is open. STATIC panel: "Display" (act showinfo) is toggled by SELECT (FINDINGS: "col7 Display
+    // has SELECT pill"; both control-panel captures show the other controls with NO pill). RUNNING-SLIDESHOW
+    // panel: "Play/Pause" (act pause) is toggled by START (FINDINGS: "Pause w/ START pill while playing").
+    // Every other control shows the label only.
+    const pillTxt = (fb.act === 'showinfo') ? 'SELECT' : (fb.act === 'pause') ? 'START' : null;
+    if (!pv.cpSub && pillTxt) {
+      ctx2.font = Math.round(pillH * 0.46) + 'px PS3';
+      const pw = ctx2.measureText(pillTxt).width + CW * 0.012;
+      drawMpPill(ctx2, lx + lw + gap, ly - pillH * 0.82, pw, pillH, pillTxt);
+    }
   }
   // Control submenu (Change Effect: Normal / Slide / Fade) -- a small list under the label.
   if (pv.cpSub) {
@@ -11684,7 +11868,7 @@ function drawPhotoViewer(ctx2) {
   ctx2.save(); ctx2.setTransform(1, 0, 0, 1, 0, 0); ctx2.globalAlpha = 1;
   ctx2.fillStyle = '#000'; ctx2.fillRect(0, 0, CW, CH);
   // Draw a single photo fit-to-screen (with rotate/zoom) at a given alpha + x-offset.
-  const drawPhoto = (photo, rot, zoom, alpha, dxPx) => {
+  const drawPhoto = (photo, rot, zoom, alpha, dxPx, panX, panY) => {
     const im = pvImg(photo);
     if (!(im && im.complete && im.naturalWidth) || alpha <= 0.001) return;
     const iw = im.naturalWidth, ih = im.naturalHeight;
@@ -11692,9 +11876,17 @@ function drawPhotoViewer(ctx2) {
     const bw = swap ? ih : iw, bh = swap ? iw : ih;
     const fit = Math.min(CW / bw, CH / bh) * (zoom || 1);
     const dw = iw * fit, dh = ih * fit;
+    // Pan (when zoomed): clamp the screen-space offset to the rotated on-screen
+    // bounding box so the view can't move past the photo edges. Only the current
+    // photo carries pan; the clamped value is written back so it never overshoots.
+    let pX = panX || 0, pY = panY || 0;
+    const dispW = swap ? dh : dw, dispH = swap ? dw : dh;
+    const maxX = Math.max(0, (dispW - CW) / 2), maxY = Math.max(0, (dispH - CH) / 2);
+    pX = Math.max(-maxX, Math.min(maxX, pX)); pY = Math.max(-maxY, Math.min(maxY, pY));
+    if (photo === pv.photos[pv.idx]) { pv.panX = pX; pv.panY = pY; }
     ctx2.globalAlpha = alpha;
     ctx2.imageSmoothingEnabled = true; ctx2.imageSmoothingQuality = 'high';
-    ctx2.translate(CW / 2 + (dxPx || 0), CH / 2); ctx2.rotate((rot || 0) * Math.PI / 180);
+    ctx2.translate(CW / 2 + (dxPx || 0) + pX, CH / 2 + pY); ctx2.rotate((rot || 0) * Math.PI / 180);
     ctx2.drawImage(im, -dw / 2, -dh / 2, dw, dh);
     ctx2.setTransform(1, 0, 0, 1, 0, 0);
   };
@@ -11712,7 +11904,7 @@ function drawPhotoViewer(ctx2) {
       drawPhoto(pv.photos[pv.idx], pv.rot, pv.zoom, pvEnterT * e, 0);
     }
   } else {
-    drawPhoto(pv.photos[pv.idx], pv.rot, pv.zoom, pvEnterT, 0);
+    drawPhoto(pv.photos[pv.idx], pv.rot, pv.zoom, pvEnterT, 0, pv.panX, pv.panY);
   }
   // Bottom-right help hint, auto-hiding. Firmware: a rounded grey pill with two
   // rows -- "(green triangle) : Control Panel" and "(PS) : Home Menu"
@@ -11752,6 +11944,41 @@ function drawPhotoViewer(ctx2) {
   if (pv.info) drawPvInfo(ctx2);     // EXIF Information overlay (toggled by the "Display" control)
   if (pv.panel) drawPvPanel(ctx2);
   else if (pv.panelClosing) { const p = (performance.now() - pv.panelClosing.start) / pv.panelClosing.dur; if (p >= 1) pv.panelClosing = null; else drawPvPanel(ctx2, 1 - p); }   // reverse slide/fade-out
+  if (pv.dispModeUntil && performance.now() < pv.dispModeUntil) drawDispModePill(ctx2);
+}
+
+// "Display Mode" indicator pill (bottom-left), shown ~3s after pressing the Display
+// Mode control. Geometry measured 1:1 from the real RPCS3 capture: dark rounded pill
+// at x 0.057W / y 0.794H / h 0.048H, a display-mode glyph + "Zoom/Normal NN%" white
+// text (~27px @1080). NN% = the real fit scale from the photo's NATIVE dimensions
+// (e.g. 3840x2160 on 1920x1080 = 50%, matching the capture) times the current zoom.
+function drawDispModePill(ctx2) {
+  const pv = photoViewer; if (!pv) return;
+  const ph = pv.photos[pv.idx]; if (!ph) return;
+  const CW = xmbCanvas.width, CH = xmbCanvas.height, sx = CW / 1920, sy = CH / 1080;
+  const fit = Math.min(V.W / (ph.w || V.W), V.H / (ph.h || V.H));
+  const pct = Math.round(fit * (pv.zoom || 1) * 100);
+  const label = (pv.dispModeName || 'Normal') + ' ' + pct + '%';
+  ctx2.save(); ctx2.setTransform(1, 0, 0, 1, 0, 0);
+  ctx2.globalAlpha = Math.max(0, Math.min(1, (pv.dispModeUntil - performance.now()) / 400));  // fade out in the last 400ms
+  const fs = Math.round(27 * sy);
+  ctx2.font = fs + 'px PS3';
+  const pad = 16 * sx, iconW = 30 * sx, iconH = 20 * sy, gap = 11 * sx;
+  const tw = ctx2.measureText(label).width;
+  const px = 0.057 * CW, ph2 = 0.048 * CH, py = 0.794 * CH, pw = pad + iconW + gap + tw + pad;
+  ctx2.fillStyle = 'rgba(0,0,0,0.72)'; roundRect(ctx2, px, py, pw, ph2, ph2 * 0.30); ctx2.fill();
+  // display-mode glyph: a rounded screen with a vertical bar at each inner edge (matches the captured icon)
+  const gx = px + pad, gy = py + (ph2 - iconH) / 2;
+  ctx2.strokeStyle = 'rgba(235,235,235,0.95)'; ctx2.lineWidth = Math.max(1.5, 2 * sy);
+  roundRect(ctx2, gx, gy, iconW, iconH, 3 * sx); ctx2.stroke();
+  ctx2.fillStyle = 'rgba(235,235,235,0.95)';
+  ctx2.fillRect(gx + iconW * 0.16, gy + iconH * 0.20, Math.max(2, 3 * sx), iconH * 0.60);
+  ctx2.fillRect(gx + iconW * 0.78 - Math.max(2, 3 * sx), gy + iconH * 0.20, Math.max(2, 3 * sx), iconH * 0.60);
+  // label
+  ctx2.fillStyle = 'rgb(245,245,245)'; ctx2.textAlign = 'left'; ctx2.textBaseline = 'middle';
+  ctx2.shadowColor = 'rgba(0,0,0,0.5)'; ctx2.shadowBlur = 2;
+  ctx2.fillText(label, gx + iconW + gap, py + ph2 / 2 + 1 * sy);
+  ctx2.restore();
 }
 
 // EXIF "Display" information overlay -- a right-anchored dark panel with right-aligned
@@ -11783,7 +12010,10 @@ function drawPvInfo(ctx2) {
   // columns ~75px too far right within the panel.
   const labelX = CW * 0.7037;        // right edge of right-aligned labels
   const valueX = CW * 0.7161;        // left edge of values
-  const top = CH * 0.165, rowH = CH * 0.0365;
+  // top/pitch re-measured 1:1 from live2/exif_panel.png via a 16-row linear fit
+  // (2026-06-16): ref row0 centre 0.1735H, last 0.7290H -> pitch 0.037H; web was
+  // 0.165/0.0365 = panel ~12px too high + ~0.5px/row tight, ~18px drift by the last row.
+  const top = CH * 0.176, rowH = CH * 0.037;
   const fs = Math.round(CH * 0.0225);
   // dark translucent backing. Strength measured 1:1 from the RPCS3 EXIF capture
   // (fair compare, same nebula photo): the real panel darkens the photo to ~0.21 of
@@ -11845,8 +12075,11 @@ function drawPhotoGrid(ctx2, items, sel, alpha) {
   // RIGHT of the retained parent folder breadcrumb (PARENT_COL_X 316) + back
   // chevron (~430). Column centres 611/858/1105/1352/1599. y0 0.468 = real
   // focused-thumb-top y~428 (clears the category bar / parent breadcrumb).
-  const x0 = 0.318, colStep = 0.1286, y0 = 0.468, rowStep = 0.242;  // fractions of V.W / V.H
-  const bw = V.W * 0.094, bh = V.H * 0.099;                         // base thumb box (non-focused)
+  // Re-measured 1:1 from album_grid.png (1920x1080) 2026-06-15: row2 inactive thumbs
+  // are 206x116 (16:9), col centres 624/1110/1354/1598 (col0 624 not 611), col step
+  // 243.4, row pitch 254.5; focused thumb 280x158 = inactive x1.36 (not x1.45).
+  const x0 = 0.325, colStep = 0.1268, y0 = 0.468, rowStep = 0.2356; // fractions of V.W / V.H
+  const bw = V.W * 0.1073, bh = V.H * 0.1073;                       // base thumb box 206x116 = 16:9 (non-focused)
   const now = performance.now();
   // Focus scale tween (easeOutCubic, mirrors navItem); grows the new thumb, shrinks the old.
   let e = 1;
@@ -11868,8 +12101,8 @@ function drawPhotoGrid(ctx2, items, sel, alpha) {
       const col = i % cols, row = (i / cols) | 0;
       const cx = XCP(V.W * (x0 + col * colStep)), cy = V.H * (y0 + row * rowStep);
       let sc = 1.0;
-      if (focus) sc = 1.0 + 0.45 * e;        // grow 1.0 -> 1.45
-      else if (wasFocus) sc = 1.45 - 0.45 * e; // shrink 1.45 -> 1.0
+      if (focus) sc = 1.0 + 0.36 * e;        // grow 1.0 -> 1.36 (measured album_grid.png)
+      else if (wasFocus) sc = 1.36 - 0.36 * e; // shrink 1.36 -> 1.0
       const w = XCF(bw) * sc, h = XCF(bh) * sc;
       const x = cx - w / 2, y = cy - h / 2;
       ctx2.globalAlpha = (focus ? 1 : 0.92) * alpha;
@@ -11896,22 +12129,562 @@ function drawPhotoGrid(ctx2, items, sel, alpha) {
         ctx2.globalAlpha = alpha; ctx2.textAlign = 'left'; ctx2.textBaseline = 'alphabetic';
         ctx2.font = Math.round(XCF(V.H * 0.026)) + 'px PS3';
         const ny = y + h + XCF(V.H * 0.035);
+        // Caption left-aligns to the INACTIVE thumb left edge (cx - bw/2), not the
+        // enlarged focused-thumb left: measured album_grid.png caption left x=515 ==
+        // col0 centre 624 - inactive half-width 103.
+        const capX = cx - XCF(bw) / 2;
         ctx2.save();
         ctx2.fillStyle = 'rgb(255,255,255)'; ctx2.shadowOffsetX = 0; ctx2.shadowOffsetY = 0;
-        ctx2.shadowColor = 'rgba(255,255,255,' + pulseOuterA.toFixed(3) + ')'; ctx2.shadowBlur = XCF(V.TEXT_GLOW_RADIUS); ctx2.fillText(items[i].n, x, ny);
-        ctx2.shadowColor = 'rgba(255,255,255,' + pulseInnerA.toFixed(3) + ')'; ctx2.shadowBlur = XCF(V.TEXT_GLOW_INNER_RADIUS); ctx2.fillText(items[i].n, x, ny);
+        ctx2.shadowColor = 'rgba(255,255,255,' + pulseOuterA.toFixed(3) + ')'; ctx2.shadowBlur = XCF(V.TEXT_GLOW_RADIUS); ctx2.fillText(items[i].n, capX, ny);
+        ctx2.shadowColor = 'rgba(255,255,255,' + pulseInnerA.toFixed(3) + ')'; ctx2.shadowBlur = XCF(V.TEXT_GLOW_INNER_RADIUS); ctx2.fillText(items[i].n, capX, ny);
         ctx2.restore();
         ctx2.fillStyle = 'rgb(245,245,245)'; ctx2.shadowColor = 'rgba(0,0,0,0.6)'; ctx2.shadowBlur = 3; ctx2.shadowOffsetY = 1;
-        ctx2.fillText(items[i].n, x, ny);
+        ctx2.fillText(items[i].n, capX, ny);
         ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 4; ctx2.shadowOffsetY = 0;
         ctx2.font = '300 ' + Math.round(XCF(V.H * 0.020)) + 'px PS3'; ctx2.globalAlpha = 0.8 * alpha;
         const dt = fmtPhotoDate(items[i].date);   // firmware "D/M/YYYY H:MM"
-        ctx2.fillText(dt, x, y + h + XCF(V.H * 0.060));
+        ctx2.fillText(dt, capX, y + h + XCF(V.H * 0.060));
         ctx2.shadowBlur = 0;
       }
     }
   }
   ctx2.globalAlpha = 1;
+}
+
+// ============================ VIDEO PLAYER ============================
+// Full-screen video playback, reverse-engineered 1:1 from firmware videoplayer_plugin.rco.
+// The control-panel TOPOLOGY (rows/columns/roster/focus) is DECODED from the RCO widget tree; only the
+// pixel pitch/anchor is MEASURED (RPCS3's video player is broken + the RCO has no pixel geometry). Icons at
+// images/videoplayer/icon_NNN.png (159 extracted from the RCO). Cross = Play/Pause, TRIANGLE =
+// Control Panel, LEFT/RIGHT = seek, CIRCLE = back. Help pill auto-hides like the photo viewer.
+// firmware note: videoplayer_plugin.rco has NO multi-angle string -> no Angle control (flag-not-faked).
+// Control-panel TOPOLOGY (rows/columns/roster) is firmware-DECODED from the videoplayer_plugin.rco
+// widget tree (col=+0x28, row=+0x2C, 0-centered): TWO rows + a DETACHED Repeat toggle below transport,
+// with Play and Pause as SEPARATE adjacent cells (firmware). Columns offset by +6 (firmware -6..+6 -> gx 0..12),
+// rows: function=0(top), transport=1, repeat=2. Only the PIXEL pitch/anchor (drawVideoPanel x0/colW/rowH/sz)
+// is MEASURED (the photo-panel values - the RCO carries no pixel geometry, and RPCS3's video player is broken).
+const VIDEO_CP = [
+  // TOP ROW (firmware Y=1, "function row") - firmware cols -5..+4.
+  {act:'scene',      label:'Scene Search',        ic:18, gx:1,  gy:0},   // msg_scene_search
+  {act:'goto',       label:'Go To',               ic:19, gx:2,  gy:0},   // msg_goto
+  {act:'audio',      label:'Audio Options',       ic:3,  gx:3,  gy:0},   // msg_audio_change
+  {act:'subtitle',   label:'Subtitle Options',    ic:22, gx:4,  gy:0},   // msg_subtitle_change
+  {act:'volume',     label:'Volume Control',      ic:2,  gx:5,  gy:0},   // msg_volume_control
+  {act:'avset',      label:'AV Settings',         ic:23, gx:6,  gy:0},   // msg_audio_video_settings
+  {act:'screenmode', label:'Screen Mode',         ic:1,  gx:7,  gy:0},   // msg_viewmode
+  {act:'chgicon',    label:'Change Icon',         ic:24, gx:8,  gy:0},   // msg_icon_change
+  {act:'del',        label:'Delete',              ic:4,  gx:9,  gy:0},   // msg_del
+  {act:'showinfo',   label:'Display',             ic:0,  gx:10, gy:0},   // msg_display_display_with_icon (SELECT)
+  // BOTTOM ROW (firmware Y=0, transport) - firmware cols -6..+6.
+  {act:'beginning',  label:'Return to Beginning', ic:9,  gx:0,  gy:1},   // msg_beginning_with_icon (context-swaps to Previous at start)
+  {act:'next',       label:'Next',                ic:10, gx:1,  gy:1},   // msg_next_with_icon (title)
+  {act:'frev',       label:'Fast Reverse',        ic:11, gx:2,  gy:1},   // msg_fast_r_with_icon
+  {act:'ffwd',       label:'Fast Forward',        ic:12, gx:3,  gy:1},   // msg_fast_f_with_icon
+  {act:'play',       label:'Play',                ic:6,  gx:4,  gy:1},   // msg_play_with_icon
+  {act:'pause',      label:'Pause',               ic:8,  gx:5,  gy:1},   // msg_pause_with_icon (separate firmware cell)
+  {act:'stop',       label:'Stop',                ic:7,  gx:6,  gy:1},   // msg_stop
+  {act:'flashr',     label:'Instant Replay',      ic:15, gx:7,  gy:1},   // msg_flash_r
+  {act:'flashf',     label:'Instant Advance',     ic:16, gx:8,  gy:1},   // msg_flash_f
+  {act:'srev',       label:'Slow (Reverse)',      ic:20, gx:9,  gy:1},   // msg_slow_r
+  {act:'sfwd',       label:'Slow (Forward)',      ic:13, gx:10, gy:1},   // msg_slow_f
+  {act:'stepb',      label:'Frame Reverse',       ic:21, gx:11, gy:1},   // msg_oneframe_r
+  {act:'stepf',      label:'Frame Advance',       ic:14, gx:12, gy:1},   // msg_oneframe_f
+  // DETACHED (firmware Y=-1): single Repeat toggle, one row below transport (firmware col 0).
+  {act:'repeat',     label:'Repeat',              ic:17, gx:6,  gy:2},   // msg_repeat
+];
+const VIDEO_CP_DEF = Math.max(0, VIDEO_CP.findIndex(b => b.act === 'play'));   // default focus = Play
+const VID_SCREEN_MODES = ['Normal', 'Full Screen', 'Original', 'Zoom', 'Double Scale'];   // msg_normal/full_screen/original/zoom/double
+const VID_REPEAT_MODES = ['Repeat Off', 'Repeat On', 'Title Repeat', 'A-B Repeat', 'Folder Repeat'];   // msg_repeat_off/on/title/ab + msg_folder_repeat
+const VID_AVSET = ['Block Noise Reduction', 'Frame Noise Reduction', 'Mosquito Noise Reduction', 'Upscale'];   // msg_bnoise/fnoise/mosquito_noise_reduction + msg_upconvert
+function vidCP() { return VIDEO_CP; }
+function vidIcon(n) { return getIcon('asset:images/videoplayer/icon_' + String(n).padStart(3, '0') + '.png'); }
+
+function vidEnsureEl() {
+  if (vidEl) return vidEl;
+  vidEl = document.createElement('video');
+  vidEl.crossOrigin = 'anonymous'; vidEl.playsInline = true; vidEl.preload = 'auto';
+  vidEl.style.cssText = 'position:absolute;left:-99999px;top:-99999px;width:2px;height:2px;';
+  document.body.appendChild(vidEl);
+  return vidEl;
+}
+function vidLoad(item) {
+  const el = vidEnsureEl();
+  el.src = item.file; try { el.currentTime = 0; } catch (e) {}
+  el.playbackRate = 1;
+  el.onloadedmetadata = () => { if (videoPlayer && videoPlayer.videos[videoPlayer.idx] === item) { item.dur = el.duration; item.w = el.videoWidth; item.h = el.videoHeight; } };
+  el.onwaiting = () => { if (videoPlayer) videoPlayer.buffering = true; };
+  el.onplaying = () => { if (videoPlayer) videoPlayer.buffering = false; };
+  el.onended = () => { if (videoPlayer) vidOnEnded(); };
+  if (videoPlayer && videoPlayer.playing) { const p = el.play(); if (p && p.catch) p.catch(() => {}); }
+}
+function vidOnEnded() {
+  const v = videoPlayer; if (!v) return; const el = vidEnsureEl();
+  if (v.repeat === 1 || v.repeat === 2) { el.currentTime = 0; const p = el.play(); if (p && p.catch) p.catch(() => {}); return; }   // Repeat On / Title Repeat
+  if (v.repeat === 4) { vidStepTitle(1); return; }                              // Folder Repeat -> next title (loops list)
+  if (v.idx < v.videos.length - 1) { vidStepTitle(1); return; }                 // auto-advance to next title
+  v.playing = false; v.stopped = true; el.currentTime = 0;                      // end of list -> stop
+}
+function openVideoPlayer(listItems, idx) {
+  const vids = (listItems || []).filter(p => p && p.mtype === 'video');
+  if (!vids.length) return;
+  const clicked = listItems[idx]; let vi = vids.indexOf(clicked); if (vi < 0) vi = 0;
+  videoPlayer = { videos: vids, idx: vi, playing: true, rate: 1, stopped: false,
+    screenMode: 0, zoom: 1, panX: 0, panY: 0, audioTrack: 0, subTrack: -1, ccOn: false, chapter: 0,
+    repeat: 0, abA: null, abB: null, panel: false, panelAnim: null, panelClosing: null,
+    cpSel: VIDEO_CP_DEF, cpSelPrev: -1, cpFocusStart: 0, cpPress: null, cpSub: null,
+    osd: false, hintUntil: performance.now() + 4000, dispModeName: '', dispModeUntil: 0,
+    transient: null, buffering: false, _lastTick: 0 };
+  if (vids[vi]) vids[vi].timesPlayed = (vids[vi].timesPlayed || 0) + 1;
+  try { VIDEO_CP.forEach(b => vidIcon(b.ic)); vidIcon(114); } catch (e) {}   // warm the control-panel glyphs so they're decoded before Triangle opens the panel
+  vidLoad(vids[vi]); playNav2();
+}
+function closeVideoPlayer() { if (vidEl) { try { vidEl.pause(); } catch (e) {} } videoPlayer = null; playNav(); }
+function vidCur() { const v = videoPlayer; return v ? v.videos[v.idx] : null; }
+// Change Icon: capture the current scene as the content's XMB thumbnail. The real PS3 stores a
+// 15s animated clip; in the browser a single representative frame is the faithful stand-in (the
+// XMB column shows a static thumbnail). Shows the firmware "Creating icon... Please wait." busy
+// dialog, then "The icon has been changed." / "The icon could not be created.".
+function vidCreateIcon(it, el) {
+  dialogState = {template:{type:'info', title:'', body:'Creating icon...\nPlease wait.', busy:true}, sel:0, anim:{start:performance.now(), dur:200}}; playNav2();
+  setTimeout(function () {
+    // Bail if the player closed or the "Creating icon..." busy dialog was replaced during the
+    // window, so we never force a result dialog over whatever is now on screen.
+    if (!videoPlayer || !(dialogState && dialogState.template && dialogState.template.busy)) return;
+    let ok = false;
+    try {
+      const cw = 160, ch = 90;   // 16:9 content-icon proportions
+      const c = document.createElement('canvas'); c.width = cw; c.height = ch;
+      const cx = c.getContext('2d');
+      cx.fillStyle = '#000'; cx.fillRect(0, 0, cw, ch);
+      const vw = el.videoWidth || 16, vh = el.videoHeight || 9;
+      const s = Math.max(cw / vw, ch / vh), dw = vw * s, dh = vh * s;   // cover-fit
+      cx.drawImage(el, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+      const url = c.toDataURL('image/jpeg', 0.85);
+      ok = (el.readyState >= 2 && el.videoWidth > 0);   // genuinely decoded a frame
+      if (ok && it) it.i = 'asset:' + url;   // getIcon() loads the data-URL just like any asset path
+    } catch (e) { ok = false; }
+    dialogState = {template:{type:'info', title:'', body: ok ? 'The icon has been changed.' : 'The icon could not be created.'}, sel:0, anim:{start:performance.now(), dur:250}}; playNav2();
+  }, 650);
+}
+function vidPlayToggle() {
+  const v = videoPlayer; if (!v) return; const el = vidEnsureEl();
+  v.rate = 1; el.playbackRate = 1;
+  if (v.stopped) { v.stopped = false; el.currentTime = 0; }
+  v.playing = !v.playing;
+  if (v.playing) { const p = el.play(); if (p && p.catch) p.catch(() => {}); } else el.pause();
+  v.transient = null; playCursor();
+}
+function vidStop() {
+  const v = videoPlayer; if (!v) return; const el = vidEnsureEl();
+  el.pause(); try { el.currentTime = 0; } catch (e) {}
+  v.playing = false; v.stopped = true; v.rate = 1; el.playbackRate = 1; v.transient = null; playNav2();
+}
+function vidStepTitle(d) {
+  const v = videoPlayer; if (!v || !v.videos.length) return;
+  v.idx = (v.idx + d + v.videos.length) % v.videos.length;
+  v.rate = 1; v.stopped = false; v.playing = true; v.chapter = 0; v.subTrack = -1; v.audioTrack = 0;
+  v.hintUntil = performance.now() + 1500;
+  if (v.videos[v.idx]) v.videos[v.idx].timesPlayed = (v.videos[v.idx].timesPlayed || 0) + 1;
+  vidLoad(v.videos[v.idx]); playCursor();
+}
+function vidSeek(sec) {
+  const v = videoPlayer; if (!v) return; const el = vidEnsureEl();
+  if (!isFinite(el.duration) || !el.duration) return;
+  el.currentTime = Math.max(0, Math.min(el.duration - 0.05, (el.currentTime || 0) + sec));
+  v.rate = 1; el.playbackRate = 1; v.hintUntil = performance.now() + 1500; playCursor();
+}
+function vidScan(dir) {   // dir +1 = Fast Forward cycle, -1 = Fast Reverse cycle (firmware x1.5/x10/x30/x120)
+  const v = videoPlayer; if (!v) return; const el = vidEnsureEl();
+  const mags = [1.5, 10, 30, 120];
+  let mag = Math.abs(v.rate);
+  if (Math.sign(v.rate) === dir && mag >= 1.5) { const i = mags.indexOf(mag); mag = (i >= 0 && i < mags.length - 1) ? mags[i + 1] : mags[0]; }
+  else mag = 1.5;
+  v.rate = dir * mag; v.stopped = false; v.playing = true;
+  // x1.5 forward uses native playbackRate; everything else (higher rates + all reverse) is timer-driven in vidTick.
+  if (v.rate === 1.5) { el.playbackRate = 1.5; const p = el.play(); if (p && p.catch) p.catch(() => {}); }
+  else { el.playbackRate = 1; el.pause(); }
+  v.transient = { label: (dir > 0 ? 'Fast Forward' : 'Fast Reverse') + '  x ' + (mag === 1.5 ? '1.5' : mag), until: performance.now() + 1400 };   // msg_fast_f/r + msg_x1half/x10/x30/x120
+  v.hintUntil = performance.now() + 1500; playCursor();
+}
+function vidSlow(dir) {   // msg_slow_f / msg_slow_r
+  const v = videoPlayer; if (!v) return; const el = vidEnsureEl();
+  v.rate = dir * 0.5; v.stopped = false; v.playing = true;
+  if (dir > 0) { el.playbackRate = 0.5; const p = el.play(); if (p && p.catch) p.catch(() => {}); }
+  else { el.playbackRate = 1; el.pause(); }   // reverse slow is timer-driven
+  v.transient = { label: dir > 0 ? 'Slow (Forward)' : 'Slow (Reverse)', until: performance.now() + 1400 };   // msg_slow_f / msg_slow_r
+  v.hintUntil = performance.now() + 1500; playCursor();
+}
+function vidStepFrame(d) {   // msg_oneframe_f / msg_oneframe_r (~1/30s)
+  const v = videoPlayer; if (!v) return; const el = vidEnsureEl();
+  el.pause(); v.playing = false; v.rate = 1; el.playbackRate = 1;
+  if (isFinite(el.duration)) el.currentTime = Math.max(0, Math.min(el.duration - 0.02, (el.currentTime || 0) + d / 30));
+  v.hintUntil = performance.now() + 1500; playCursor();
+}
+// "Display" (msg_display_display_with_icon, glyph uf88e, SELECT): toggle the on-screen status
+// display (OSD = title + progress/seek bar + elapsed/total time + play state). The videoplayer
+// firmware has NO codec/size info-panel labels, so the Display button is the OSD toggle (not a
+// content-info screen, which is a separate XMB feature).
+function vidToggleInfo() { const v = videoPlayer; if (!v || dialogState) return; v.osd = !v.osd; v.panel = false; playCursor(); }
+// Scene Search (msg_scene_search): chapter THUMBNAIL grid (real frames at the item's chapter times) -> Cross seeks.
+function vidSceneOpen() {
+  const v = videoPlayer; if (!v) return; const it = vidCur();
+  if (!it || !it.chapters || !it.chapters.length) { v.transient = {label: 'No chapters', until: performance.now() + 1400}; return; }
+  let cur = 0; if (vidEl && isFinite(vidEl.currentTime)) { for (let i = 0; i < it.chapters.length; i++) if (vidEl.currentTime >= it.chapters[i]) cur = i; }
+  v.sceneSearch = {sel: cur}; v.panel = false; v.cpSub = null; v.panelClosing = null; playNav2();
+}
+function vidSceneMove(d) { const v = videoPlayer; if (!v || !v.sceneSearch) return; const it = vidCur(); const n = (it.chapters || []).length; if (!n) return; v.sceneSearch.sel = (v.sceneSearch.sel + d + n) % n; playCursor(); }
+function vidSceneActivate() {
+  const v = videoPlayer; if (!v || !v.sceneSearch) return; const it = vidCur();
+  const sel = v.sceneSearch.sel, t = (it.chapters || [])[sel] || 0, el = vidEnsureEl();
+  try { el.currentTime = t; } catch (e) {} v.chapter = sel; v.sceneSearch = null; v.hintUntil = performance.now() + 1500;
+  if (v.playing) { const p = el.play(); if (p && p.catch) p.catch(() => {}); } playNav2();
+}
+function vidSceneClose() { const v = videoPlayer; if (!v) return; v.sceneSearch = null; playNav(); }
+function drawVideoScene(ctx2) {
+  const v = videoPlayer; if (!v || !v.sceneSearch) return; const it = vidCur(); if (!it) return;
+  const CW = xmbCanvas.width, CH = xmbCanvas.height, chs = it.chapters || [], thumbs = it.chapterThumbs || [];
+  ctx2.save(); ctx2.setTransform(1, 0, 0, 1, 0, 0);
+  ctx2.fillStyle = 'rgba(0,0,0,0.72)'; ctx2.fillRect(0, 0, CW, CH);
+  ctx2.fillStyle = 'rgba(255,255,255,0.95)'; ctx2.textAlign = 'left'; ctx2.textBaseline = 'alphabetic';
+  ctx2.font = Math.round(CH * 0.034) + 'px PS3'; ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 4;
+  ctx2.fillText('Scene Search', CW * 0.10, CH * 0.16); ctx2.shadowBlur = 0;
+  const cols = Math.min(chs.length, 4) || 1, tw = CW * 0.20, th = tw * 9 / 16, gap = CW * 0.03;
+  const totalW = cols * tw + (cols - 1) * gap, x0 = (CW - totalW) / 2, y0 = CH * 0.42;
+  const mmss = (s) => { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, '0'); };
+  for (let i = 0; i < chs.length; i++) {
+    const cx = x0 + (i % cols) * (tw + gap), cy = y0, sel = (i === v.sceneSearch.sel);
+    const ic = thumbs[i] ? getIcon(thumbs[i]) : null;
+    if (ic && ic.loaded && ic.img) ctx2.drawImage(ic.img, cx, cy, tw, th); else { ctx2.fillStyle = 'rgba(40,40,46,0.9)'; ctx2.fillRect(cx, cy, tw, th); }
+    ctx2.lineWidth = sel ? 3 : 1.5; ctx2.strokeStyle = sel ? 'rgba(255,255,255,0.95)' : 'rgba(180,180,185,0.5)';
+    if (sel) { ctx2.shadowColor = 'rgba(220,235,255,0.6)'; ctx2.shadowBlur = 12; } ctx2.strokeRect(cx, cy, tw, th); ctx2.shadowBlur = 0;
+    ctx2.fillStyle = sel ? 'rgb(255,255,255)' : 'rgba(210,210,214,0.8)'; ctx2.font = Math.round(CH * 0.022) + 'px PS3'; ctx2.textAlign = 'left';
+    ctx2.fillText('Chapter ' + (i + 1) + '   ' + mmss(chs[i]), cx, cy + th + CH * 0.04);
+  }
+  ctx2.globalAlpha = 0.85; ctx2.textAlign = 'center'; ctx2.font = Math.round(CH * 0.020) + 'px PS3'; ctx2.fillStyle = 'rgba(235,235,235,0.9)';
+  ctx2.fillText('✕ Enter      ○ Back', CW / 2, CH * 0.90);
+  ctx2.restore();
+}
+// Go To (msg_goto): time-search. Firmware confirms the feature (msg_goto + bounds error
+// msg_error_overlimit_goto); the digit-entry UI form is an approximation (the firmware UI is a native
+// vsh handler, not in the RCO), flagged. H:MM:SS entry -> seek; out-of-range -> the firmware error.
+function vidGoToOpen() {
+  const v = videoPlayer; if (!v) return; const el = vidEnsureEl();
+  const t = Math.floor((el && isFinite(el.currentTime)) ? el.currentTime : 0);
+  v.goTo = {h: Math.floor(t / 3600), m: Math.floor((t % 3600) / 60), s: t % 60, field: 0};   // leftmost field (hours) focused; firmware picker default not extractable from RCO topology
+  v.panel = false; v.cpSub = null; v.sceneSearch = null; v.panelClosing = null; playNav2();
+}
+function vidGoToMove(dx) { const v = videoPlayer; if (!v || !v.goTo) return; v.goTo.field = Math.max(0, Math.min(2, v.goTo.field + dx)); playCursor(); }
+function vidGoToAdjust(dy) { const v = videoPlayer; if (!v || !v.goTo) return; const g = v.goTo;
+  if (g.field === 0) g.h = Math.max(0, Math.min(9, g.h + dy)); else if (g.field === 1) g.m = (g.m + dy + 60) % 60; else g.s = (g.s + dy + 60) % 60; playCursor(); }
+function vidGoToActivate() {
+  const v = videoPlayer; if (!v || !v.goTo) return; const el = vidEnsureEl(); const g = v.goTo;
+  const target = g.h * 3600 + g.m * 60 + g.s;
+  if (isFinite(el.duration) && target > el.duration) { dialogState = {template:{type:'info', title:'', body:'The range you can specify has been exceeded.'}, sel:0, anim:{start:performance.now(), dur:250}}; playNav2(); return; }   // msg_error_overlimit_goto
+  try { el.currentTime = target; } catch (e) {} v.goTo = null; v.hintUntil = performance.now() + 1500;
+  if (v.playing) { const p = el.play(); if (p && p.catch) p.catch(() => {}); } playNav2();
+}
+function vidGoToClose() { const v = videoPlayer; if (!v) return; v.goTo = null; playNav(); }
+function drawVideoGoTo(ctx2) {
+  const v = videoPlayer; if (!v || !v.goTo) return; const CW = xmbCanvas.width, CH = xmbCanvas.height, g = v.goTo;
+  ctx2.save(); ctx2.setTransform(1, 0, 0, 1, 0, 0);
+  ctx2.fillStyle = 'rgba(0,0,0,0.72)'; ctx2.fillRect(0, 0, CW, CH);
+  ctx2.textAlign = 'center'; ctx2.textBaseline = 'middle'; ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 4;
+  ctx2.fillStyle = 'rgba(255,255,255,0.95)'; ctx2.font = Math.round(CH * 0.034) + 'px PS3'; ctx2.fillText('Go To', CW / 2, CH * 0.36);
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const fh = Math.round(CH * 0.07); ctx2.font = fh + 'px PS3'; ctx2.textAlign = 'left';
+  const segs = [String(g.h), ' : ', pad2(g.m), ' : ', pad2(g.s)];   // field indices 0,2,4
+  const widths = segs.map(s => ctx2.measureText(s).width), total = widths.reduce((a, b) => a + b, 0);
+  let x = CW / 2 - total / 2; const y = CH * 0.52;
+  for (let i = 0; i < segs.length; i++) {
+    const fieldIdx = (i === 0) ? 0 : (i === 2) ? 1 : (i === 4) ? 2 : -1, sel = (fieldIdx === g.field);
+    if (sel) { ctx2.fillStyle = 'rgba(255,255,255,0.18)'; ctx2.fillRect(x - fh * 0.1, y - fh * 0.6, widths[i] + fh * 0.2, fh * 1.2); }
+    ctx2.fillStyle = sel ? 'rgb(255,255,255)' : 'rgba(225,225,228,0.85)'; ctx2.fillText(segs[i], x, y); x += widths[i];
+  }
+  ctx2.shadowBlur = 0; ctx2.globalAlpha = 0.85; ctx2.textAlign = 'center'; ctx2.font = Math.round(CH * 0.020) + 'px PS3'; ctx2.fillStyle = 'rgba(235,235,235,0.9)';
+  ctx2.fillText('↑↓ Adjust    ←→ Field    ✕ Enter    ○ Back', CW / 2, CH * 0.66);
+  ctx2.restore();
+}
+function vidTick() {   // per-frame: drive high-rate/reverse scan + A-B repeat (called from drawVideoPlayer)
+  const v = videoPlayer; if (!v) return; const el = vidEl; if (!el || !isFinite(el.duration) || !el.duration) { if (v) v._lastTick = performance.now(); return; }
+  const now = performance.now();
+  if (v.playing && (v.rate < 0 || v.rate > 1.5)) {   // timer-seek scan (everything native playbackRate can't do)
+    const dt = (v._lastTick ? Math.min(100, now - v._lastTick) : 16) / 1000;
+    let t = el.currentTime + v.rate * dt;
+    if (t <= 0) { t = 0; v.rate = 1; el.playbackRate = 1; const p = el.play(); if (p && p.catch) p.catch(() => {}); v.transient = null; }   // hit start while reversing -> resume normal
+    else if (t >= el.duration - 0.05) { t = el.duration - 0.05; vidOnEnded(); }
+    try { el.currentTime = Math.max(0, t); } catch (e) {}
+  }
+  v._lastTick = now;
+  if (v.repeat === 3 && v.abA != null && v.abB != null && el.currentTime >= v.abB) { try { el.currentTime = v.abA; } catch (e) {} }   // A-B Repeat
+}
+
+// --- control panel (Triangle) ---
+function vidPanelOpen() {
+  const v = videoPlayer; if (!v) return; v.panel = true;
+  v.cpSel = VIDEO_CP_DEF; v.cpSelPrev = v.cpSel; v.cpFocusStart = 0; v.cpPress = null; v.cpSub = null;
+  v.panelAnim = {start: performance.now(), dur: 200}; v.panelClosing = null; v.hintUntil = 0; playNav2();
+}
+function vidPanelClose() { const v = videoPlayer; if (!v) return; v.panelClosing = {start: performance.now(), dur: 200}; v.panel = false; v.cpSub = null; playNav(); }
+function vidPanelMove(dx, dy) {
+  const v = videoPlayer; if (!v || !v.panel) return;
+  if (v.cpSub) { if (dy !== 0) { const n = v.cpSub.opts.length; v.cpSub.sel = (v.cpSub.sel + dy + n) % n; playCursor(); } return; }
+  const cp = vidCP(); const cur = cp[v.cpSel]; let best = -1, bestd = 1e9;
+  for (let i = 0; i < cp.length; i++) {
+    if (i === v.cpSel) continue; const b = cp[i];
+    const ddx = b.gx - cur.gx, ddy = b.gy - cur.gy;
+    if (dx > 0 && ddx <= 0) continue; if (dx < 0 && ddx >= 0) continue;
+    if (dy > 0 && ddy <= 0) continue; if (dy < 0 && ddy >= 0) continue;
+    const along = dx !== 0 ? Math.abs(ddx) : Math.abs(ddy), perp = dx !== 0 ? Math.abs(ddy) : Math.abs(ddx);
+    const d = along + perp * 3; if (d < bestd) { bestd = d; best = i; }
+  }
+  if (best >= 0) { v.cpSelPrev = v.cpSel; v.cpFocusStart = performance.now(); v.cpSel = best; playCursor(); }
+}
+function vidSubOpts(kind) {
+  const v = videoPlayer, it = vidCur();
+  if (kind === 'screenmode') return VID_SCREEN_MODES.slice();
+  if (kind === 'repeat') return VID_REPEAT_MODES.slice();
+  if (kind === 'volume') return ['100%', '80%', '60%', '40%', '20%', '0%'];   // msg_volume_control level
+  if (kind === 'avset') return VID_AVSET.slice();
+  if (kind === 'audio') return (it && it.audioTracks && it.audioTracks.length) ? it.audioTracks.slice() : ['Language 1'];   // msg_lang_1
+  if (kind === 'subtitle') return ['Off'].concat((it && it.subTracks) ? it.subTracks : []);   // msg_off + sub langs
+  return [];
+}
+function vidPanelActivate() {
+  const v = videoPlayer; if (!v || !v.panel) return;
+  if (v.cpSub) {   // confirm a submenu selection
+    const k = v.cpSub.kind, sel = v.cpSub.sel;
+    if (k === 'screenmode') { v.screenMode = sel; v.zoom = 1; v.panX = 0; v.panY = 0; v.dispModeName = VID_SCREEN_MODES[sel]; v.dispModeUntil = performance.now() + 1800; }
+    else if (k === 'repeat') {
+      if (sel === 3) {   // A-B Repeat: progressive selection sets point A, then point B, then clears (firmware msg_repeat_ab; the A/B point-set UX/wording is not firmware-verifiable -> flagged)
+        const el = vidEnsureEl(); const ct = (el && isFinite(el.currentTime)) ? el.currentTime : 0;
+        if (v.abA == null) { v.abA = ct; v.abB = null; v.repeat = 3; v.dispModeName = 'A-B Repeat: Point A set'; }
+        else if (v.abB == null) { if (ct > v.abA + 0.5) { v.abB = ct; v.dispModeName = 'A-B Repeat: Point B set'; } else { v.dispModeName = 'A-B Repeat: Point A set'; } }   // B must be after A
+        else { v.abA = v.abB = null; v.repeat = 0; v.dispModeName = 'A-B Repeat Off'; }
+      } else { v.repeat = sel; v.abA = v.abB = null; v.dispModeName = VID_REPEAT_MODES[sel]; }
+      v.dispModeUntil = performance.now() + 1800;
+    }
+    else if (k === 'volume') { const vol = 1 - sel * 0.2; const el = vidEnsureEl(); el.volume = Math.max(0, Math.min(1, vol)); el.muted = (vol <= 0); v.dispModeName = 'Volume ' + v.cpSub.opts[sel]; v.dispModeUntil = performance.now() + 1800; }
+    else if (k === 'audio') { v.audioTrack = sel; }
+    else if (k === 'subtitle') { v.subTrack = sel - 1; }   // 0 = Off -> -1
+    else if (k === 'avset') { v.transient = { label: VID_AVSET[sel] + ' (demo)', until: performance.now() + 1600 }; }   // FLAG: real firmware video filter / upscale has no browser equivalent
+    v.cpSub = null; playNav2(); return;
+  }
+  const cp = vidCP(); const a = cp[v.cpSel] && cp[v.cpSel].act; const el = vidEnsureEl();
+  v.cpPress = {start: performance.now(), dur: 240, sel: v.cpSel};   // press dip + flash
+  const openSub = (kind, label, curSel) => { v.cpSub = {kind: kind, label: label, opts: vidSubOpts(kind), sel: curSel || 0}; };
+  // play + pause are SEPARATE firmware cells: play ensures playing, pause ensures paused.
+  if (a === 'play') { if (!v.playing || v.stopped) vidPlayToggle(); }
+  else if (a === 'pause') { if (v.playing && !v.stopped) vidPlayToggle(); }
+  else if (a === 'stop') vidStop();
+  else if (a === 'ffwd') vidScan(1);
+  else if (a === 'frev') vidScan(-1);
+  else if (a === 'sfwd') vidSlow(1);
+  else if (a === 'srev') vidSlow(-1);
+  else if (a === 'stepf') vidStepFrame(1);
+  else if (a === 'stepb') vidStepFrame(-1);
+  else if (a === 'flashf') { if (isFinite(el.duration)) { el.currentTime = Math.min(el.duration - 0.05, (el.currentTime || 0) + 15); v.transient = {label: 'Instant Advance', until: performance.now() + 1200}; } }   // msg_flash_f (+15s convention, flagged)
+  else if (a === 'flashr') { el.currentTime = Math.max(0, (el.currentTime || 0) - 15); v.transient = {label: 'Instant Replay', until: performance.now() + 1200}; }   // msg_flash_r (-15s)
+  else if (a === 'beginning') { if ((el.currentTime || 0) > 2) { el.currentTime = 0; v.transient = {label: 'Return to Beginning', until: performance.now() + 1000}; } else vidStepTitle(-1); }   // msg_beginning: restart, or (at start) previous title
+  else if (a === 'next') vidStepTitle(1);   // msg_next: next title (chapter nav is Scene Search only)
+  else if (a === 'showinfo') { v.osd = !v.osd; v.panel = false; }   // "Display": toggle the on-screen status display (OSD)
+  else if (a === 'screenmode') openSub('screenmode', 'Screen Mode', v.screenMode);
+  else if (a === 'repeat')     openSub('repeat', 'Repeat', v.repeat);
+  else if (a === 'volume')     openSub('volume', 'Volume Control', Math.max(0, Math.min(5, Math.round((1 - (isFinite(el.volume) ? el.volume : 1)) / 0.2))));
+  else if (a === 'audio')      { const it = vidCur(); if (!it || !it.audioTracks || !it.audioTracks.length) { v.panel = false; dialogState = {template:{type:'info', title:'', body:'There is no audio.'}, sel:0, anim:{start:performance.now(), dur:250}}; playNav2(); } else openSub('audio', 'Audio Options', v.audioTrack); }   // msg_error_no_audio
+  else if (a === 'subtitle')   { const it = vidCur(); if (!it || !it.subTracks || !it.subTracks.length) { v.panel = false; dialogState = {template:{type:'info', title:'', body:'There are no subtitle options available.'}, sel:0, anim:{start:performance.now(), dur:250}}; playNav2(); } else openSub('subtitle', 'Subtitle Options', v.subTrack + 1); }   // msg_error_no_subtitle
+  else if (a === 'avset')      openSub('avset', 'AV Settings', 0);
+  else if (a === 'goto')  vidGoToOpen();   // msg_goto: time-search (H:MM:SS entry -> seek; bounds -> msg_error_overlimit_goto)
+  else if (a === 'scene') vidSceneOpen();   // Scene Search = chapter navigation (firmware); grid UI is an approximation (firmware doesn't specify grid vs list), flagged
+  else if (a === 'del') {   // msg_del_playingtitle_ask -> msg_deleted (simulated, no data mutation, like the photo delete)
+    v.panel = false;
+    dialogState = { template:{type:'confirm', title:'', body:'The title that is currently playing will be deleted.\nAre you sure you want to continue?', defaultSel:1, cancelLabel:'Back'}, sel:1,
+      onYes: function () { dialogState = {template:{type:'info', title:'', body:'Delete completed.'}, sel:0, anim:{start:performance.now(), dur:250}}; playNav2(); },
+      anim:{start:performance.now(), dur:250} };
+  }
+  else if (a === 'chgicon') {   // firmware Change Icon: grab a frame from this scene and use it as the content's XMB thumbnail
+    v.panel = false;
+    const el = vidEnsureEl(); const it = vidCur();
+    const cur = (el && isFinite(el.currentTime)) ? el.currentTime : 0;
+    // Firmware: the icon is "15 seconds of video starting from this scene"; if fewer than 15s
+    // remain you get msg "You cannot create an icon less than %1 seconds in length." (%1 = 15).
+    if (el && isFinite(el.duration) && (el.duration - cur) < 15) {
+      dialogState = {template:{type:'info', title:'', body:'You cannot create an icon less than 15 seconds in length.'}, sel:0, anim:{start:performance.now(), dur:250}}; playNav2();
+    } else {
+      dialogState = { template:{type:'confirm', title:'', body:'15 seconds of video starting from this scene will be set as the icon.\nIf an icon has already been set, it will be overwritten.\nDo you want to continue?', defaultSel:1, cancelLabel:'Back'}, sel:1,
+        onYes: function () { vidCreateIcon(it, el); },
+        anim:{start:performance.now(), dur:250} };
+    }
+  }
+  playCursor();
+}
+
+// --- panel renderer (clone of drawPvPanel, video icon set) ---
+function drawVideoPanel(ctx2, tOverride) {
+  const v = videoPlayer; if (!v) return;
+  if (tOverride == null && !v.panel) return;
+  const CW = xmbCanvas.width, CH = xmbCanvas.height;
+  ctx2.save(); ctx2.setTransform(1, 0, 0, 1, 0, 0);
+  const t = (tOverride != null) ? tOverride : (v.panelAnim ? Math.min(1, (performance.now() - v.panelAnim.start) / v.panelAnim.dur) : 1);
+  // Same toolbar geometry as the photo control panel (drawPvPanel) - upper-left, 3 rows.
+  const x0 = CW * 0.1589 - (1 - t) * CW * 0.012, y0 = CH * 0.4148, colW = CW * 0.03526, rowH = CH * 0.061, sz = CH * 0.060;
+  const cp = vidCP(), pr = v.cpPress, pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.0042);
+  for (let i = 0; i < cp.length; i++) {
+    const b = cp[i], focus = (i === v.cpSel);
+    const cx = x0 + b.gx * colW, cy = y0 + b.gy * rowH;
+    const ic = vidIcon(b.ic);   // play + pause are separate firmware cells (ic 6 / 8); no glyph swap
+    let scale = focus ? 1.5 : 1.0;
+    if (v.cpFocusStart) { const fe = Math.min(1, (performance.now() - v.cpFocusStart) / 140), fk = 1 - Math.pow(1 - fe, 3);
+      if (focus) scale = 1.0 + 0.5 * fk; else if (i === v.cpSelPrev) scale = 1.5 - 0.5 * fk; }
+    let ps = scale, flash = 0;
+    if (pr && pr.sel === i) { const e = (performance.now() - pr.start) / pr.dur; if (e < 1) { const sp = Math.sin(e * Math.PI); ps *= (1 - 0.18 * sp); flash = sp * 0.55; } }
+    const drawI = (al) => { if (!ic || !ic.loaded || !ic.img) return; const s = sz * ps; ctx2.globalAlpha = t * al; ctx2.drawImage(ic.img, cx - s / 2, cy - s / 2, s, s); };
+    if (focus) {
+      ctx2.shadowOffsetX = 0; ctx2.shadowOffsetY = 0;
+      ctx2.shadowColor = 'rgba(220,235,255,' + (0.22 + 0.18 * pulse).toFixed(3) + ')'; ctx2.shadowBlur = 9 + 6 * pulse;
+      drawI(0.35); ctx2.shadowColor = 'rgba(0,0,0,0)'; ctx2.shadowBlur = 0; drawI(1.0);
+    } else { ctx2.shadowColor = 'rgba(0,0,0,0.5)'; ctx2.shadowBlur = 5; ctx2.shadowOffsetY = 2; drawI(0.85); ctx2.shadowColor = 'rgba(0,0,0,0)'; ctx2.shadowBlur = 0; ctx2.shadowOffsetY = 0; }
+    if (flash > 0) drawI(flash);
+  }
+  // focused-item label + button-hint pills (SELECT on Display, START on Play, like the photo panel)
+  const fb = cp[v.cpSel];
+  if (fb) {
+    let lbl = fb.label;
+    if (fb.act === 'ffwd' && v.rate > 1) lbl = 'Fast Forward  x ' + (Math.abs(v.rate) === 1.5 ? '1.5' : Math.abs(v.rate));
+    else if (fb.act === 'frev' && v.rate < -1) lbl = 'Fast Reverse  x ' + (Math.abs(v.rate) === 1.5 ? '1.5' : Math.abs(v.rate));
+    // beginning cell: firmware shows "Previous" at the start of a title (goes to prev title), else "Return to Beginning"
+    else if (fb.act === 'beginning') { const ct = (vidEl && isFinite(vidEl.currentTime)) ? vidEl.currentTime : 0; lbl = (ct > 2) ? 'Return to Beginning' : 'Previous'; }
+    ctx2.globalAlpha = t; ctx2.textAlign = 'left'; ctx2.textBaseline = 'alphabetic';
+    ctx2.font = Math.round(CH * 0.024) + 'px PS3'; ctx2.fillStyle = 'rgb(245,245,245)';
+    ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 4;
+    const lx = x0 + colW * 0.1, ly = y0 + 2.9 * rowH; ctx2.fillText(lbl, lx, ly);
+    ctx2.shadowColor = 'rgba(0,0,0,0)'; ctx2.shadowBlur = 0;
+    const lw = ctx2.measureText(lbl).width, pillH = CH * 0.030, gap = CW * 0.006;
+    const pillTxt = (fb.act === 'showinfo') ? 'SELECT' : (fb.act === 'play') ? 'START' : null;   // SELECT toggles Display, START toggles Play
+    if (!v.cpSub && pillTxt) { ctx2.font = Math.round(pillH * 0.46) + 'px PS3'; const pw = ctx2.measureText(pillTxt).width + CW * 0.012; drawMpPill(ctx2, lx + lw + gap, ly - pillH * 0.82, pw, pillH, pillTxt); }
+  }
+  // control submenu (Screen Mode / Audio / Subtitle / CC / Repeat / AV Settings)
+  if (v.cpSub) {
+    ctx2.globalAlpha = t;
+    const sx = x0 + colW * 0.1, sy = y0 + 3.5 * rowH, lh = CH * 0.045, fs = Math.round(CH * 0.026);
+    const opts = v.cpSub.opts; let mw = 0; ctx2.font = fs + 'px PS3';
+    for (const o of opts) mw = Math.max(mw, ctx2.measureText(o).width);
+    ctx2.globalAlpha = 1; ctx2.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx2.fillRect(sx - fs * 0.6, sy - lh * 0.7, mw + fs * 1.6, lh * opts.length + lh * 0.3);
+    ctx2.textAlign = 'left'; ctx2.textBaseline = 'middle';
+    for (let i = 0; i < opts.length; i++) {
+      const oy = sy + i * lh + lh * 0.1, sel = (i === v.cpSub.sel);
+      if (sel) { ctx2.fillStyle = 'rgba(255,255,255,0.20)'; ctx2.fillRect(sx - fs * 0.4, oy - lh * 0.45, mw + fs * 0.8, lh * 0.9); }
+      ctx2.font = (sel ? '' : '300 ') + fs + 'px PS3'; ctx2.fillStyle = sel ? 'rgb(255,255,255)' : 'rgba(225,225,228,0.85)';
+      ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 3; ctx2.fillText(opts[i], sx, oy); ctx2.shadowBlur = 0;
+    }
+  }
+  ctx2.restore();
+}
+
+// --- Display info overlay (firmware fields; real dur/w/h from <video>, rest authored demo data) ---
+function drawVideoPlayer(ctx2) {
+  const v = videoPlayer;
+  const CW = xmbCanvas.width, CH = xmbCanvas.height, now = performance.now();
+  if (v) vidTick();
+  ctx2.save(); ctx2.setTransform(1, 0, 0, 1, 0, 0); ctx2.globalAlpha = 1;
+  ctx2.fillStyle = '#000'; ctx2.fillRect(0, 0, CW, CH);
+  const el = vidEl;
+  // 1. video frame, fit per Screen Mode (+ zoom/pan), faded in from black via vidEnterT
+  if (el && el.readyState >= 2 && el.videoWidth) {
+    const vw = el.videoWidth, vh = el.videoHeight; const m = v ? v.screenMode : 0;
+    let fit;
+    if (m === 1) fit = Math.max(CW / vw, CH / vh);            // Full Screen (cover)
+    else if (m === 2) fit = 1;                                 // Original (1:1)
+    else if (m === 3) fit = Math.max(CW / vw, CH / vh) * 1.33; // Zoom
+    else if (m === 4) fit = 2;                                 // Double Scale
+    else fit = Math.min(CW / vw, CH / vh);                     // Normal (contain)
+    fit *= (v ? (v.zoom || 1) : 1);
+    const dw = vw * fit, dh = vh * fit, dx = (CW - dw) / 2 + (v ? (v.panX || 0) : 0), dy = (CH - dh) / 2 + (v ? (v.panY || 0) : 0);
+    ctx2.globalAlpha = vidEnterT;
+    try { ctx2.drawImage(el, dx, dy, dw, dh); } catch (e) {}
+    ctx2.globalAlpha = 1;
+  }
+  if (!v) { ctx2.restore(); return; }   // exit fade after close: black frame only
+  // 1b. subtitle render: the active cue of the selected sub track (real caption rendering; demo cue text)
+  if (v.subTrack >= 0 && el && isFinite(el.currentTime)) {
+    const it = vidCur(), tn = it && it.subTracks && it.subTracks[v.subTrack], cues = it && it.subCues && tn && it.subCues[tn];
+    if (cues) { const tc = el.currentTime; let txt = null; for (const c of cues) if (tc >= c.t && tc < c.t + c.d) { txt = c.text; break; }
+      if (txt) { ctx2.globalAlpha = vidEnterT; ctx2.textAlign = 'center'; ctx2.textBaseline = 'alphabetic'; ctx2.font = Math.round(CH * 0.040) + 'px PS3';
+        ctx2.lineWidth = CH * 0.006; ctx2.strokeStyle = 'rgba(0,0,0,0.9)'; ctx2.fillStyle = 'rgba(255,255,255,0.98)';
+        ctx2.strokeText(txt, CW / 2, CH * 0.855); ctx2.fillText(txt, CW / 2, CH * 0.855); ctx2.globalAlpha = 1; } }
+  }
+  // 2. buffering spinner
+  if (v.buffering) { const ic = vidIcon(114); if (ic && ic.loaded && ic.img) { const s = CH * 0.06; ctx2.save(); ctx2.translate(CW / 2, CH / 2); ctx2.rotate((now / 600) % (Math.PI * 2)); ctx2.globalAlpha = vidEnterT * 0.9; ctx2.drawImage(ic.img, -s / 2, -s / 2, s, s); ctx2.restore(); }
+    ctx2.globalAlpha = vidEnterT * 0.9; ctx2.textAlign = 'center'; ctx2.textBaseline = 'middle'; ctx2.font = Math.round(CH * 0.024) + 'px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.9)'; ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 4; ctx2.fillText('Buffering...', CW / 2, CH / 2 + CH * 0.07); ctx2.shadowBlur = 0; ctx2.globalAlpha = 1; }   // msg_buffering
+  // 3. seek/progress bar + transport state (auto-hides with the help hint)
+  const hintA = Math.max(0, Math.min(1, (v.hintUntil - now) / 600)) * vidEnterT;
+  if ((hintA > 0.01 || v.panel || v.osd) && el && isFinite(el.duration) && el.duration) {
+    const a = (v.panel || v.osd) ? vidEnterT : hintA;   // v.osd = the persistent "Display" status toggle
+    const bx = CW * 0.10, bw = CW * 0.80, by = CH * 0.90, bh = CH * 0.006;
+    const frac = Math.max(0, Math.min(1, (el.currentTime || 0) / el.duration));
+    ctx2.globalAlpha = a; ctx2.fillStyle = 'rgba(255,255,255,0.25)'; ctx2.fillRect(bx, by, bw, bh);
+    ctx2.fillStyle = 'rgba(255,255,255,0.95)'; ctx2.fillRect(bx, by, bw * frac, bh);
+    ctx2.beginPath(); ctx2.arc(bx + bw * frac, by + bh / 2, CH * 0.008, 0, Math.PI * 2); ctx2.fill();
+    const it3 = vidCur();   // chapter markers (ticks at each chapter time)
+    if (it3 && it3.chapters && it3.chapters.length > 1) { ctx2.fillStyle = 'rgba(255,255,255,0.65)'; for (const ct of it3.chapters) { const cf = Math.max(0, Math.min(1, ct / el.duration)); ctx2.fillRect(bx + bw * cf - 1, by - bh, 2, bh * 3); } }
+    if (v.repeat === 3 && (v.abA != null || v.abB != null)) {   // A-B Repeat markers + loop-region highlight
+      const af = v.abA != null ? Math.max(0, Math.min(1, v.abA / el.duration)) : null, bf = v.abB != null ? Math.max(0, Math.min(1, v.abB / el.duration)) : null;
+      if (af != null && bf != null) { ctx2.fillStyle = 'rgba(120,200,255,0.45)'; ctx2.fillRect(bx + bw * af, by, bw * (bf - af), bh); }
+      ctx2.fillStyle = 'rgba(120,200,255,0.95)'; ctx2.font = Math.round(CH * 0.018) + 'px PS3'; ctx2.textBaseline = 'alphabetic';
+      if (af != null) { ctx2.fillRect(bx + bw * af - 1, by - bh, 2, bh * 3); ctx2.textAlign = 'center'; ctx2.fillText('A', bx + bw * af, by - bh * 2.5); }
+      if (bf != null) { ctx2.fillRect(bx + bw * bf - 1, by - bh, 2, bh * 3); ctx2.textAlign = 'center'; ctx2.fillText('B', bx + bw * bf, by - bh * 2.5); }
+    }
+    const mmss = (s) => { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, '0'); };
+    ctx2.font = Math.round(CH * 0.020) + 'px PS3'; ctx2.fillStyle = 'rgba(245,245,245,0.95)';
+    ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 4;
+    ctx2.textAlign = 'left'; ctx2.textBaseline = 'alphabetic'; ctx2.fillText(mmss(el.currentTime || 0), bx, by - CH * 0.012);
+    ctx2.textAlign = 'right'; ctx2.fillText(mmss(el.duration), bx + bw, by - CH * 0.012);
+    // title + paused/scan indicator (top-left)
+    ctx2.textAlign = 'left'; ctx2.font = Math.round(CH * 0.026) + 'px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.95)';
+    const it2 = vidCur(); ctx2.fillText((it2 ? it2.n : '') + (!v.playing ? '   (Paused)' : ''), bx, CH * 0.10);
+    ctx2.shadowBlur = 0;
+  }
+  // 4. transient transport flash (FF x10 / Slow / Go To / etc.) - top-center
+  if (v.transient && now < v.transient.until) {
+    const a = Math.min(1, (v.transient.until - now) / 400) * vidEnterT;
+    ctx2.globalAlpha = a; ctx2.textAlign = 'center'; ctx2.textBaseline = 'middle';
+    ctx2.font = Math.round(CH * 0.045) + 'px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx2.shadowColor = 'rgba(0,0,0,0.85)'; ctx2.shadowBlur = 8; ctx2.fillText(v.transient.label, CW / 2, CH * 0.14); ctx2.shadowBlur = 0;
+  }
+  // 5. screen-mode transient pill (mirrors the photo dispMode pill)
+  if (v.dispModeName && now < v.dispModeUntil) {
+    const a = Math.min(1, (v.dispModeUntil - now) / 400) * vidEnterT;
+    ctx2.globalAlpha = a; ctx2.textAlign = 'left'; ctx2.textBaseline = 'middle';
+    ctx2.font = Math.round(CH * 0.028) + 'px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx2.shadowColor = 'rgba(0,0,0,0.85)'; ctx2.shadowBlur = 6; ctx2.fillText(v.dispModeName, CW * 0.057, CH * 0.82); ctx2.shadowBlur = 0;
+  }
+  // 6. CC indicator (when Closed Captions on) - flagged: state only, the test clips carry no caption track
+  if (v.ccOn) { ctx2.globalAlpha = vidEnterT * 0.9; ctx2.textAlign = 'right'; ctx2.textBaseline = 'middle'; ctx2.font = Math.round(CH * 0.022) + 'px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.9)'; ctx2.fillText('CC', CW * 0.94, CH * 0.10); }
+  // 7. "Display" status: handled by the OSD in section 3 (v.osd persists the title/progress/time bar).
+  // 8. auto-hiding help hint (Triangle = Control Panel, PS = Home Menu) - bottom-right, like the photo viewer
+  if (hintA > 0.01 && !v.panel) {
+    ctx2.globalAlpha = hintA; ctx2.textAlign = 'left'; ctx2.textBaseline = 'middle';
+    const fs = Math.round(CH * 0.021), pad = CW * 0.012; ctx2.font = fs + 'px PS3';
+    const l1 = ':  Control Panel', l2 = ':  Home Menu';
+    const tw = Math.max(ctx2.measureText(l1).width, ctx2.measureText(l2).width) + CH * 0.04 + pad * 2;
+    const ph = fs * 2 + CH * 0.026, px = CW - tw - CW * 0.03, py = CH * 0.86;
+    ctx2.fillStyle = 'rgba(60,60,66,0.72)'; roundRect(ctx2, px, py, tw, ph, ph * 0.18); ctx2.fill();
+    const gy1 = py + ph * 0.30, gy2 = py + ph * 0.70, gx = px + pad, gs = CH * 0.026;
+    // filled green triangle (Triangle button) + dark PS circle
+    ctx2.fillStyle = 'rgba(120,210,120,0.95)'; ctx2.beginPath(); ctx2.moveTo(gx + gs / 2, gy1 - gs / 2); ctx2.lineTo(gx + gs, gy1 + gs / 2); ctx2.lineTo(gx, gy1 + gs / 2); ctx2.closePath(); ctx2.fill();
+    const pr2 = gs / 2; const grd = ctx2.createRadialGradient(gx + pr2, gy2 - pr2 * 0.3, 1, gx + pr2, gy2, pr2); grd.addColorStop(0, 'rgba(74,74,80,0.98)'); grd.addColorStop(1, 'rgba(12,12,16,0.98)');
+    ctx2.fillStyle = grd; ctx2.beginPath(); ctx2.arc(gx + pr2, gy2, pr2, 0, Math.PI * 2); ctx2.fill();
+    ctx2.fillStyle = 'rgba(255,255,255,0.95)'; ctx2.font = Math.round(gs * 0.5) + 'px PS3'; ctx2.textAlign = 'center'; ctx2.fillText('PS', gx + pr2, gy2 + 1);
+    ctx2.textAlign = 'left'; ctx2.font = fs + 'px PS3'; ctx2.fillStyle = 'rgba(240,240,240,0.95)';
+    ctx2.fillText(l1, gx + gs + CH * 0.012, gy1); ctx2.fillText(l2, gx + gs + CH * 0.012, gy2);
+  }
+  // 9. control panel last (slide-in / slide-out)
+  if (v.panel) drawVideoPanel(ctx2);
+  else if (v.panelClosing) { const p = Math.min(1, (now - v.panelClosing.start) / v.panelClosing.dur); drawVideoPanel(ctx2, 1 - p); if (p >= 1) v.panelClosing = null; }
+  ctx2.restore();
+  // 10. Scene Search chapter grid + Go To time-search (modal, over everything)
+  if (v.sceneSearch) drawVideoScene(ctx2);
+  if (v.goTo) drawVideoGoTo(ctx2);
 }
 
 function drawMusicPlayer(ctx2) {
@@ -12325,7 +13098,16 @@ function buildOptRows() {
   // Firmware-captured photo bits (RPCS3 live, xmb-ref/photo/live2): Sort By = "Film
   // Date" (default ascending); Slideshow START with the 5 styles.
   const photoStyles = [{label:'Normal',sstyle:0},{label:'Slide',sstyle:1},{label:'Portrait',sstyle:2},{label:'Photo Album',sstyle:3},{label:'Photo Album 2',sstyle:4}];
-  const photoSortBy = {label:'Sort By', subDef:1, sub:[{label:'Film Date ▼',sort:'desc'},{label:'Film Date ▲',sort:'asc'}]};
+  // Photo Sort By submenu = 5 firmware options (explore_category_photo.rco; verified 1:1
+  // vs live RPCS3 in-album Sort By): Film Date desc/asc, Import Date desc/asc, Image Name.
+  // Default focus = Film Date ascending (subDef 1), matching the live default.
+  const photoSortBy = {label:'Sort By', subDef:1, sub:[
+    {label:'Film Date ▼',   sort:'desc', field:'film'},
+    {label:'Film Date ▲',   sort:'asc',  field:'film'},
+    {label:'Import Date ▼', sort:'desc', field:'import'},
+    {label:'Import Date ▲', sort:'asc',  field:'import'},
+    {label:'Image Name',         sort:'asc',  field:'name'}
+  ]};
   const rows = [];
   // ---- TOP GROUP ----
   if (inContent && !inside) {
@@ -12371,6 +13153,7 @@ function openOptMenu() {
   if (photoMulti) return;   // multi-select screen owns its own input
   // Photo Viewer: TRIANGLE toggles the viewer CONTROL PANEL (rotate/zoom/slideshow/etc).
   if (photoViewer) { if (photoViewer.panel) pvPanelClose(); else pvPanelOpen(); return; }
+  if (videoPlayer) { if (videoPlayer.sceneSearch || videoPlayer.goTo) return; if (videoPlayer.panel) vidPanelClose(); else vidPanelOpen(); return; }
   if (musicPlayer && !wizState && !dialogState) {   // Now Playing: TRIANGLE TOGGLES the control/options panel (firmware show/hide)
     if (optMenu && optMenu.player) closeMpOpt(); else openMpOpt();
     return;
@@ -12420,7 +13203,17 @@ function optBack() {
 function applyOptSub(sr) {
   const cat = DATA[ci];
   if (sr.group != null) { cat._groupIdx = sr.group; regroupContent(cat); groupReflow = {start: performance.now()}; showGroupBanner(cat.groupModes[sr.group]); }
-  else if (sr.sort) { cat._sortDir = sr.sort; }
+  else if (sr.sort) {
+    // Apply the Sort By selection: store field+direction. The actual re-sort + re-group
+    // animation + (in a photo album grid) the stack-frame items refresh are PHOTO-ONLY;
+    // music Sort By stays a stored-only no-op (committed behavior - music must stay unaffected).
+    cat._sortDir = sr.sort; if (sr.field) cat._sortField = sr.field;
+    if (cat.content === 'photo') {
+      regroupContent(cat);
+      if (stack.length === 1) stack[0].items = DATA[ci].items;
+      groupReflow = {start: performance.now()};
+    }
+  }
   else if (sr.sstyle != null) { pgStartSlideshow(sr.sstyle); return; }   // photo Slideshow style -> start the show
   closeOptMenu();
 }
@@ -12450,6 +13243,7 @@ function doOptAction(act) {
     optMenu = null;
     if (it && it.mtype === 'track') openMusicPlayer(items, ii);
     else if (it && it.mtype === 'album' && it.ch) openMusicPlayer(it.ch, 0);
+    else if (it && it.mtype === 'video') openVideoPlayer(items, ii);
     return;
   }
   if (act === 'addpl') {
@@ -12563,13 +13357,29 @@ function regroupContent(cat) {
   let grouped = [];
   if (cat.content === 'photo') {
     // Photo grouping (firmware Group Content: By Month / By Year / By Album / All).
-    const photos = tracks;   // the album's children are photo items here
+    // Sort By (firmware): re-order the photos by the chosen field + direction before
+    // grouping. Default = Film Date ascending (matches the RPCS3 grp_all default order).
+    // Film Date = capture date; Image Name = filename (numeric-aware). Import Date has
+    // no separate field in this data, so it falls back to the original file order
+    // (FLAGGED: the real PS3 tracks an import date we don't have). Sorts a COPY so the
+    // base `tracks` array stays in its original (import-proxy) order.
+    const photos = tracks.slice();
+    const sd = cat._sortDir || 'asc', sf = cat._sortField || 'film';
+    if (sf === 'name') photos.sort((a, b) => String(a.n).localeCompare(String(b.n), undefined, {numeric: true}) * (sd === 'asc' ? 1 : -1));
+    else if (sf === 'import') { if (sd === 'desc') photos.reverse(); }
+    else photos.sort((a, b) => { const x = a.date || '', y = b.date || ''; return (x < y ? -1 : x > y ? 1 : 0) * (sd === 'asc' ? 1 : -1); });
     const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     const cnt = a => a.length + (a.length > 1 ? ' Images' : ' Image');
-    // Group folder = the firmware photo-folder frame (explore_category_photo.rco
-    // icon 021: white folder, top-left tab) with the cover photo composited into
-    // its body. Pre-rendered per photo at photos/folder/<name>.png.
-    const cover = a => (a[0] && a[0].n) ? ('asset:photos/folder/' + a[0].n + '.png') : 'asset:images/icon_fw_folder.png';
+    // Group folder = the firmware photo-folder: explore_category_photo.rco frame
+    // (icon 021 silver folder, top-left tab) with the group's COVER photo composited
+    // into the body. RPCS3 ground truth (grp_by_month.png, the same By-Month state:
+    // "Jul 2014"/"Apr 2024") renders date/album groups exactly like this - a folder
+    // with the first photo inside (inactive ~79x69 px, focused ~151x133 px). When a
+    // group has NO usable cover photo the firmware falls back to icon_054 (the plain
+    // photo-folder with a camera-lens motif lower-left, seen on "Jun 2026" in
+    // win_photocol2). Composite assets are cropped to content so they fill the icon
+    // box at the correct size (pre-rendered per cover photo at photos/folder/<name>.png).
+    const cover = a => (a[0] && a[0].n) ? ('asset:photos/folder/' + a[0].n + '.png') : 'asset:photos/folder_icon054.png';
     if (mode === 'All') grouped = photos.slice();                       // flat list of individual photos
     else if (mode === 'By Album') grouped = [{n: 'Unknown', mtype: 'album', photoGroup: true,
         d: cnt(photos), i: cover(photos), ch: photos}];                 // no album EXIF -> firmware shows "Unknown"
@@ -12655,26 +13465,55 @@ function drawOptMenu(ctx2) {
   // text 1340). Over a black theme it reads lavender; over green it reads
   // grey-green (semi-transparent). Rows: Sort By / Group Content at the top,
   // a gap, then Play / Copy / Add to Playlist / Delete / Information.
-  const TX = XCP(1340), PITCH = 38;
+  // Photo option menus use a slightly larger row pitch + lower bottom-group anchor,
+  // measured 1:1 from folder_options.png (1920x1080): top 270/310 = pitch 40, bottom
+  // group anchored at 550 (550/590/630/670/710). Music/Settings/etc stay at the
+  // committed 38/546 (the cron's "Music browser must stay unaffected" is explicit), so
+  // this is photo-gated -- consistent with the other photo-specific values
+  // (PHOTO_FOLDER_TEXT_X etc). Fixes the photo in-album bottom rows (~16px too high).
+  const isPhotoOpt = DATA[ci] && DATA[ci].content === 'photo';
+  const TX = XCP(1340), PITCH = isPhotoOpt ? 40 : 38;
   // Animation (measured music.mp4 f126-130): the panel FADES in over ~0.13s
   // with only a small ~37px leftward settle -- it does NOT slide the full
   // panel width. ap drives the fade; xs is the tiny settle offset.
   const ease = ap*ap*(3-2*ap), xs = (1 - ease) * XCF(37);
-  if (o.subOpen) drawOptPanel(ctx2, -XCP(330), ap);   // submenu column (shifted left)
-  drawOptPanel(ctx2, xs, ap);
+  // When a submenu is open the MAIN column slides LEFT and the submenu takes the
+  // original (rightmost) slot - matches RPCS3 (Group Content submenu opens to the RIGHT
+  // with the parent shifted left + a back-arrow). Earlier the submenu opened to the LEFT
+  // of a stationary main column (wrong side; verified vs live RPCS3 2026-06-15). Both
+  // columns get the lavender panel; non-submenu menus stay byte-identical to before.
+  if (o.subOpen) drawOptPanel(ctx2, -XCP(330), ap);   // left column background
+  drawOptPanel(ctx2, xs, ap);                          // right column background
   ctx2.globalAlpha = ap;
-  let y = 270;
+  // PHOTO opt menu: when a submenu opens, the main column slides left and the submenu takes the
+  // right slot. MUSIC keeps the committed layout (main stays at 1340, submenu drawn on the left) -
+  // music must stay byte-identical, so gate the side-swap to photo.
+  const mainLX = (isPhotoOpt && o.subOpen) ? (1340 - 330) : 1340;
+  const arrowLX = (isPhotoOpt && o.subOpen) ? (1565 - 330) : 1565;
+  let y = 270, parentY = 270;
   for (let i = 0; i < o.rows.length; i++) {
     const r = o.rows[i];
-    if (r.sep) { y += 200; continue; }   // gap between the view group and actions
+    // Bottom (per-item action) group is ANCHORED at a fixed Y, not offset by a fixed
+    // gap. RPCS3 (folder_options vs inalbum_options): the default-focused first action
+    // sits at ~the same screen Y regardless of how many top-group rows precede it, so
+    // the separator gap SHRINKS as the top group grows (folder 2 rows -> gap ~236;
+    // photo in-album 4 rows -> gap ~147). A fixed +200 pushed the 4-row photo in-album
+    // group ~80px too low. 546 = 270 + 2*38 + 200, i.e. identical to the old result for
+    // 2-row menus (photo folder + ALL music menus stay pixel-identical) and correct for
+    // the 4-row photo in-album. max() keeps a sane floor if a top group ever grows past it.
+    if (r.sep) { y = Math.max(y + 40, isPhotoOpt ? 550 : 546); continue; }
     // Submenu ">" arrows are RIGHT-ALIGNED to a fixed column (RPCS3 live: both the
     // Sort By and Slideshow arrows sit at the same x, ~0.815 of screen width = vx1565),
     // NOT trailing the label.
-    drawOptRow(ctx2, r.label, TX + xs, y, (i === o.sel && !o.subOpen), !!r.sub, r.icon, o.subOpen, r.start, XCP(1565) + xs);
+    drawOptRow(ctx2, r.label, XCP(mainLX) + xs, y, (i === o.sel && !o.subOpen), !!r.sub, r.icon, o.subOpen, r.start, XCP(arrowLX) + xs, (isPhotoOpt && i === o.sel && o.subOpen));
+    if (i === o.sel) parentY = y;   // remember the open-parent row's y for submenu alignment
     y += PITCH;
   }
   if (o.subOpen) {
-    const sx = XCP(1340 - 330); let sy = 270;
+    // The submenu's SELECTED row aligns with the parent row (RPCS3: Sort By parent y350
+    // <-> Film Date default y350; Group Content parent y309 <-> By Month y309). Photo-gated
+    // -- music submenus keep the committed fixed 270 ("Music browser must stay unaffected").
+    const sx = isPhotoOpt ? (XCP(1340) + xs) : XCP(1340 - 330); let sy = isPhotoOpt ? (parentY - o.subSel * PITCH) : 270;
     for (let i = 0; i < o.subRows.length; i++) {
       drawOptRow(ctx2, o.subRows[i].label, sx, sy, i === o.subSel, false, false, false);
       sy += PITCH;
@@ -12714,7 +13553,7 @@ function drawGroupIcon(ctx2, x, y) {
 // Options row matching the real XMB options menu: uniform-size white labels,
 // the SELECTED row gets a glossy highlight bar (not larger text). `dim` fades
 // the parent column when a submenu is open.
-function drawOptRow(ctx2, label, x, y, sel, arrow, icon, dim, start, arrowX) {
+function drawOptRow(ctx2, label, x, y, sel, arrow, icon, dim, start, arrowX, openParent) {
   ctx2.save(); ctx2.textBaseline = 'middle'; ctx2.textAlign = 'left';
   ctx2.font = '23px PS3';
   const w = ctx2.measureText(label).width;
@@ -12735,7 +13574,9 @@ function drawOptRow(ctx2, label, x, y, sel, arrow, icon, dim, start, arrowX) {
     ctx2.font = '16px PS3';
     // Fixed right-aligned column (firmware), falling back to trailing the label.
     const ax = (arrowX != null) ? arrowX : (x + w + iconGap + startGap + 8);
-    ctx2.fillText('▶', ax, y);
+    // The parent of an OPEN submenu shows a back-arrow (◄) - its submenu is to the
+    // right and focus has moved into it (RPCS3 folder Group Content). Others show ▶.
+    ctx2.fillText(openParent ? '◄' : '▶', ax, y);
   }
   ctx2.restore();
 }
@@ -13361,6 +14202,13 @@ function navCat(dir, fromRepeat) {
     if (photoViewer.panel) pvPanelMove(dir > 0 ? 1 : -1, 0); else pvStep(dir > 0 ? 1 : -1);
     return;
   }
+  // Video player: Scene Search grid nav; else panel focus; else LEFT/RIGHT seek -/+10s.
+  if (videoPlayer && !dialogState) {
+    if (videoPlayer.goTo) vidGoToMove(dir > 0 ? 1 : -1);
+    else if (videoPlayer.sceneSearch) vidSceneMove(dir > 0 ? 1 : -1);
+    else if (videoPlayer.panel) vidPanelMove(dir > 0 ? 1 : -1, 0); else vidSeek(dir > 0 ? 10 : -10);
+    return;
+  }
   // Music player: if the control panel is OPEN, LEFT/RIGHT moves the button focus;
   // only with the panel closed does LEFT/RIGHT skip track (else the panel can't be navigated).
   if (musicPlayer && !dialogState && !wizState) {   // a player dialog (delete/quit) or OSK takes the D-pad when open
@@ -13471,6 +14319,7 @@ function navCat(dir, fromRepeat) {
 function navItem(dir, fromRepeat) {
   // Photo Viewer: UP/DOWN moves the control-panel focus when open; otherwise consumed.
   if (photoViewer && !dialogState) { if (photoViewer.panel) pvPanelMove(0, dir > 0 ? 1 : -1); return; }
+  if (videoPlayer && !dialogState) { if (videoPlayer.goTo) vidGoToAdjust(dir > 0 ? -1 : 1); else if (videoPlayer.sceneSearch) vidSceneMove(dir > 0 ? 1 : -1); else if (videoPlayer.panel) vidPanelMove(0, dir > 0 ? 1 : -1); return; }
   // Music player: if the control panel is OPEN, UP/DOWN moves the button focus;
   // with the panel closed the player ignores up/down.
   if (musicPlayer && !dialogState && !wizState) {
@@ -13555,6 +14404,13 @@ function enter() {
     if (photoViewer.panel) pvPanelActivate();
     return;
   }
+  // Video player: Go To/Scene Search -> confirm; panel open -> activate control; else toggle Play/Pause.
+  if (videoPlayer && !dialogState) {
+    if (videoPlayer.goTo) { vidGoToActivate(); return; }
+    if (videoPlayer.sceneSearch) { vidSceneActivate(); return; }
+    if (videoPlayer.panel) vidPanelActivate(); else vidPlayToggle();
+    return;
+  }
   // Now Playing CONTROL PANEL (Triangle) owns Cross = ACTIVATE the focused button. This must be checked
   // BEFORE the play/pause toggle below, otherwise Cross toggles playback and the panel buttons can never
   // be selected (the user's "can't select any of the icons").
@@ -13571,6 +14427,7 @@ function enter() {
   // side-effects (matching prior behaviour).
   if (dialogState) {
     const tpl = dialogState.template;
+    if (tpl && tpl.busy) return;   // busy/progress dialog (e.g. "Creating icon...") swallows input until it self-replaces
     // Confirm dialogs with a callback (e.g. the music-player Delete/Quit confirms). sel 0 = Yes.
     if (dialogState.onYes) { const yes = (dialogState.sel === 0), cb = dialogState.onYes, oc = dialogState.onCancel; dialogState = null; if (yes) cb(); else if (oc) oc(); playNav2(); return; }
     // Generic chooser with a callback (e.g. Add to Playlist -> pick existing / New Playlist).
@@ -13663,6 +14520,7 @@ function enter() {
   }
   // Photo (mtype:'photo'): CROSS opens the full-screen Photo Viewer on the current list of photos.
   if (it.mtype === 'photo') { openPhotoViewer(items, ii); return; }
+  if (it.mtype === 'video') { openVideoPlayer(items, ii); return; }
   if (!it.ch) return;
   const parentItems = items;
   const parentIdx = ii;
@@ -13696,6 +14554,14 @@ function back() {
     if (photoViewer.slideshow) { photoViewer.slideshow = false; photoViewer.hintUntil = performance.now() + 1500; return; }
     closePhotoViewer(); return;
   }
+  // Video player: Circle closes Go To, then Scene Search, then a submenu, then the panel, then exits.
+  if (videoPlayer && !dialogState) {
+    if (videoPlayer.goTo) { vidGoToClose(); return; }
+    if (videoPlayer.sceneSearch) { vidSceneClose(); return; }
+    if (videoPlayer.cpSub) { videoPlayer.cpSub = null; playNav(); return; }
+    if (videoPlayer.panel) { vidPanelClose(); return; }
+    closeVideoPlayer(); return;
+  }
   // Now Playing CONTROL PANEL / Volume submenu: Circle/Back closes those FIRST (optBack: volume -> panel ->
   // player), and only THEN does Circle exit Now Playing. This must precede the closeMusicPlayer line below,
   // otherwise Circle in the open panel exits the whole player instead of just closing the panel.
@@ -13710,6 +14576,7 @@ function back() {
   if (dialogState) {
     // Cancelled chooser: revert the live hover-preview to the original pick.
     const _t = dialogState.template;
+    if (_t && _t.busy) return;   // busy/progress dialog is not dismissable
     if (_t && _t.themeKey && (_t.type === 'chooser' || _t.type === 'chooser_illust')) {
       previewThemeSelection(_t.themeKey, dialogState.origSel);
     }
@@ -13747,6 +14614,7 @@ function back() {
     parentItems: parentItems,
     parentIdx: f.pi,
     childItems: childItems,
+    childSel: ii,   // remember which child was focused so a photo-album grid fades out on the RIGHT thumb (not thumb 0) during the back-out
     // Match the snappy easeOutCubic used for entering / category scrolling.
     ease: easeOutCubic
   };
@@ -13852,6 +14720,41 @@ function getKeyAction(key, fromRepeat) {
     switch (key) {
       case 'ArrowLeft':  return () => pvStep(-1);
       case 'ArrowRight': return () => pvStep(1);
+      case 'ArrowUp': case 'ArrowDown': return () => {};
+      default: return null;
+    }
+  }
+  // Video player: Scene Search grid nav; panel open -> toolbar/submenu focus; panel closed -> LEFT/RIGHT seek.
+  if (videoPlayer && !dialogState) {
+    if (videoPlayer.goTo) {
+      switch (key) {
+        case 'ArrowLeft':  return () => vidGoToMove(-1);
+        case 'ArrowRight': return () => vidGoToMove(1);
+        case 'ArrowUp':    return () => vidGoToAdjust(1);
+        case 'ArrowDown':  return () => vidGoToAdjust(-1);
+        default: return null;
+      }
+    }
+    if (videoPlayer.sceneSearch) {
+      switch (key) {
+        case 'ArrowLeft':  return () => vidSceneMove(-1);
+        case 'ArrowRight': return () => vidSceneMove(1);
+        case 'ArrowUp': case 'ArrowDown': return () => {};
+        default: return null;
+      }
+    }
+    if (videoPlayer.panel) {
+      switch (key) {
+        case 'ArrowLeft':  return () => vidPanelMove(-1, 0);
+        case 'ArrowRight': return () => vidPanelMove(1, 0);
+        case 'ArrowUp':    return () => vidPanelMove(0, -1);
+        case 'ArrowDown':  return () => vidPanelMove(0, 1);
+        default: return null;
+      }
+    }
+    switch (key) {
+      case 'ArrowLeft':  return () => vidSeek(-10);
+      case 'ArrowRight': return () => vidSeek(10);
       case 'ArrowUp': case 'ArrowDown': return () => {};
       default: return null;
     }
@@ -13970,6 +14873,10 @@ document.addEventListener('keydown', e => {
         e.preventDefault(); openOptMenu(); break;
       case 'q': case 'Q':   // Square: cycle Group Content
         e.preventDefault(); cycleGroup(); break;
+      case 'c': case 'C':   // SELECT: toggle the photo/video Information overlay (real PS3 shortcut, viewer only)
+        if (photoViewer) { e.preventDefault(); pvSelectInfo(); } else if (videoPlayer) { e.preventDefault(); vidToggleInfo(); } break;
+      case 'v': case 'V':   // START: play/pause a running slideshow / the video (viewer only)
+        if (photoViewer && photoViewer.slideshow) { e.preventDefault(); pvStartToggle(); } else if (videoPlayer) { e.preventDefault(); vidPlayToggle(); } break;
       case 'Tab':
         // Cycle through the supported aspect ratios (Shift+Tab goes backwards).
         e.preventDefault();
@@ -14079,6 +14986,10 @@ function pollGP() {
     if (jp(1)) back();    // Circle
     if (jp(2)) cycleGroup();   // Square: cycle Group Content
     if (jp(3)) openOptMenu();  // Triangle: content options menu
+    if (jp(8) && photoViewer) pvSelectInfo();   // SELECT: toggle the photo Information overlay (real PS3 shortcut)
+    if (jp(9) && photoViewer && photoViewer.slideshow) pvStartToggle();   // START: play/pause the slideshow
+    if (jp(8) && videoPlayer) vidToggleInfo();  // SELECT: toggle the video Display info overlay
+    if (jp(9) && videoPlayer) vidPlayToggle();  // START: play/pause the video
 
     // Left stick - also drives wave/particle perturbation
     const lx = gp.axes[0], ly = gp.axes[1];
@@ -15197,10 +16108,14 @@ function frame(now) {
   // Photo Viewer (full-screen image, firmware photoviewer_plugin.rco) renders on top of the XMB, like the
   // music player. Draw while open OR while the exit fade is still running (pvEnterT > 0).
   if (photoViewer || pvEnterT > 0.001) drawPhotoViewer(ctx);
+  // Video player, over the XMB (fade-in/out via vidEnterT). Player over browser; dialog over player.
+  if (videoPlayer || vidEnterT > 0.001) drawVideoPlayer(ctx);
   // Photo multi-select (Delete/Copy Multiple) checkbox screen, over the browser.
   if (photoMulti) drawPhotoMulti(ctx);
   // Re-draw an open dialog (the 2D/3D confirm, or the multi-select delete confirm) over the photo overlays.
   if ((photoViewer || photoMulti) && dialogState) drawDialog(ctx);
+  // Re-draw an open dialog (Change Icon confirm) over the video player.
+  if (videoPlayer && dialogState) drawDialog(ctx);
   if (musicPlayer && _chromeVis > 0.001) {
     // ENTER: drawMusicPlayer already cleared the canvas; overlay the fading-OUT chrome on top of the player.
     ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
