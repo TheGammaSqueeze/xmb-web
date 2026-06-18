@@ -1483,12 +1483,12 @@ const DATA = [
         vcodec:'AVC',acodec:'AAC',filetype:'AVC',audioTracks:['English 2 Ch.'],subTracks:['English'],
         chapters:[0,6,12],chapterThumbs:['asset:video/clip1_ch0.jpg','asset:video/clip1_ch6.jpg','asset:video/clip1_ch12.jpg'],
         subCues:{English:[{t:0.5,d:3.2,text:'Welcome to the PS3 video player.'},{t:4.2,d:3.4,text:'Reverse-engineered 1:1 from the firmware.'},{t:8.5,d:3,text:'Press TRIANGLE for the control panel.'},{t:13,d:4,text:'Subtitles render from the selected track.'}]},
-        produced:'2026',timesPlayed:0,szTxt:'937 KB',dur:0,w:0,h:0},
+        produced:'2026',timesPlayed:0,szTxt:'937 KB',dur:18,w:640,h:360},
       {n:'Fractal Dive',mtype:'video',file:'video/clip2.mp4',i:'asset:video/clip2.jpg',d:'AVC  640x360',
         vcodec:'AVC',acodec:'AAC',filetype:'AVC',audioTracks:['English 2 Ch.','Japanese 2 Ch.'],subTracks:['English','Japanese'],
         chapters:[0,3,6],chapterThumbs:['asset:video/clip2_ch0.jpg','asset:video/clip2_ch3.jpg','asset:video/clip2_ch6.jpg'],
         subCues:{English:[{t:0.5,d:2.6,text:'Fractal Dive'},{t:3.3,d:2.6,text:'Mandelbrot zoom sequence'}],Japanese:[{t:0.5,d:2.6,text:'フラクタル・ダイブ'},{t:3.3,d:2.6,text:'マンデルブロのズーム'}]},
-        produced:'2026',timesPlayed:0,szTxt:'5.9 MB',dur:0,w:0,h:0}
+        produced:'2026',timesPlayed:0,szTxt:'5.9 MB',dur:7,w:640,h:360}
     ]
   },
   {
@@ -11397,6 +11397,28 @@ let vidEnterT = 0, vidEnterRaw = 0;   // enter/exit fade-in from black (~0.4s, e
 let vidEl = null;                     // the single HTMLVideoElement, created lazily + reused
 let vidAux = null;                    // single reused <audio> for the SECONDARY audio track (synced to vidEl); track 0 = the video's own audio
 let vidSubCache = {};                 // file path -> parsed cues [{t,d,text}] | 'loading' | 'error' (embedded-extracted + external .vtt/.srt)
+let vidThumbVid = null;               // offscreen <video> reused to capture interval Scene Search thumbnails (chapter-less videos)
+// Dual-mono audio channel-output graph (firmware msg_left/right/leftplusright). Created LAZILY on the first
+// channel selection so the common case never routes through Web Audio. el.volume SURVIVES this (measured:
+// 0.1 -> ~10% RMS), so the -4..+4 volume bar keeps working. createMediaElementSource is once-per-element.
+let vidAudioCtx = null, vidAudioSrc = null, vidSplitter = null, vidMerger = null;
+function vidSetChannel(mode) {   // 'lr' (normal) | 'l' (left->both) | 'r' (right->both)
+  const v = videoPlayer; if (!v) return; const el = vidEnsureEl();
+  v.audioChannel = mode;
+  try {
+    if (!vidAudioCtx) {
+      vidAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      vidAudioSrc = vidAudioCtx.createMediaElementSource(el);   // once per element; el.volume still applies after this
+      vidSplitter = vidAudioCtx.createChannelSplitter(2); vidMerger = vidAudioCtx.createChannelMerger(2);
+      vidAudioSrc.connect(vidSplitter); vidMerger.connect(vidAudioCtx.destination);
+    }
+    if (vidAudioCtx.state === 'suspended') vidAudioCtx.resume();
+    try { vidSplitter.disconnect(); } catch (e) {}
+    if (mode === 'l') { vidSplitter.connect(vidMerger, 0, 0); vidSplitter.connect(vidMerger, 0, 1); }        // Left  -> both outputs
+    else if (mode === 'r') { vidSplitter.connect(vidMerger, 1, 0); vidSplitter.connect(vidMerger, 1, 1); }   // Right -> both outputs
+    else { vidSplitter.connect(vidMerger, 0, 0); vidSplitter.connect(vidMerger, 1, 1); }                     // Left + Right (normal)
+  } catch (e) {}
+}
 // Photo multi-select (Delete Multiple / Copy Multiple) - a checkbox LIST screen,
 // captured 1:1 from RPCS3 (xmb-ref/photo/live2/multiselect_*.png): checkbox+thumb+
 // name+date rows, "Select images to delete/copy." header, Select All / Clear All /
@@ -12317,10 +12339,17 @@ function vidLoad(item) {
   el.src = item.file; try { el.currentTime = 0; } catch (e) {}
   el.playbackRate = 1; el.muted = false;
   // reset audio + subtitle state for the new title; build the unified subtitle list + probe sidecars
-  if (videoPlayer) { videoPlayer.audioTrack = 0; videoPlayer.subTrack = -1; videoPlayer.subList = vidBuildSubList(item); }
+  if (videoPlayer) { videoPlayer.audioTrack = 0; videoPlayer.subTrack = -1; videoPlayer.subList = vidBuildSubList(item); videoPlayer.audioChannel = 'lr'; if (vidAudioCtx) vidSetChannel('lr'); }   // reset channel output per title (re-route only if the graph already exists)
   if (vidAux) { try { vidAux.pause(); } catch (e) {} vidAux.removeAttribute('src'); }
   vidProbeExtSubs(item);
-  el.onloadedmetadata = () => { if (videoPlayer && videoPlayer.videos[videoPlayer.idx] === item) { item.dur = el.duration; item.w = el.videoWidth; item.h = el.videoHeight; } };
+  el.onloadedmetadata = () => { if (videoPlayer && videoPlayer.videos[videoPlayer.idx] === item) {
+    item.dur = el.duration; item.w = el.videoWidth; item.h = el.videoHeight;
+    if (videoPlayer._resumeTo != null && isFinite(el.duration)) {   // seek to the saved resume point once duration is known
+      try { el.currentTime = Math.max(0, Math.min(videoPlayer._resumeTo, el.duration - 1)); } catch (e) {}
+      videoPlayer.transient = { label: 'Resume', until: performance.now() + 1400 };
+    }
+    videoPlayer._resumeTo = null;
+  } };
   el.onwaiting = () => { if (videoPlayer) videoPlayer.buffering = true; };
   el.onplaying = () => { if (videoPlayer) videoPlayer.buffering = false; };
   el.onended = () => { if (videoPlayer) vidOnEnded(); };
@@ -12333,23 +12362,42 @@ function vidOnEnded() {
   if (v.idx < v.videos.length - 1) { vidStepTitle(1); return; }                 // auto-advance to next title
   v.playing = false; v.stopped = true; el.currentTime = 0;                      // end of list -> stop
 }
-function openVideoPlayer(listItems, idx) {
+function openVideoPlayer(listItems, idx, opts) {
+  opts = opts || {};
   const vids = (listItems || []).filter(p => p && p.mtype === 'video');
   if (!vids.length) return;
   const clicked = listItems[idx]; let vi = vids.indexOf(clicked); if (vi < 0) vi = 0;
+  // Resume support (explore_category_video.rco msg_resume / msg_play_begin): a partially-watched
+  // title resumes from its saved position; "Play from Beginning" clears that point and starts at 0.
+  const _startItem = vids[vi];
+  if (opts.fromStart && _startItem) delete _startItem.resumePos;
+  const _resumeTo = (!opts.fromStart && _startItem && _startItem.resumePos > 0) ? _startItem.resumePos : null;
   videoPlayer = { videos: vids, idx: vi, playing: true, rate: 1, stopped: false,
-    screenMode: 0, zoom: 1, panX: 0, panY: 0, audioTrack: 0, subTrack: -1, subList: [], ccOn: false, chapter: 0,
+    screenMode: 0, zoom: 1, panX: 0, panY: 0, audioTrack: 0, subTrack: -1, subList: [], ccOn: false, chapter: 0, volLevel: 0, audioChannel: 'lr',
     avSettings: {bnr: false, fnr: false, mnr: false, upscale: false},
     repeat: 0, abA: null, abB: null, panel: false, panelAnim: null, panelClosing: null,
     cpSel: VIDEO_CP_DEF, cpSelPrev: -1, cpFocusStart: 0, cpPress: null, cpSub: null,
     osd: false, hintUntil: performance.now() + 4000, dispModeName: '', dispModeUntil: 0,
-    transient: null, buffering: false, _lastTick: 0 };
+    transient: null, buffering: false, _lastTick: 0, _resumeTo: _resumeTo };
   if (vids[vi]) vids[vi].timesPlayed = (vids[vi].timesPlayed || 0) + 1;
-  try { VIDEO_CP.forEach(b => vidIcon(b.ic)); vidIcon(114); } catch (e) {}   // warm the control-panel glyphs so they're decoded before Triangle opens the panel
+  // Starting video playback stops any BACKGROUND music (the video carries its own audio; you can't
+  // hear both on the real PS3). Photo slideshow keeps background music, so this is video-only.
+  try { if (mpAudio && !mpAudio.paused) { mpAudio.pause(); if (musicPlayer) musicPlayer.stopped = true; } } catch (e) {}
+  try { VIDEO_CP.forEach(b => { vidIcon(b.ic); vidIcon(b.ic + 50); }); vidIcon(114); } catch (e) {}   // warm the control-panel glyphs (normal + focus variant) so they're decoded before Triangle opens the panel
+  try { const _si = vids[vi]; [vidCodecBadge(_si && _si.vcodec, 'v'), vidCodecBadge(_si && _si.acodec, 'a')].forEach(n => { if (n != null) vidIcon(n); }); } catch (e) {}   // warm the codec badges for the OSD
   vidEnsureFilters();   // inject the SVG sharpen filter used by AV Settings -> Upscale
   vidLoad(vids[vi]); playNav2();
 }
-function closeVideoPlayer() { if (vidEl) { try { vidEl.pause(); } catch (e) {} } if (vidAux) { try { vidAux.pause(); } catch (e) {} } videoPlayer = null; playNav(); }
+// Save (or clear) a per-title resume point from the current playback position. The real PS3 stores
+// a resume point on the HDD when you leave a partially-watched title; the session-persistent item
+// field is the faithful browser stand-in (matches how timesPlayed persists). Cleared when at the
+// start (<3s) or effectively finished (last ~3%/5s) so finished titles show "Play", not "Resume".
+function vidSaveResume(item, el) {
+  if (!item || !el) return;
+  const pos = isFinite(el.currentTime) ? el.currentTime : 0, dur = isFinite(el.duration) ? el.duration : 0;
+  if (dur > 0 && pos > 3 && pos < dur - 5 && pos < dur * 0.97) item.resumePos = pos; else delete item.resumePos;
+}
+function closeVideoPlayer() { try { vidSaveResume(vidCur(), vidEl); } catch (e) {} if (vidEl) { try { vidEl.pause(); } catch (e) {} } if (vidAux) { try { vidAux.pause(); } catch (e) {} } videoPlayer = null; playNav(); }
 function vidCur() { const v = videoPlayer; return v ? v.videos[v.idx] : null; }
 // Change Icon: capture the current scene as the content's XMB thumbnail. The real PS3 stores a
 // 15s animated clip; in the browser a single representative frame is the faithful stand-in (the
@@ -12392,6 +12440,7 @@ function vidStop() {
 }
 function vidStepTitle(d) {
   const v = videoPlayer; if (!v || !v.videos.length) return;
+  try { vidSaveResume(v.videos[v.idx], vidEl); } catch (e) {}   // remember where we left the outgoing title
   v.idx = (v.idx + d + v.videos.length) % v.videos.length;
   v.rate = 1; v.stopped = false; v.playing = true; v.chapter = 0; v.subTrack = -1; v.audioTrack = 0;
   v.hintUntil = performance.now() + 1500;
@@ -12436,43 +12485,118 @@ function vidStepFrame(d) {   // msg_oneframe_f / msg_oneframe_r (~1/30s)
 // firmware has NO codec/size info-panel labels, so the Display button is the OSD toggle (not a
 // content-info screen, which is a separate XMB feature).
 function vidToggleInfo() { const v = videoPlayer; if (!v || dialogState) return; v.osd = !v.osd; v.panel = false; playCursor(); }
-// Scene Search (msg_scene_search): chapter THUMBNAIL grid (real frames at the item's chapter times) -> Cross seeks.
-function vidSceneOpen() {
-  const v = videoPlayer; if (!v) return; const it = vidCur();
-  if (!it || !it.chapters || !it.chapters.length) { v.transient = {label: 'No chapters', until: performance.now() + 1400}; return; }
-  let cur = 0; if (vidEl && isFinite(vidEl.currentTime)) { for (let i = 0; i < it.chapters.length; i++) if (vidEl.currentTime >= it.chapters[i]) cur = i; }
-  v.sceneSearch = {sel: cur}; v.panel = false; v.cpSub = null; v.panelClosing = null; playNav2();
+// Scene Search (msg_scene_search): a thumbnail grid of scene points; Cross seeks there. Videos WITH
+// chapters use the chapter times + pre-extracted chapter thumbs. Videos WITHOUT chapters fall back to
+// fixed TIME INTERVALS - the real PS3 behavior, grounded in firmware msg_interval_1min / msg_interval_min
+// / msg_interval_sec ("1/%1 Minute Intervals", "%1 Second Intervals") - with real frames captured on the
+// fly. Default 1-minute intervals, stepped down (30s/10s/Ns) so short clips still get a usable set.
+// FLAGGED: the exact default interval and the interval-selection UI are not capturable (RPCS3 video broken).
+function vidSceneInterval(dur) {
+  if (!isFinite(dur) || dur <= 0) return 60;
+  for (const iv of [60, 30, 10, 5]) if (Math.floor(dur / iv) + 1 >= 4) return iv;   // 1 min default; step down for short clips
+  return Math.max(1, Math.round(dur / 5));   // very short clip: ~5 whole-second scenes (msg_interval_sec %1)
 }
-function vidSceneMove(d) { const v = videoPlayer; if (!v || !v.sceneSearch) return; const it = vidCur(); const n = (it.chapters || []).length; if (!n) return; v.sceneSearch.sel = (v.sceneSearch.sel + d + n) % n; playCursor(); }
+function vidSceneIntervalLabel(iv) {
+  if (iv % 60 === 0) { const m = iv / 60; return (m === 1 ? '1 Minute Intervals' : m + ' Minute Intervals'); }   // msg_interval_1min / msg_interval_min
+  return iv + ' Second Intervals';   // msg_interval_sec
+}
+// Shared video time format (adaptive H:MM:SS / M:SS, matching the Information-screen Length + the Go To
+// picker). Used by the OSD elapsed/total + Scene Search labels so all video time displays are consistent
+// and correct for videos over an hour (the old M:SS-only would show "90:00" instead of "1:30:00").
+function vidFmtTime(s) { s = Math.max(0, Math.floor(s || 0)); const h = (s / 3600) | 0, m = ((s % 3600) / 60) | 0, x = s % 60, p = n => String(n).padStart(2, '0'); return h > 0 ? h + ':' + p(m) + ':' + p(x) : m + ':' + p(x); }
+// Map a codec string to its REAL firmware codec-badge icon index (videoplayer set), like the music player's
+// plane_codec map. Video: MPEG-1/2/4=138/139/140, AVC/H.264=141, Motion JPEG=142, DivX=143, VC-1=144.
+// Audio: Linear PCM=130, AAC=132, Dolby Digital/AC-3=133, ATRAC=134, Non-Linear PCM=135, MP3=136, WMA=137.
+function vidCodecBadge(codec, kind) {
+  if (!codec) return null;
+  const c = String(codec).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const V = {MPEG1: 138, MPEG2: 139, MPEG4: 140, AVC: 141, H264: 141, MOTIONJPEG: 142, MJPEG: 142, DIVX: 143, VC1: 144};
+  const A = {LINEARPCM: 130, PCM: 130, AAC: 132, DOLBYDIGITAL: 133, AC3: 133, ATRAC: 134, NONLINEARPCM: 135, MP3: 136, WMA: 137};
+  const idx = (kind === 'v' ? V : A)[c];
+  return idx != null ? idx : null;
+}
+function vidSceneOpen() {
+  const v = videoPlayer; if (!v) return; const it = vidCur(); const el = vidEnsureEl();
+  let times, isInterval, intervalLabel = '', thumbs;
+  if (it && it.chapters && it.chapters.length) {
+    times = it.chapters.slice(); isInterval = false; thumbs = it.chapterThumbs || [];
+  } else {
+    const dur = (el && isFinite(el.duration)) ? el.duration : (it && it.dur) || 0;
+    if (!it || !(dur > 0)) { v.transient = {label: 'No chapters', until: performance.now() + 1400}; return; }
+    const iv = vidSceneInterval(dur); intervalLabel = vidSceneIntervalLabel(iv);
+    times = []; for (let t = 0; t < dur - 0.5; t += iv) times.push(Math.round(t)); if (!times.length) times = [0];
+    isInterval = true; thumbs = it._sceneThumbs || (it._sceneThumbs = []);
+  }
+  let cur = 0; const ct = (el && isFinite(el.currentTime)) ? el.currentTime : 0;
+  for (let i = 0; i < times.length; i++) if (ct >= times[i]) cur = i;
+  const cols = Math.min(Math.max(times.length, 1), 4);
+  v.sceneSearch = {sel: cur, times: times, cols: cols, isInterval: isInterval, intervalLabel: intervalLabel, thumbs: thumbs};
+  v.panel = false; v.cpSub = null; v.panelClosing = null; playNav2();
+  if (isInterval) vidSceneCapThumbs(v, it, times, thumbs);   // capture real frames on the fly (no-op where decode unavailable)
+}
+function vidSceneMove(d, byRow) {
+  const v = videoPlayer; if (!v || !v.sceneSearch) return; const ss = v.sceneSearch, n = ss.times.length; if (!n) return;
+  const step = byRow ? (ss.cols || 1) : 1; ss.sel = (ss.sel + d * step + n) % n; playCursor();
+}
 function vidSceneActivate() {
-  const v = videoPlayer; if (!v || !v.sceneSearch) return; const it = vidCur();
-  const sel = v.sceneSearch.sel, t = (it.chapters || [])[sel] || 0, el = vidEnsureEl();
+  const v = videoPlayer; if (!v || !v.sceneSearch) return;
+  const sel = v.sceneSearch.sel, t = v.sceneSearch.times[sel] || 0, el = vidEnsureEl();
   try { el.currentTime = t; } catch (e) {} v.chapter = sel; v.sceneSearch = null; v.hintUntil = performance.now() + 1500;
   if (v.playing) { const p = el.play(); if (p && p.catch) p.catch(() => {}); } playNav2();
 }
 function vidSceneClose() { const v = videoPlayer; if (!v) return; v.sceneSearch = null; playNav(); }
+// Capture one frame per interval scene point from an OFFSCREEN <video> (sequential, guarded seeks).
+// Real frames - not approximation. Degrades to placeholder boxes where the browser can't decode (headless CDP).
+function vidSceneCapThumbs(v, it, times, thumbs) {
+  if (thumbs && thumbs.length >= times.length && thumbs[times.length - 1]) return;   // already captured for this item
+  let tv = vidThumbVid; if (!tv) { tv = vidThumbVid = document.createElement('video'); tv.muted = true; tv.preload = 'auto'; }
+  const ss = v.sceneSearch, canv = document.createElement('canvas'); canv.width = 160; canv.height = 90; const cx = canv.getContext('2d');
+  let i = 0;
+  const finish = () => { try { tv.removeAttribute('src'); tv.load(); } catch (e) {} tv.onseeked = tv.onloadeddata = tv.onerror = null; };
+  const aborted = () => !videoPlayer || videoPlayer.sceneSearch !== ss || vidCur() !== it;
+  const next = () => {
+    if (aborted() || i >= times.length) { finish(); return; }
+    if (thumbs[i]) { i++; next(); return; }
+    try { tv.currentTime = Math.min(times[i], (tv.duration || times[i] + 1) - 0.1); } catch (e) { i++; next(); }
+  };
+  tv.onseeked = () => {
+    if (aborted()) { finish(); return; }
+    try { const vw = tv.videoWidth || 16, vh = tv.videoHeight || 9, s = Math.max(160 / vw, 90 / vh);
+      cx.fillStyle = '#000'; cx.fillRect(0, 0, 160, 90); cx.drawImage(tv, (160 - vw * s) / 2, (90 - vh * s) / 2, vw * s, vh * s);
+      thumbs[i] = 'asset:' + canv.toDataURL('image/jpeg', 0.7); } catch (e) {}
+    i++; next();
+  };
+  tv.onloadeddata = () => next();
+  tv.onerror = () => finish();
+  try { tv.src = it.file; tv.load(); } catch (e) { finish(); }
+}
 function drawVideoScene(ctx2) {
   const v = videoPlayer; if (!v || !v.sceneSearch) return; const it = vidCur(); if (!it) return;
-  const CW = xmbCanvas.width, CH = xmbCanvas.height, chs = it.chapters || [], thumbs = it.chapterThumbs || [];
+  const ss = v.sceneSearch, CW = xmbCanvas.width, CH = xmbCanvas.height, chs = ss.times || [], thumbs = ss.thumbs || [];
   ctx2.save(); ctx2.setTransform(1, 0, 0, 1, 0, 0);
   ctx2.fillStyle = 'rgba(0,0,0,0.72)'; ctx2.fillRect(0, 0, CW, CH);
   ctx2.fillStyle = 'rgba(255,255,255,0.95)'; ctx2.textAlign = 'left'; ctx2.textBaseline = 'alphabetic';
   ctx2.font = Math.round(CH * 0.034) + 'px PS3'; ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 4;
   ctx2.fillText('Scene Search', CW * 0.10, CH * 0.16); ctx2.shadowBlur = 0;
-  const cols = Math.min(chs.length, 4) || 1, tw = CW * 0.20, th = tw * 9 / 16, gap = CW * 0.03;
-  const totalW = cols * tw + (cols - 1) * gap, x0 = (CW - totalW) / 2, y0 = CH * 0.42;
-  const mmss = (s) => { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, '0'); };
+  if (ss.isInterval && ss.intervalLabel) { ctx2.font = Math.round(CH * 0.020) + 'px PS3'; ctx2.fillStyle = 'rgba(210,210,214,0.85)'; ctx2.fillText(ss.intervalLabel, CW * 0.10, CH * 0.16 + CH * 0.034); }
+  const cols = Math.min(Math.max(chs.length, 1), 4), rows = Math.ceil(chs.length / cols);
+  const gapX = CW * 0.03, yTop = (rows <= 1) ? CH * 0.42 : CH * 0.24, yBot = CH * 0.86;
+  let tw, th, rowPitch;
+  if (rows <= 1) { tw = CW * 0.20; th = tw * 9 / 16; rowPitch = 0; }   // single row = original chaptered layout
+  else { rowPitch = (yBot - yTop) / rows; th = Math.min(CW * 0.20 * 9 / 16, rowPitch - CH * 0.075); tw = th * 16 / 9; }   // shrink cells so every row fits on screen
+  const totalW = cols * tw + (cols - 1) * gapX, x0 = (CW - totalW) / 2;
+  const mmss = vidFmtTime;   // adaptive H:MM:SS / M:SS (shared) - correct for chapters/scenes past an hour
   for (let i = 0; i < chs.length; i++) {
-    const cx = x0 + (i % cols) * (tw + gap), cy = y0, sel = (i === v.sceneSearch.sel);
+    const cx = x0 + (i % cols) * (tw + gapX), cy = (rows <= 1) ? yTop : yTop + Math.floor(i / cols) * rowPitch, sel = (i === ss.sel);
     const ic = thumbs[i] ? getIcon(thumbs[i]) : null;
     if (ic && ic.loaded && ic.img) ctx2.drawImage(ic.img, cx, cy, tw, th); else { ctx2.fillStyle = 'rgba(40,40,46,0.9)'; ctx2.fillRect(cx, cy, tw, th); }
     ctx2.lineWidth = sel ? 3 : 1.5; ctx2.strokeStyle = sel ? 'rgba(255,255,255,0.95)' : 'rgba(180,180,185,0.5)';
     if (sel) { ctx2.shadowColor = 'rgba(220,235,255,0.6)'; ctx2.shadowBlur = 12; } ctx2.strokeRect(cx, cy, tw, th); ctx2.shadowBlur = 0;
     ctx2.fillStyle = sel ? 'rgb(255,255,255)' : 'rgba(210,210,214,0.8)'; ctx2.font = Math.round(CH * 0.022) + 'px PS3'; ctx2.textAlign = 'left';
-    ctx2.fillText('Chapter ' + (i + 1) + '   ' + mmss(chs[i]), cx, cy + th + CH * 0.04);
+    ctx2.fillText((ss.isInterval ? 'Scene ' : 'Chapter ') + (i + 1) + '   ' + mmss(chs[i]), cx, cy + th + CH * 0.034);
   }
   ctx2.globalAlpha = 0.85; ctx2.textAlign = 'center'; ctx2.font = Math.round(CH * 0.020) + 'px PS3'; ctx2.fillStyle = 'rgba(235,235,235,0.9)';
-  ctx2.fillText('✕ Enter      ○ Back', CW / 2, CH * 0.90);
+  ctx2.fillText('✕ Enter      ○ Back', CW / 2, CH * 0.92);
   ctx2.restore();
 }
 // Go To (msg_goto): time-search. Firmware confirms the feature (msg_goto + bounds error
@@ -12522,7 +12646,7 @@ function vidTick() {   // per-frame: drive high-rate/reverse scan + A-B repeat (
     const dt = (v._lastTick ? Math.min(100, now - v._lastTick) : 16) / 1000;
     let t = el.currentTime + v.rate * dt;
     if (t <= 0) { t = 0; v.rate = 1; el.playbackRate = 1; const p = el.play(); if (p && p.catch) p.catch(() => {}); v.transient = null; }   // hit start while reversing -> resume normal
-    else if (t >= el.duration - 0.05) { t = el.duration - 0.05; vidOnEnded(); }
+    else if (t >= el.duration - 0.05) { if (v.rate > 1.5) { v.rate = 1; el.playbackRate = 1; v.transient = null; } vidOnEnded(); v._lastTick = now; return; }   // hit end while fast-forwarding -> clear scan state and let vidOnEnded own the end (don't clobber its currentTime=0)
     try { el.currentTime = Math.max(0, t); } catch (e) {}
   }
   v._lastTick = now;
@@ -12539,7 +12663,15 @@ function vidPanelOpen() {
 function vidPanelClose() { const v = videoPlayer; if (!v) return; v.panelClosing = {start: performance.now(), dur: 200}; v.panel = false; v.cpSub = null; playNav(); }
 function vidPanelMove(dx, dy) {
   const v = videoPlayer; if (!v || !v.panel) return;
-  if (v.cpSub) { if (dy !== 0) { const n = v.cpSub.opts.length; v.cpSub.sel = (v.cpSub.sel + dy + n) % n; playCursor(); } return; }
+  if (v.cpSub) {
+    if (v.cpSub.kind === 'volume') {   // -4..+4 volume bar (mirrors the music player): LEFT/RIGHT steps + live-applies, map (level+4)/8
+      if (dx !== 0) { v.cpSub.level = Math.max(-4, Math.min(4, v.cpSub.level + (dx > 0 ? 1 : -1))); v.volLevel = v.cpSub.level;
+        const el = vidEnsureEl(), _it = vidCur(), _auxOn = (v.audioTrack > 0 && _it && _it.audioFiles && _it.audioFiles[v.audioTrack]);
+        el.volume = (v.cpSub.level + 4) / 8; el.muted = _auxOn ? true : (el.volume <= 0); if (vidAux) vidAux.volume = el.volume; playCursor(); }
+      return;
+    }
+    if (dy !== 0) { const n = v.cpSub.opts.length; v.cpSub.sel = (v.cpSub.sel + dy + n) % n; playCursor(); } return;
+  }
   const cp = vidCP(); const cur = cp[v.cpSel]; let best = -1, bestd = 1e9;
   for (let i = 0; i < cp.length; i++) {
     if (i === v.cpSel) continue; const b = cp[i];
@@ -12555,9 +12687,12 @@ function vidSubOpts(kind) {
   const v = videoPlayer, it = vidCur();
   if (kind === 'screenmode') return VID_SCREEN_MODES.slice();
   if (kind === 'repeat') return VID_REPEAT_MODES.slice();
-  if (kind === 'volume') return ['100%', '80%', '60%', '40%', '20%', '0%'];   // msg_volume_control level
-  if (kind === 'avset') { const s = (v && v.avSettings) || {}; return VID_AVSET.map((n, i) => n + '   ' + (s[VID_AVSET_KEYS[i]] ? 'On' : 'Off')); }
-  if (kind === 'audio') return (it && it.audioTracks && it.audioTracks.length) ? it.audioTracks.slice() : ['Language 1'];   // msg_lang_1
+  // 'volume' is NOT a list - it's the -4..+4 segment bar (opened directly as {kind:'volume', level}), so no opts here
+  if (kind === 'avset') { const s = (v && v.avSettings) || {}; return VID_AVSET.map((n, i) => n + '   ' + (s[VID_AVSET_KEYS[i]] ? 'Automatic' : 'Off')); }   // msg_auto / msg_off (no bare "On" string exists in the plugin)
+  if (kind === 'audio') {
+    if (it && it.dualMono) return ['Left + Right', 'Left', 'Right'];   // dual-mono channel output (msg_leftplusright/left/right) - the Audio Options content for a dual-mono stream
+    return (it && it.audioTracks && it.audioTracks.length) ? it.audioTracks.slice() : ['Language 1'];   // msg_lang_1
+  }
   if (kind === 'subtitle') return ['Off'].concat((v && v.subList) ? v.subList.map(s => s.name + (s.ext ? '  (External)' : '')) : []);   // msg_off + embedded/external sub tracks
   return [];
 }
@@ -12575,13 +12710,13 @@ function vidPanelActivate() {
       } else { v.repeat = sel; v.abA = v.abB = null; v.dispModeName = VID_REPEAT_MODES[sel]; }
       v.dispModeUntil = performance.now() + 1800;
     }
-    else if (k === 'volume') { const vol = 1 - sel * 0.2; const el = vidEnsureEl(); const _it = vidCur(); const _auxOn = (v.audioTrack > 0 && _it && _it.audioFiles && _it.audioFiles[v.audioTrack]); el.volume = Math.max(0, Math.min(1, vol)); el.muted = _auxOn ? true : (vol <= 0); if (vidAux) vidAux.volume = el.volume; v.dispModeName = 'Volume ' + v.cpSub.opts[sel]; v.dispModeUntil = performance.now() + 1800; }   // mute the video ONLY when a real aux track is playing (else volume would silence single-track clips)
-    else if (k === 'audio') { vidSetAudioTrack(sel); }   // 0 = video's own audio; 1+ = synced aux track
+    else if (k === 'volume') { const lvl = v.cpSub.level || 0; v.dispModeName = 'Volume ' + (lvl === 0 ? 'Normal' : (lvl > 0 ? '+' + lvl : String(lvl))); v.dispModeUntil = performance.now() + 1800; }   // -4..+4 bar; the level is applied LIVE on LEFT/RIGHT (vidPanelMove), so confirm just shows the level + closes
+    else if (k === 'audio') { const _it = vidCur(); if (_it && _it.dualMono) { vidSetChannel(['lr', 'l', 'r'][sel] || 'lr'); v.dispModeName = 'Audio: ' + v.cpSub.opts[sel]; v.dispModeUntil = performance.now() + 1800; } else vidSetAudioTrack(sel); }   // dual-mono -> channel output; else track switch
     else if (k === 'subtitle') { vidSetSubTrack(sel - 1); }   // 0 = Off -> -1; else index into v.subList
     else if (k === 'avset') {   // independent On/Off toggle; toggles the real canvas filter + KEEPS the submenu open
       const key = VID_AVSET_KEYS[sel]; v.avSettings[key] = !v.avSettings[key];
       v.cpSub.opts = vidSubOpts('avset');
-      v.dispModeName = VID_AVSET[sel] + ': ' + (v.avSettings[key] ? 'On' : 'Off'); v.dispModeUntil = performance.now() + 1800;
+      v.dispModeName = VID_AVSET[sel] + ': ' + (v.avSettings[key] ? 'Automatic' : 'Off'); v.dispModeUntil = performance.now() + 1800;
       playNav2(); return;   // do NOT close (multi-toggle); the effect applies to the rendered video frame
     }
     v.cpSub = null; playNav2(); return;
@@ -12606,12 +12741,12 @@ function vidPanelActivate() {
   else if (a === 'showinfo') { v.osd = !v.osd; v.panel = false; }   // "Display": toggle the on-screen status display (OSD)
   else if (a === 'screenmode') openSub('screenmode', 'Screen Mode', v.screenMode);
   else if (a === 'repeat')     openSub('repeat', 'Repeat', v.repeat);
-  else if (a === 'volume')     openSub('volume', 'Volume Control', Math.max(0, Math.min(5, Math.round((1 - (isFinite(el.volume) ? el.volume : 1)) / 0.2))));
-  else if (a === 'audio')      { const it = vidCur(); if (!it || !it.audioTracks || !it.audioTracks.length) { v.panel = false; dialogState = {template:{type:'info', title:'', body:'There is no audio.'}, sel:0, anim:{start:performance.now(), dur:250}}; playNav2(); } else openSub('audio', 'Audio Options', v.audioTrack); }   // msg_error_no_audio
+  else if (a === 'volume')     { v.cpSub = {kind: 'volume', label: 'Volume Control', level: (v.volLevel || 0)}; }   // -4..+4 segment bar (firmware msg_plus1-4/minus1-4 + music player); LEFT/RIGHT steps + live-applies
+  else if (a === 'audio')      { const it = vidCur(); if (it && it.dualMono) openSub('audio', 'Audio Options', {lr:0, l:1, r:2}[v.audioChannel] || 0); else if (!it || !it.audioTracks || !it.audioTracks.length) { v.panel = false; dialogState = {template:{type:'info', title:'', body:'There is no audio.'}, sel:0, anim:{start:performance.now(), dur:250}}; playNav2(); } else openSub('audio', 'Audio Options', v.audioTrack); }   // dual-mono channel output / track switch / msg_error_no_audio
   else if (a === 'subtitle')   { if (!v.subList || !v.subList.length) { v.panel = false; dialogState = {template:{type:'info', title:'', body:'There are no subtitle options available.'}, sel:0, anim:{start:performance.now(), dur:250}}; playNav2(); } else openSub('subtitle', 'Subtitle Options', v.subTrack + 1); }   // msg_error_no_subtitle
   else if (a === 'avset')      openSub('avset', 'AV Settings', 0);
   else if (a === 'goto')  vidGoToOpen();   // msg_goto: time-search (H:MM:SS entry -> seek; bounds -> msg_error_overlimit_goto)
-  else if (a === 'scene') vidSceneOpen();   // Scene Search = chapter navigation (firmware); grid UI is an approximation (firmware doesn't specify grid vs list), flagged
+  else if (a === 'scene') vidSceneOpen();   // Scene Search (msg_scene_search): chapter grid, or time-interval grid for chapter-less videos (msg_interval_*); grid layout flagged (firmware doesn't specify grid vs list)
   else if (a === 'del') {   // msg_del_playingtitle_ask -> msg_deleted (simulated, no data mutation, like the photo delete)
     v.panel = false;
     dialogState = { template:{type:'confirm', title:'', body:'The title that is currently playing will be deleted.\nAre you sure you want to continue?', defaultSel:1, cancelLabel:'Back'}, sel:1,
@@ -12648,19 +12783,23 @@ function drawVideoPanel(ctx2, tOverride) {
   for (let i = 0; i < cp.length; i++) {
     const b = cp[i], focus = (i === v.cpSel);
     const cx = x0 + b.gx * colW, cy = y0 + b.gy * rowH;
-    const ic = vidIcon(b.ic);   // play + pause are separate firmware cells (ic 6 / 8); no glyph swap
+    // Firmware control glyphs are 3-state (like the audioplayer set the music player uses): base ic = NORMAL
+    // (b.n), ic+25 = dark shadow plate (b.s, skipped - opaque square), ic+50 = BRIGHT FOCUS (b.f). Mirror the
+    // music player: use the real focus texture for the focused control instead of programmatically brightening.
+    const icN = vidIcon(b.ic);
+    let icF = vidIcon(b.ic + 50); if (!icF || !icF.loaded || !icF.img) icF = icN;   // fall back to normal until the focus glyph decodes
     let scale = focus ? 1.5 : 1.0;
     if (v.cpFocusStart) { const fe = Math.min(1, (performance.now() - v.cpFocusStart) / 140), fk = 1 - Math.pow(1 - fe, 3);
       if (focus) scale = 1.0 + 0.5 * fk; else if (i === v.cpSelPrev) scale = 1.5 - 0.5 * fk; }
     let ps = scale, flash = 0;
     if (pr && pr.sel === i) { const e = (performance.now() - pr.start) / pr.dur; if (e < 1) { const sp = Math.sin(e * Math.PI); ps *= (1 - 0.18 * sp); flash = sp * 0.55; } }
-    const drawI = (al) => { if (!ic || !ic.loaded || !ic.img) return; const s = sz * ps; ctx2.globalAlpha = t * al; ctx2.drawImage(ic.img, cx - s / 2, cy - s / 2, s, s); };
+    const drawI = (cache, al) => { if (!cache || !cache.loaded || !cache.img) return; const s = sz * ps; ctx2.globalAlpha = t * al; ctx2.drawImage(cache.img, cx - s / 2, cy - s / 2, s, s); };
     if (focus) {
       ctx2.shadowOffsetX = 0; ctx2.shadowOffsetY = 0;
       ctx2.shadowColor = 'rgba(220,235,255,' + (0.22 + 0.18 * pulse).toFixed(3) + ')'; ctx2.shadowBlur = 9 + 6 * pulse;
-      drawI(0.35); ctx2.shadowColor = 'rgba(0,0,0,0)'; ctx2.shadowBlur = 0; drawI(1.0);
-    } else { ctx2.shadowColor = 'rgba(0,0,0,0.5)'; ctx2.shadowBlur = 5; ctx2.shadowOffsetY = 2; drawI(0.85); ctx2.shadowColor = 'rgba(0,0,0,0)'; ctx2.shadowBlur = 0; ctx2.shadowOffsetY = 0; }
-    if (flash > 0) drawI(flash);
+      drawI(icF, 0.35); ctx2.shadowColor = 'rgba(0,0,0,0)'; ctx2.shadowBlur = 0; drawI(icF, 1.0);   // firmware focus texture (b.f)
+    } else { ctx2.shadowColor = 'rgba(0,0,0,0.5)'; ctx2.shadowBlur = 5; ctx2.shadowOffsetY = 2; drawI(icN, 0.85); ctx2.shadowColor = 'rgba(0,0,0,0)'; ctx2.shadowBlur = 0; ctx2.shadowOffsetY = 0; }
+    if (flash > 0) drawI(icF, flash);
   }
   // focused-item label + button-hint pills (SELECT on Display, START on Play, like the photo panel)
   const fb = cp[v.cpSel];
@@ -12679,8 +12818,22 @@ function drawVideoPanel(ctx2, tOverride) {
     const pillTxt = (fb.act === 'showinfo') ? 'SELECT' : (fb.act === 'play') ? 'START' : null;   // SELECT toggles Display, START toggles Play
     if (!v.cpSub && pillTxt) { ctx2.font = Math.round(pillH * 0.46) + 'px PS3'; const pw = ctx2.measureText(pillTxt).width + CW * 0.012; drawMpPill(ctx2, lx + lw + gap, ly - pillH * 0.82, pw, pillH, pillTxt); }
   }
-  // control submenu (Screen Mode / Audio / Subtitle / CC / Repeat / AV Settings)
-  if (v.cpSub) {
+  // control submenu (Screen Mode / Audio Options / Subtitle Options / Repeat / AV Settings) - render identical to the photo panel (drawPvPanel)
+  if (v.cpSub && v.cpSub.kind === 'volume') {
+    // Volume Control = -4..+4 segment bar (firmware msg_plus1-4/minus1-4), mirroring the music player's drawMpVolMeter
+    ctx2.globalAlpha = t;
+    const sx = x0 + colW * 0.1, sy = y0 + 3.7 * rowH, fs = Math.round(CH * 0.026), lvl = v.cpSub.level || 0;
+    const nm = (lvl === 0) ? 'Normal' : (lvl > 0 ? '+' + lvl : String(lvl));
+    ctx2.globalAlpha = 1; ctx2.fillStyle = 'rgba(0,0,0,0.55)'; ctx2.fillRect(sx - fs * 0.6, sy - fs * 1.5, CW * 0.20, fs * 3.6);
+    ctx2.textAlign = 'left'; ctx2.textBaseline = 'alphabetic'; ctx2.fillStyle = '#fff'; ctx2.font = fs + 'px PS3';
+    ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 3; ctx2.fillText(nm, sx, sy - fs * 0.4); ctx2.shadowBlur = 0;   // level name only (the focused-control label already shows "Volume Control")
+    const segN = 9, segW = CW * 0.0095, gp = CW * 0.004, hh = CH * 0.028, my = sy + fs * 0.3, x0s = sx + fs * 0.9;
+    ctx2.textAlign = 'right'; ctx2.fillStyle = '#fff'; ctx2.font = fs + 'px PS3'; ctx2.fillText('-', x0s - CW * 0.008, my + hh * 0.85);
+    const filled = lvl + 5;   // -4 -> 1 seg, 0 -> 5, +4 -> 9
+    for (let i = 0; i < segN; i++) { ctx2.fillStyle = (i < filled) ? 'rgba(120,225,255,0.95)' : 'rgba(255,255,255,0.20)'; ctx2.fillRect(x0s + i * (segW + gp), my, segW, hh); }
+    ctx2.textAlign = 'left'; ctx2.fillStyle = '#fff'; ctx2.fillText('+', x0s + segN * (segW + gp) + CW * 0.004, my + hh * 0.85);
+  }
+  else if (v.cpSub) {
     ctx2.globalAlpha = t;
     const sx = x0 + colW * 0.1, sy = y0 + 3.5 * rowH, lh = CH * 0.045, fs = Math.round(CH * 0.026);
     const opts = v.cpSub.opts; let mw = 0; ctx2.font = fs + 'px PS3';
@@ -12769,14 +12922,32 @@ function drawVideoPlayer(ctx2) {
       if (af != null) { ctx2.fillRect(bx + bw * af - 1, by - bh, 2, bh * 3); ctx2.textAlign = 'center'; ctx2.fillText('A', bx + bw * af, by - bh * 2.5); }
       if (bf != null) { ctx2.fillRect(bx + bw * bf - 1, by - bh, 2, bh * 3); ctx2.textAlign = 'center'; ctx2.fillText('B', bx + bw * bf, by - bh * 2.5); }
     }
-    const mmss = (s) => { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, '0'); };
+    const mmss = vidFmtTime;   // adaptive H:MM:SS / M:SS (shared) - correct for videos over an hour
     ctx2.font = Math.round(CH * 0.020) + 'px PS3'; ctx2.fillStyle = 'rgba(245,245,245,0.95)';
     ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 4;
     ctx2.textAlign = 'left'; ctx2.textBaseline = 'alphabetic'; ctx2.fillText(mmss(el.currentTime || 0), bx, by - CH * 0.012);
     ctx2.textAlign = 'right'; ctx2.fillText(mmss(el.duration), bx + bw, by - CH * 0.012);
-    // title + paused/scan indicator (top-left)
-    ctx2.textAlign = 'left'; ctx2.font = Math.round(CH * 0.026) + 'px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.95)';
-    const it2 = vidCur(); ctx2.fillText((it2 ? it2.n : '') + (!v.playing ? '   (Paused)' : ''), bx, CH * 0.10);
+    ctx2.shadowBlur = 0;
+    // codec badges (REAL firmware textures, like the music player's plane_codec): video + audio, right-aligned
+    // at the title row. Drawn FIRST so the title can be clipped to stop before them. FLAGGED: the exact OSD
+    // placement isn't capturable (RPCS3 video broken) - mirrors the music player's playback-overlay codec badge.
+    const it2 = vidCur(); let badgeLeft = bx + bw;
+    if (it2) {
+      const bh2 = CH * 0.030; let bxr = bx + bw;
+      [vidCodecBadge(it2.acodec, 'a'), vidCodecBadge(it2.vcodec, 'v')].forEach(idx => {
+        if (idx == null) return; const cic = vidIcon(idx);
+        if (cic && cic.loaded && cic.img) { const cw2 = bh2 * (cic.img.naturalWidth / cic.img.naturalHeight); ctx2.globalAlpha = a; ctx2.drawImage(cic.img, bxr - cw2, CH * 0.10 - bh2 * 0.82, cw2, bh2); bxr -= cw2 + CW * 0.008; }
+      });
+      badgeLeft = bxr;
+    }
+    // title + paused/scan indicator (top-left), CLIPPED so a long title never runs under the codec badges (mirrors the music player)
+    ctx2.globalAlpha = a; ctx2.textAlign = 'left'; ctx2.textBaseline = 'alphabetic';
+    ctx2.font = Math.round(CH * 0.026) + 'px PS3'; ctx2.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx2.shadowColor = 'rgba(0,0,0,0.8)'; ctx2.shadowBlur = 4;
+    const titleMaxW = Math.max(CW * 0.05, badgeLeft - CW * 0.02 - bx);
+    ctx2.save(); ctx2.beginPath(); ctx2.rect(bx, CH * 0.10 - CH * 0.045, titleMaxW, CH * 0.065); ctx2.clip();
+    ctx2.fillText((it2 ? it2.n : '') + (!v.playing ? '   (Paused)' : ''), bx, CH * 0.10);
+    ctx2.restore();
     ctx2.shadowBlur = 0;
   }
   // 4. transient transport flash (FF x10 / Slow / Go To / etc.) - top-center
@@ -13245,7 +13416,7 @@ function buildOptRows() {
   ]};
   const rows = [];
   // ---- TOP GROUP ----
-  if (inContent && !inside) {
+  if (inContent && !inside && cat.groupModes) {   // groupModes gate: music/photo always have it (byte-identical); video has none -> skip the Sort By/Group Content top-group instead of throwing on cat.groupModes
     if (isPhotoCat) rows.push(photoSortBy);
     else { const sf = sortFieldForGroup(cat.groupModes[cat._groupIdx || 0]); rows.push({label:'Sort By', sub:[{label:sf+' ▼', sort:'desc'},{label:sf+' ▲', sort:'asc'}]}); }
     rows.push({label:'Group Content', icon:true, sub: cat.groupModes.map((m,i)=>({label:m, group:i}))});
@@ -13268,6 +13439,22 @@ function buildOptRows() {
       rows.push({label:'Copy', act:'copy'});
       rows.push({label:'Add to Playlist', act:'addpl'});
       if (inside) rows.push({label:'Print', act:'print'});
+      rows.push({label:'Delete', act:'delete'});
+      rows.push({label:'Information', act:'info'});
+    } else if (it && it.mtype === 'video') {
+      // Video FILE options (explore_category_video.rco). A partially-watched title offers
+      // Resume + Play from Beginning (msg_resume / msg_play_begin - both VIDEO-specific: play_begin
+      // is video-ONLY and resume is video+game, absent from music/photo); an unwatched one offers Play.
+      // NO "Add to Playlist": although the video RCO carries playlist strings, that's unused boilerplate -
+      // the authoritative category XML gives music AND photo full seg_playlist_* view trees but video
+      // NONE (it has seg_bddatamgmt/seg_editingvideo instead). No playlist segment => no Add to Playlist.
+      if (it.resumePos > 0) {
+        rows.push({label:'Resume', act:'play'});
+        rows.push({label:'Play from Beginning', act:'playbegin'});
+      } else {
+        rows.push({label:'Play', act:'play'});
+      }
+      rows.push({label:'Copy', act:'copy'});
       rows.push({label:'Delete', act:'delete'});
       rows.push({label:'Information', act:'info'});
     } else {
@@ -13378,7 +13565,12 @@ function doOptAction(act) {
     optMenu = null;
     if (it && it.mtype === 'track') openMusicPlayer(items, ii);
     else if (it && it.mtype === 'album' && it.ch) openMusicPlayer(it.ch, 0);
-    else if (it && it.mtype === 'video') openVideoPlayer(items, ii);
+    else if (it && it.mtype === 'video') openVideoPlayer(items, ii);   // auto-resumes if a resume point is saved (msg_resume)
+    return;
+  }
+  if (act === 'playbegin') {   // "Play from Beginning" (msg_play_begin): clear the resume point, start at 0
+    optMenu = null;
+    if (it && it.mtype === 'video') openVideoPlayer(items, ii, {fromStart: true});
     return;
   }
   if (act === 'addpl') {
@@ -13440,6 +13632,19 @@ function openContentInfo(it) {
     body = 'Title          ' + it.n + '\nArtist         ' + (it.a||'-') + '\nStage          ' + (it.st||'-') + '\nPlaying Time   ' + (it.dur||'-') + '\nFormat         MP3';
   else if (it && it.mtype === 'album')
     body = 'Album          ' + it.n + '\nArtist         ' + (it.artist||'-') + '\nGenre          ' + (it.genre||'-') + '\nRelease Year   ' + (it.year||'-') + '\nTracks         ' + (it.ch?it.ch.length:0);
+  else if (it && it.mtype === 'video') {
+    // Video content Information - firmware labels from explore_category_video.rco
+    // (msg_title/play_time/resolution/video_codec/audio_codec/file_type/size). This is the
+    // proper home for the codec/size data (NOT the in-player Display button, which is the OSD).
+    const fmtLen = (s) => (!s || s <= 0) ? '-' : vidFmtTime(s);   // single source of truth (adaptive H:MM:SS / M:SS); '-' when unknown
+    body = 'Title          ' + (it.n||'-')
+         + '\nLength         ' + fmtLen(it.dur)
+         + '\nResolution     ' + ((it.w && it.h) ? (it.w + ' x ' + it.h) : '-')
+         + '\nVideo Codec    ' + (it.vcodec||'-')
+         + '\nAudio Codec    ' + (it.acodec||'-')
+         + '\nFile Type      ' + (it.filetype||'-')
+         + '\nSize           ' + (it.szTxt||'-');
+  }
   else body = (it && it.d) || 'No information is available.';
   if (fields) {
     // Photo Information screen = NO top-left title, a CENTERED folder/photo icon, the
@@ -14454,7 +14659,7 @@ function navCat(dir, fromRepeat) {
 function navItem(dir, fromRepeat) {
   // Photo Viewer: UP/DOWN moves the control-panel focus when open; otherwise consumed.
   if (photoViewer && !dialogState) { if (photoViewer.panel) pvPanelMove(0, dir > 0 ? 1 : -1); return; }
-  if (videoPlayer && !dialogState) { if (videoPlayer.goTo) vidGoToAdjust(dir > 0 ? -1 : 1); else if (videoPlayer.sceneSearch) vidSceneMove(dir > 0 ? 1 : -1); else if (videoPlayer.panel) vidPanelMove(0, dir > 0 ? 1 : -1); return; }
+  if (videoPlayer && !dialogState) { if (videoPlayer.goTo) vidGoToAdjust(dir > 0 ? -1 : 1); else if (videoPlayer.sceneSearch) vidSceneMove(dir > 0 ? 1 : -1, true); else if (videoPlayer.panel) vidPanelMove(0, dir > 0 ? 1 : -1); return; }
   // Music player: if the control panel is OPEN, UP/DOWN moves the button focus;
   // with the panel closed the player ignores up/down.
   if (musicPlayer && !dialogState && !wizState) {
@@ -14874,7 +15079,8 @@ function getKeyAction(key, fromRepeat) {
       switch (key) {
         case 'ArrowLeft':  return () => vidSceneMove(-1);
         case 'ArrowRight': return () => vidSceneMove(1);
-        case 'ArrowUp': case 'ArrowDown': return () => {};
+        case 'ArrowUp':    return () => vidSceneMove(-1, true);   // row move in the multi-row interval grid
+        case 'ArrowDown':  return () => vidSceneMove(1, true);
         default: return null;
       }
     }
