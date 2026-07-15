@@ -184,22 +184,26 @@
     // 2) second-hand trail: 120 radial dashes at the OUTER EDGE of the face
     // (measured R130-141 in the capture - the dashes reach the rim, right under
     // where the second hand tip sweeps). Current second full, the rest decay so a
-    // fading fan trails behind the second hand.
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.lineCap = 'round';
-    for (var i = 0; i < 120; i++) {
-      var a = trail[i];
-      if (a < 0.02) continue;
-      var fr = i / 120;
-      var pa = polar(fr, R_DISC - 1), pb = polar(fr, R_DISC - 17);   // radial dash reaching the disc EDGE from the inside (outer tip at R140, just inside R_DISC=141 - stays within the circle); centred on the R126 dot-ring, dash size ~16
-      ctx.globalAlpha = a * 0.9;
-      ctx.lineWidth = 1.5 + a * 0.9;
-      ctx.strokeStyle = 'rgb(' + C_TRAIL[0] + ',' + C_TRAIL[1] + ',' + C_TRAIL[2] + ')';
-      ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke();
+    // fading fan trails behind the second hand. Gated by detailFade like the ticks:
+    // do NOT show these trailing dashes while the clock is still flying in (they
+    // were sweeping across the top of the screen during the drop-in).
+    if (detailFade > 0.002) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.lineCap = 'round';
+      for (var i = 0; i < 120; i++) {
+        var a = trail[i];
+        if (a < 0.02) continue;
+        var fr = i / 120;
+        var pa = polar(fr, R_DISC - 1), pb = polar(fr, R_DISC - 17);   // radial dash reaching the disc EDGE from the inside (outer tip at R140, just inside R_DISC=141 - stays within the circle); centred on the R126 dot-ring, dash size ~16
+        ctx.globalAlpha = a * 0.9 * detailFade;
+        ctx.lineWidth = 1.5 + a * 0.9;
+        ctx.strokeStyle = 'rgb(' + C_TRAIL[0] + ',' + C_TRAIL[1] + ',' + C_TRAIL[2] + ')';
+        ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      ctx.restore();
     }
-    ctx.globalAlpha = 1;
-    ctx.restore();
 
     // 3) hour ticks (8 non-cardinal hours): chunky rounded white bars (the PSP
     // tick sprite is 32x44 -> a stubby rounded rectangle) with a cyan glow.
