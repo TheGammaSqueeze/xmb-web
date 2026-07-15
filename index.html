@@ -45,6 +45,7 @@ canvas{position:absolute;top:0;left:0;width:100%;height:100%}
 <script src="canyon_port.js"></script>
 <script src="globe_glow.js"></script>
 <script src="globe_mp.js"></script>
+<script src="psp_clock.js"></script>
 <script>
 "use strict";
 
@@ -2322,6 +2323,10 @@ const FW_PART = {
 let waveT = 0;
 let wavePerturbX = 0;
 let wavePerturbY = 0;
+// PSP Go slide-clock transition wave swell (added to the ribbon amplitude on H
+// toggle, decays over the ~2.5s transition). Set in togglePspClock().
+let clockWaveImpulse = 0;
+let clockWaveImpulseX = 0;
 let webglAvailable = false;
 let gl = null;
 
@@ -6951,8 +6956,14 @@ function drawBGWebGL(dt) {
     // Continuous-velocity uniforms (nav reactivity). These are OUR addition
     // on top of the linkev port - they integrate input pressure and decay
     // each frame, riding on top of the ported spline displacement.
-    gl.uniform1f(gl.getUniformLocation(waveShaderProgram, 'uWaveVelX'), waveVelX);
-    gl.uniform1f(gl.getUniformLocation(waveShaderProgram, 'uWaveVelY'), waveVelY);
+    // PSP Go slide-clock transition: the plugin animates its wave during the
+    // open/close (sub_7FFC/sub_89E4 tweens). Here we drive the PS3 wave the same
+    // way - a swell added to the ribbon amplitude on toggle, decaying over the
+    // transition - so the wave animates/reorients alongside the clock drop-in.
+    gl.uniform1f(gl.getUniformLocation(waveShaderProgram, 'uWaveVelX'), waveVelX + clockWaveImpulseX);
+    gl.uniform1f(gl.getUniformLocation(waveShaderProgram, 'uWaveVelY'), waveVelY + clockWaveImpulse);
+    clockWaveImpulse *= 0.985;
+    clockWaveImpulseX *= 0.985;
 
     // Draw the mesh as a triangle strip.
     gl.bindBuffer(gl.ARRAY_BUFFER, waveVBO);
@@ -7548,9 +7559,23 @@ function drawXMB(now) {
     }
 
     const ic = getIcon(DATA[i].icon);
-    ctx.globalAlpha = alpha * revealA;
+    // PSP slide-clock open: each category icon blows AWAY TO THE RIGHT as its own
+    // particle (wind), dispersing at different speeds + drifting up, then fading -
+    // matching the frame-by-frame jpcsp capture of the real transition.
+    let blowX = 0, blowY = 0, blowA = 1;
+    if (typeof pspClockReveal !== 'undefined' && pspClockReveal > 0) {
+      // Icons blow away EARLY in the transition (done by reveal ~0.55), so the
+      // clock then drops in after - matching the captured sequence (icons fly
+      // off first, wave settles, clock arrives).
+      const bl = Math.pow(Math.min(1, pspClockReveal / 0.55), 1.5);
+      const seed = ((i * 53 + 7) % 17) / 17;          // deterministic per-icon variation
+      blowX = bl * (420 + i * 190 + seed * 380);       // right + disperse (virtual px)
+      blowY = -bl * (30 + seed * 70) - bl * bl * 40;   // drift up, accelerating
+      blowA = Math.max(0, 1 - bl * (1.1 + seed * 0.5));
+    }
+    ctx.globalAlpha = alpha * revealA * blowA;
 
-    if (ic.loaded || ic.normalMapReady) {
+    if ((ic.loaded || ic.normalMapReady) && blowA > 0.01) {
       // Apply per-icon scale (PSN/PS Store icons have higher fill ratio and
       // need a smaller draw size to visually match the rest of the set).
       const csz = sz * iconScale(DATA[i].icon);
@@ -7560,7 +7585,7 @@ function drawXMB(now) {
       ctx.shadowBlur = 4;
       ctx.shadowOffsetX = 0;
       ctx.shadowOffsetY = 2;
-      drawIconAt(ctx, ic, DATA[i].icon, XCL(x, csz / 2), y - csz / 2 + revealRise, csz, csz);
+      drawIconAt(ctx, ic, DATA[i].icon, XCL(x, csz / 2) + blowX, y - csz / 2 + revealRise + blowY, csz, csz);
       ctx.shadowColor = 'transparent';
       ctx.shadowBlur = 0;
       ctx.shadowOffsetY = 0;
@@ -7571,13 +7596,20 @@ function drawXMB(now) {
     // reduced opacity (verified sub_system_real_top.png), so fade it toward a
     // faint level rather than to zero.
     if (isActive) {
+      // PSP slide-clock open: the category label (e.g. "Users"/"Game") floats up
+      // and fades IMMEDIATELY (fast, at the very start of the transition).
+      let lblA = 1, lblY = 0, lblX = 0;
+      if (typeof pspClockReveal !== 'undefined' && pspClockReveal > 0) {
+        const e = Math.pow(Math.min(1, pspClockReveal / 0.3), 1.3);
+        lblY = -e * 90; lblX = e * 520; lblA = Math.max(0, 1 - e * 1.35);
+      }
       // 0.9 in the full XMB, easing down to ~0.4 once settled in the submenu.
-      ctx.globalAlpha = 0.9 * bootLabelReveal * (1 - 0.55 * subT);
+      ctx.globalAlpha = 0.9 * bootLabelReveal * (1 - 0.55 * subT) * lblA;
       ctx.fillStyle = 'rgb(225,210,235)';
       ctx.font = '300 ' + V.CAT_LABEL_SIZE + 'px PS3';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
-      ctx.fillText(DATA[i].name, XCP(x), V.CAT_LABEL_Y);
+      ctx.fillText(DATA[i].name, XCP(x + lblX), V.CAT_LABEL_Y + lblY);
     }
   }
 
@@ -7673,6 +7705,7 @@ function drawXMB(now) {
     // header items and the photos/folders. Identify the photo list by it containing any photo
     // content (unique to the Photo column), so music/settings/etc. keep 515/87.
     const photoFocusList = items.some(it => it && (it.mtype === 'photo' || it.photoGroup));
+    const _xShiftBase = xShift;   // base column shift; each item adds its own float drift
     for (let i = 0; i < items.length; i++) {
       const isActive = (i === selectedIdx);
       const isPrevActive = descFading && i === descFromIdx;
@@ -7690,6 +7723,26 @@ function drawXMB(now) {
         y = itemSlotY(i, selectedIdx, photoFocusList) + yOffset;
       }
 
+      // PSP slide-clock open: each submenu item floats away INDEPENDENTLY - its
+      // own direction (varied horizontal drift + up), its own start time and
+      // rate - then fades, during the early part of the transition (before the
+      // clock drops in). Not the list moving as a unit.
+      let itemFloatA = 1;
+      xShift = _xShiftBase;
+      if (typeof pspClockReveal !== 'undefined' && pspClockReveal > 0) {
+        // Progress over the SAME early window as the category icons (reveal
+        // 0..0.55) so the whole XMB clears together, not the items racing ahead.
+        const fr = Math.min(1, pspClockReveal / 0.55);
+        const seed = ((i * 61 + 13) % 23) / 23;                 // per-item variation
+        const st = Math.max(0, Math.min(1, fr - i * 0.02 - seed * 0.03));
+        const e = Math.pow(st, 1.5);
+        // fly off the right edge (varied speed per item) with its own upward
+        // arc; stay visible while flying, fade only at the very end.
+        xShift = _xShiftBase + e * (1250 + seed * 1050);
+        y -= e * (45 + seed * 190);
+        itemFloatA = Math.max(0, 1 - e * e);
+      }
+
       // Cull and edge-fade against the FULL visible frame (portrait extends well
       // past the 1080 band, so the list runs the height of the frame). In
       // landscape fTop=0 / fBot=V.H, so this is identical to the old behaviour.
@@ -7702,7 +7755,7 @@ function drawXMB(now) {
 
       if (y < fTop + 40) alpha *= Math.max(0, (y - fTop) / 40);
       if (y > fBot - 20) alpha *= Math.max(0, (fBot - y) / 20);
-      alpha *= alphaMul;
+      alpha *= alphaMul * itemFloatA;
       // Square regroup: staggered fan-in of the new list (measured music.mp4
       // f697-700: items appear top-to-bottom over ~0.15s). Gated to the active
       // content category at its root.
@@ -15206,6 +15259,8 @@ document.addEventListener('keydown', e => {
     };
   } else {
     switch (e.key) {
+      case 'h': case 'H':
+        e.preventDefault(); togglePspClock(); break;
       case 'Enter': case 'x': case 'X':
         e.preventDefault(); enter(); break;
       case 'Backspace': case 'Escape': case 'z': case 'Z':
@@ -15722,6 +15777,191 @@ bootCanvas.style.height = '100%';
 bootCanvas.style.zIndex = '3';
 bootCanvas.style.pointerEvents = 'none';
 scr.appendChild(bootCanvas);
+
+// ---- PSP Go slide clock overlay (z4). Toggled by H. 1:1 port from the real
+// slide_plugin GE capture (see psp_clock.js). ----
+const pspClockCanvas = document.createElement('canvas');
+const pspClockCtx = pspClockCanvas.getContext('2d');
+pspClockCanvas.style.position = 'absolute';
+pspClockCanvas.style.top = '0';
+pspClockCanvas.style.left = '0';
+pspClockCanvas.style.width = '100%';
+pspClockCanvas.style.height = '100%';
+pspClockCanvas.style.zIndex = '4';
+pspClockCanvas.style.pointerEvents = 'none';
+pspClockCanvas.style.display = 'none';
+scr.appendChild(pspClockCanvas);
+// Glass refraction lens: a circular backdrop-blur disc at z3 (under the clock
+// canvas z4, over the XMB z2) so the wave behind is frosted/refracted through
+// the glass. Sized to the clock disc (R141 in 480x272 -> ~104% of the letterboxed
+// PSP height), centred. Scaled/faded with the reveal to match the clock zoom.
+const pspGlass = document.createElement('div');
+pspGlass.style.position = 'absolute';
+pspGlass.style.left = '50%'; pspGlass.style.top = '50%';
+pspGlass.style.borderRadius = '50%';
+pspGlass.style.zIndex = '3';
+pspGlass.style.pointerEvents = 'none';
+pspGlass.style.display = 'none';
+pspGlass.style.backdropFilter = 'blur(2.4px) brightness(1.05) saturate(1.08)';
+pspGlass.style.webkitBackdropFilter = 'blur(2.4px) brightness(1.05) saturate(1.08)';
+scr.appendChild(pspGlass);
+function layoutPspGlass(reveal) {
+  if (reveal <= 0) { pspGlass.style.display = 'none'; return; }
+  pspGlass.style.display = 'block';
+  // disc diameter = 2*141/272 of the letterboxed PSP height; the canvas fills scr
+  // and the PSP content is letterboxed to its height, so use scr's height.
+  const H = scr.clientHeight, W = scr.clientWidth;
+  const pspScale = Math.min(W / 480, H / 272);
+  const diam = 2 * 141 * pspScale;
+  const smooth = reveal * reveal * (3 - 2 * reveal);
+  const zoom = 0.84 + 0.16 * smooth;
+  const d = diam * zoom;
+  pspGlass.style.width = d + 'px';
+  pspGlass.style.height = d + 'px';
+  pspGlass.style.transform = 'translate(-50%,-50%)';
+  pspGlass.style.opacity = String(Math.max(0, Math.min(1, reveal * 1.4)));
+}
+let pspClockOn = false;      // toggled by H
+let pspClockReveal = 0;      // 0..1 drop-in progress
+if (window.PSPClock) PSPClock.load();
+// headless/validation hook: ?pspclock=1 auto-opens the slide clock on load,
+// &reveal=1 jumps straight to fully-open (static shot, no wait for the drop-in).
+try {
+  const _pspQ = new URLSearchParams(location.search);
+  if (_pspQ.get('pspclock') === '1') {
+    pspClockOn = true;
+    const rv = _pspQ.get('reveal');
+    if (rv != null) { pspClockReveal = Math.max(0, Math.min(1, parseFloat(rv))); window._pspRevealFreeze = true; }
+  }
+} catch (e) {}
+function pspClockResize() {
+  const W = xmbCanvas.width, H = xmbCanvas.height;
+  if (pspClockCanvas.width !== W) pspClockCanvas.width = W;
+  if (pspClockCanvas.height !== H) pspClockCanvas.height = H;
+}
+// The slide-clock transition: on enter the XMB icons/menu fly away and the PS3
+// wave flies out and settles behind the clock; reverse on exit. Driven by the
+// clock reveal (0..1). Mirrors the plugin tweening its wave/plane during the
+// open (sub_7FFC) / close (sub_89E4), adapted to the app's own canvases.
+// The category ICONS blow away individually (per-icon, in the drawXMB category
+// loop via pspClockReveal); here we only fade the rest of the XMB UI (menu text
+// / sub-icons) out. The wave RIBBON is deformed via the shader, not moved here.
+function applyClockTransition(r) {
+  if (r <= 0) { xmbCanvas.style.opacity = ''; return; }
+  const fly = r * r * (3 - 2 * r);
+  xmbCanvas.style.opacity = String(Math.max(0, 1 - fly * 1.1));
+}
+// Drifting PlayStation-glyph particles that ride across the wave in the
+// background (the "PS icons in the background" seen in the real slide capture:
+// circle / cross / square / triangle glyphs streaming rightward, bobbing on the
+// wave, fading in and out). Kicked harder by pspGlyphBurst during the transition.
+let pspGlyphBurst = 0;
+const PSP_GLYPHS = [];
+(function initPspGlyphs() {
+  for (let i = 0; i < 16; i++) {
+    PSP_GLYPHS.push({ x: Math.random() * 1.3 - 0.15, y: 0.18 + (i * 0.05) % 0.62,
+      v: 0.028 + Math.random() * 0.05, size: 9 + Math.random() * 11,
+      type: i % 4, phase: Math.random() * 6.283 });
+  }
+})();
+function drawPsGlyph(ctx, x, y, s, type, a) {
+  ctx.strokeStyle = 'rgba(205,238,255,' + a + ')'; ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  if (type === 0) { ctx.arc(x, y, s * 0.5, 0, 6.283); }
+  else if (type === 1) { ctx.moveTo(x - s * 0.4, y - s * 0.4); ctx.lineTo(x + s * 0.4, y + s * 0.4); ctx.moveTo(x + s * 0.4, y - s * 0.4); ctx.lineTo(x - s * 0.4, y + s * 0.4); }
+  else if (type === 2) { ctx.rect(x - s * 0.4, y - s * 0.4, s * 0.8, s * 0.8); }
+  else { ctx.moveTo(x, y - s * 0.5); ctx.lineTo(x + s * 0.46, y + s * 0.4); ctx.lineTo(x - s * 0.46, y + s * 0.4); ctx.closePath(); }
+  ctx.stroke();
+}
+// Glass-ball lens (disc centre + radius in canvas px). Set each frame while the
+// clock is up; the wave + glyphs behind the disc are magnified through it.
+let _pspLens = null;
+function drawClockLens(ctx, W, H, cr) {
+  if (cr <= 0 || !_pspLens || typeof waveCanvas === 'undefined' || !waveCanvas) return;
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, Math.min(1, cr * 1.4));
+  ctx.beginPath(); ctx.arc(_pspLens.cx, _pspLens.cy, _pspLens.r, 0, Math.PI * 2); ctx.clip();
+  const mag = 1.34;   // glass-ball magnification of the background
+  ctx.translate(_pspLens.cx, _pspLens.cy); ctx.scale(mag, mag); ctx.translate(-_pspLens.cx, -_pspLens.cy);
+  try { ctx.drawImage(waveCanvas, 0, 0, W, H); } catch (e) {}
+  ctx.restore();
+}
+function drawPspGlyphs(ctx, W, H, dt) {
+  pspGlyphBurst *= 0.992;
+  const s = Math.min(W / 480, H / 272);
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (const g of PSP_GLYPHS) {
+    g.x += g.v * (dt / 1000) * (0.5 + pspGlyphBurst * 2.0);
+    if (g.x > 1.18) { g.x = -0.18; g.y = 0.15 + Math.random() * 0.66; g.type = (g.type + 1) % 4; }
+    g.phase += dt * 0.0012;
+    let px = g.x * W, py = (g.y * 272 + Math.sin(g.phase) * 6) * s + (H - 272 * s) / 2;
+    let gs = g.size * s;
+    // glyphs behind the glass are magnified + bowed outward (glass-ball lens)
+    if (_pspLens) {
+      const dx = px - _pspLens.cx, dy = py - _pspLens.cy, dist = Math.hypot(dx, dy);
+      if (dist < _pspLens.r) {
+        const t = dist / _pspLens.r, m = 1 + 0.42 * (1 - t * t);
+        px = _pspLens.cx + dx * m; py = _pspLens.cy + dy * m; gs *= m;
+      }
+    }
+    const a = (0.05 + pspGlyphBurst * 0.14) * Math.sin(Math.max(0, Math.min(1, g.x)) * Math.PI);
+    if (a <= 0.008) continue;
+    drawPsGlyph(ctx, px, py, gs, g.type, a);
+  }
+  ctx.restore();
+}
+function drawPspClock(dt) {
+  if (!pspClockOn && pspClockReveal <= 0) { pspClockCanvas.style.display = 'none'; applyClockTransition(0); layoutPspGlass(0); return; }
+  pspClockCanvas.style.display = 'block';
+  pspClockResize();
+  // reveal timings from slide_plugin.prx transition tweens: open ~2500ms,
+  // close ~1500ms (sub_7FFC / sub_89E4 durations), ease-in-out.
+  if (!window._pspRevealFreeze) {
+    const dur = pspClockOn ? 2500 : 1500;
+    const step = (dt || 16) / dur;
+    pspClockReveal += pspClockOn ? step : -step;
+    pspClockReveal = Math.max(0, Math.min(1, pspClockReveal));
+  }
+  applyClockTransition(pspClockReveal);
+  // Staggered sequence (from the capture): icons blow off during reveal 0..0.55,
+  // then the CLOCK drops in during reveal 0.4..1.0. Remap the clock's own reveal.
+  const clockReveal = Math.max(0, Math.min(1, (pspClockReveal - 0.4) / 0.6));
+  layoutPspGlass(clockReveal);
+  pspClockCtx.clearRect(0, 0, pspClockCanvas.width, pspClockCanvas.height);
+  // glass-ball lens params: disc centre + radius (with the clock's zoom) in canvas px
+  {
+    const W = pspClockCanvas.width, H = pspClockCanvas.height;
+    const sc2 = Math.min(W / 480, H / 272);
+    const ox = (W - 480 * sc2) / 2, oy = (H - 272 * sc2) / 2;
+    const sm = clockReveal * clockReveal * (3 - 2 * clockReveal);
+    _pspLens = clockReveal > 0 ? { cx: ox + 240 * sc2, cy: oy + 136 * sc2, r: 141 * sc2 * (0.84 + 0.16 * sm) } : null;
+  }
+  // magnified wave through the glass ball (zoom into the background), then the
+  // drifting PS-glyph particles behind the clock (magnified within the lens).
+  drawClockLens(pspClockCtx, pspClockCanvas.width, pspClockCanvas.height, clockReveal);
+  drawPspGlyphs(pspClockCtx, pspClockCanvas.width, pspClockCanvas.height, dt || 16);
+  if (window.PSPClock && PSPClock.isReady()) {
+    let now = new Date();
+    // validation hook: ?clocktime=H:M:S freezes the hands to a known time so a
+    // render can be pixel-compared against a specific captured frame.
+    try {
+      const ct = new URLSearchParams(location.search).get('clocktime');
+      if (ct) { const p = ct.split(':').map(Number); now = new Date(2026, 0, 15, p[0] || 0, p[1] || 0, p[2] || 0); }
+    } catch (e) {}
+    if (window._pspRevealFreeze && !window._pspWarmed && PSPClock.warm) { PSPClock.warm(now); window._pspWarmed = true; }
+    PSPClock.draw(pspClockCtx, pspClockCanvas.width, pspClockCanvas.height, now, clockReveal);
+  }
+}
+function togglePspClock() {
+  pspClockOn = !pspClockOn;
+  // Deform the wave RIBBON itself (not the whole canvas): a strong swell into the
+  // ribbon amplitude that flies the ribbon out then settles behind the clock, as
+  // in the real slide-open capture. Decays over the transition in the wave draw.
+  clockWaveImpulse = pspClockOn ? 0.24 : -0.14;
+  clockWaveImpulseX = pspClockOn ? 0.12 : -0.07;
+  pspGlyphBurst = pspClockOn ? 1 : 0.6;   // kick the drifting PS-glyph particles
+}
 
 // Offscreen buffer for the left-to-right logo reveal wipe. The logo is drawn
 // here, then masked by a horizontal alpha gradient (reveal front sweeping
@@ -16477,6 +16717,8 @@ function frame(now) {
   // Even outside active animations we keep this updated so the FIRST frame
   // of a new scroll has a valid baseline to blend against.
   xmbPrevValid = true;
+
+  drawPspClock(dt);
 
   requestAnimationFrame(frame);
 }
