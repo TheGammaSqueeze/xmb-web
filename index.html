@@ -15805,22 +15805,9 @@ pspGlass.style.display = 'none';
 pspGlass.style.backdropFilter = 'blur(2.4px) brightness(1.05) saturate(1.08)';
 pspGlass.style.webkitBackdropFilter = 'blur(2.4px) brightness(1.05) saturate(1.08)';
 scr.appendChild(pspGlass);
-function layoutPspGlass(reveal) {
-  if (reveal <= 0) { pspGlass.style.display = 'none'; return; }
-  pspGlass.style.display = 'block';
-  // disc diameter = 2*141/272 of the letterboxed PSP height; the canvas fills scr
-  // and the PSP content is letterboxed to its height, so use scr's height.
-  const H = scr.clientHeight, W = scr.clientWidth;
-  const pspScale = Math.min(W / 480, H / 272);
-  const diam = 2 * 141 * pspScale;
-  const smooth = reveal * reveal * (3 - 2 * reveal);
-  const zoom = 0.84 + 0.16 * smooth;
-  const d = diam * zoom;
-  pspGlass.style.width = d + 'px';
-  pspGlass.style.height = d + 'px';
-  pspGlass.style.transform = 'translate(-50%,-50%)';
-  pspGlass.style.opacity = String(Math.max(0, Math.min(1, reveal * 1.4)));
-}
+// DOM backdrop-glass disabled: its circular blur region had a hard edge that
+// read as a border. The canvas lens (drawClockLens) provides the glass now.
+function layoutPspGlass(reveal) { pspGlass.style.display = 'none'; }
 let pspClockOn = false;      // toggled by H
 let pspClockReveal = 0;      // 0..1 drop-in progress
 if (window.PSPClock) PSPClock.load();
@@ -15879,8 +15866,12 @@ let _pspLens = null;
 function drawClockLens(ctx, W, H, cr) {
   if (cr <= 0 || !_pspLens || typeof waveCanvas === 'undefined' || !waveCanvas) return;
   ctx.save();
-  ctx.globalAlpha = Math.max(0, Math.min(1, cr * 1.4));
-  ctx.beginPath(); ctx.arc(_pspLens.cx, _pspLens.cy, _pspLens.r, 0, Math.PI * 2); ctx.clip();
+  // ADDITIVE so only the magnified bright wave strands add through the glass
+  // (no dark background, no darkened disc / border). Present immediately, rides
+  // with the disc. Feathered so the magnification blends at the edge, no ring.
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalAlpha = Math.min(1, cr * 6) * 0.5;
+  ctx.beginPath(); ctx.arc(_pspLens.cx, _pspLens.cy, _pspLens.r * 0.97, 0, Math.PI * 2); ctx.clip();
   const mag = 1.34;   // glass-ball magnification of the background
   ctx.translate(_pspLens.cx, _pspLens.cy); ctx.scale(mag, mag); ctx.translate(-_pspLens.cx, -_pspLens.cy);
   try { ctx.drawImage(waveCanvas, 0, 0, W, H); } catch (e) {}
@@ -15934,8 +15925,10 @@ function drawPspClock(dt) {
     const W = pspClockCanvas.width, H = pspClockCanvas.height;
     const sc2 = Math.min(W / 480, H / 272);
     const ox = (W - 480 * sc2) / 2, oy = (H - 272 * sc2) / 2;
-    const sm = clockReveal * clockReveal * (3 - 2 * clockReveal);
-    _pspLens = clockReveal > 0 ? { cx: ox + 240 * sc2, cy: oy + 136 * sc2, r: 141 * sc2 * (0.84 + 0.16 * sm) } : null;
+    // follow the clock's drop-from-top descent so the lens stays on the disc
+    const eased = 1 - Math.pow(1 - clockReveal, 3);
+    const descent = -(1 - eased) * (272 + 50) * sc2;
+    _pspLens = clockReveal > 0 ? { cx: ox + 240 * sc2, cy: oy + 136 * sc2 + descent, r: 141 * sc2 } : null;
   }
   // magnified wave through the glass ball (zoom into the background), then the
   // drifting PS-glyph particles behind the clock (magnified within the lens).
@@ -15950,7 +15943,7 @@ function drawPspClock(dt) {
       if (ct) { const p = ct.split(':').map(Number); now = new Date(2026, 0, 15, p[0] || 0, p[1] || 0, p[2] || 0); }
     } catch (e) {}
     if (window._pspRevealFreeze && !window._pspWarmed && PSPClock.warm) { PSPClock.warm(now); window._pspWarmed = true; }
-    PSPClock.draw(pspClockCtx, pspClockCanvas.width, pspClockCanvas.height, now, clockReveal);
+    PSPClock.draw(pspClockCtx, pspClockCanvas.width, pspClockCanvas.height, now, clockReveal, dt || 16);
   }
 }
 function togglePspClock() {

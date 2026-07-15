@@ -27,14 +27,14 @@
   var PSP_W = 480, PSP_H = 272, CX = 240, CY = 136;
   var TWO_PI = Math.PI * 2, HALF_PI = Math.PI / 2;
 
-  // --- geometry (from disassembly) ---
-  var R_RING = 126, R_HTICK = 131, R_DISC = 141;
+  // --- geometry: exact element-centre radii measured from the GE draw list ---
+  var R_RING = 126, R_HTICK = 121, R_DISC = 141;   // hour-tick CENTRE at R121 (bbox centre)
   var HOUR_TICKS = [1, 2, 4, 5, 7, 8, 10, 11];
   var NUMERALS = [
-    { s: '12', frac: 0 / 12, R: 116 },
-    { s: '3',  frac: 3 / 12, R: 120 },
-    { s: '6',  frac: 6 / 12, R: 113 },
-    { s: '9',  frac: 9 / 12, R: 118 },
+    { s: '12', frac: 0 / 12, R: 114.5 },
+    { s: '3',  frac: 3 / 12, R: 121.3 },
+    { s: '6',  frac: 6 / 12, R: 114.6 },
+    { s: '9',  frac: 9 / 12, R: 116.7 },
   ];
   // hand lengths (px from centre) + tail overhang + half-widths. Proportional to
   // the decompiled dial; refined against sub_1D248 marker radii.
@@ -42,9 +42,9 @@
   // tapered). Widths hour 8 / second 4 / minute 2 (texture px); lengths in the
   // ratio 108:175:229 (hour:minute:second) -> hour shortest, second longest.
   var HANDS = {
-    hour:   { len: 72,  back: 11, wHub: 3.0, wTip: 2.7 },   // thickest, shortest
-    minute: { len: 106, back: 13, wHub: 1.15, wTip: 1.0 },  // thinnest
-    second: { len: 124, back: 20, wHub: 1.7, wTip: 1.5 },   // medium, longest
+    hour:   { len: 86,  back: 11, wHub: 3.0, wTip: 2.7 },   // thickest, shortest
+    minute: { len: 112, back: 13, wHub: 1.15, wTip: 1.0 },  // thinnest
+    second: { len: 139, back: 20, wHub: 1.7, wTip: 1.2 },   // thin, reaches the disc edge (R_DISC-2)
   };
   var DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
@@ -61,15 +61,21 @@
 
   function load() { /* procedural - no external assets */ }
 
-  // fill the trail as if it had been running, so the comet is visible in a
-  // static validation shot (the real trail builds up live over ~2-3 seconds).
+  // The decompiled decay is 0.98 per PLUGIN frame; the plugin updates at the XMB
+  // clock's render cadence (~50 ms / ~20 fps per the capture's fan), NOT the web
+  // app's 60 fps. So decay per PSP-frame-equivalent of elapsed time to get the
+  // same ~9 s / ~18-tick fan regardless of the web frame rate.
+  var PSP_FRAME_MS = 50;
+
+  // fill the trail as if it had been running, so the fan is visible in a static
+  // validation shot (live, it builds over the same time).
   function warm(date) {
     trail.fill(0);
     var s = date.getSeconds();
     for (var back = 0; back < 12; back++) {
       var sec = (s - back + 60) % 60;
-      var v = Math.pow(DECAY, back * 60);   // ~60 frames per elapsed second
-      if (v > 0.008) { trail[sec * 2] = v; trail[sec * 2 + 1] = v; }
+      var v = Math.pow(DECAY, back * 1000 / PSP_FRAME_MS);   // back seconds of decay
+      if (v > 0.02) { trail[sec * 2] = v; trail[sec * 2 + 1] = v; }
     }
   }
 
@@ -87,19 +93,21 @@
     return (s + fr) / 60;
   }
 
-  function updateTrail(date) {
+  function updateTrail(date, dt) {
     var s = date.getSeconds(), us = date.getMilliseconds() * 1000;
     var i0 = s * 2, i1 = s * 2 + 1;
+    var f = Math.pow(DECAY, (dt || 16) / PSP_FRAME_MS);   // frame-rate-independent
     for (var i = 0; i < 120; i++) {
       if (i === i0) trail[i] = 1;
-      else if (i === i1) { if (us > 50000) trail[i] = 1; else trail[i] *= DECAY; }
-      else trail[i] *= DECAY;
+      else if (i === i1) { if (us > 50000) trail[i] = 1; else trail[i] *= f; }
+      else trail[i] *= f;
     }
   }
 
   // a tapered hand: filled quad tip->hub, narrow at tip, wide at hub, with tail.
-  function drawHand(ctx, frac, h) {
-    var th = HALF_PI - frac * TWO_PI;
+  // wobRad = welcome-wobble angular offset (radians), 0 at rest.
+  function drawHand(ctx, frac, h, wobRad) {
+    var th = HALF_PI - frac * TWO_PI + (wobRad || 0);
     var dx = Math.cos(th), dy = -Math.sin(th);        // screen dir (y down)
     var px = -dy, py = dx;                              // perpendicular
     var tipX = CX + dx * h.len, tipY = CY + dy * h.len;
@@ -113,46 +121,51 @@
     ctx.fill();
   }
 
-  function draw(ctx, cw, ch, date, reveal) {
+  function draw(ctx, cw, ch, date, reveal, dt) {
     reveal = reveal == null ? 1 : reveal;
-    updateTrail(date);
+    updateTrail(date, dt);
     var sc = Math.min(cw / PSP_W, ch / PSP_H);
     var ox = (cw - PSP_W * sc) / 2, oy = (ch - PSP_H * sc) / 2;
     ctx.save();
     ctx.setTransform(sc, 0, 0, sc, ox, oy);
-    ctx.globalAlpha = Math.max(0, Math.min(1, reveal * 1.4));
-    // drop-in from top with overshoot + a zoom-in about the clock centre (the
-    // "zoom" the real clock does as it settles in). Both keyed to the reveal.
+    ctx.globalAlpha = Math.max(0, Math.min(1, reveal * 1.6));
+    // Real drop-in (jpcsp capture, frame ~408): the clock is at its NORMAL size
+    // but positioned high (centre near the top, 12 off-screen above) and DESCENDS
+    // straight down into place. No zoom, no hand wobble (couldn't verify either
+    // from the frozen-time capture; not inventing them).
     if (reveal < 1) {
-      var c1 = 1.70158, c3 = c1 + 1;
-      var eased = 1 + c3 * Math.pow(reveal - 1, 3) + c1 * Math.pow(reveal - 1, 2);
-      ctx.translate(0, (eased - 1) * (PSP_H + 40));
-      var smooth = reveal * reveal * (3 - 2 * reveal);   // 0..1
-      var zoom = 0.84 + 0.16 * smooth;                    // zoom in to full size
-      ctx.translate(CX, CY); ctx.scale(zoom, zoom); ctx.translate(-CX, -CY);
+      var eased = 1 - Math.pow(1 - reveal, 3);            // easeOutCubic
+      ctx.translate(0, -(1 - eased) * (PSP_H + 50));      // descend from above
     }
+    var wobR = 0;
 
-    // 1) glass disc: transparent light-blue body + a refractive rim and a lens
-    // highlight so it reads as glass (the real disc is subtle; the wave shows
-    // through via the DOM backdrop-blur lens under this canvas).
+    // 1) glass disc: a very subtle light-blue body that FADES OUT at the edge -
+    // NO rim/border (the real XMB clock has no outline). Just a soft glass tint +
+    // a faint top-left lens highlight; the wave shows through.
     ctx.save();
-    ctx.beginPath(); ctx.arc(CX, CY, R_DISC, 0, TWO_PI);
-    ctx.fillStyle = C_DISC; ctx.fill();
-    // refractive rim: bright outer edge + a thin inner ring
-    ctx.lineWidth = 2.2; ctx.strokeStyle = 'rgba(170,238,255,0.26)'; ctx.stroke();
-    ctx.beginPath(); ctx.arc(CX, CY, R_DISC - 3, 0, TWO_PI);
-    ctx.lineWidth = 1.0; ctx.strokeStyle = 'rgba(205,246,255,0.12)'; ctx.stroke();
-    // lens highlight (light refracting through the top-left of the glass)
+    // Substantial, near-UNIFORM translucent glass body so the disc reads as a
+    // clearly defined circle ALL the way around (the real XMB clock's glass has
+    // real presence, not a faint tint). A gentle glass rim catches light at the
+    // very edge, then a 3px fade -> crisp circle, no hard border stroke.
+    var body = ctx.createRadialGradient(CX, CY, R_DISC * 0.15, CX, CY, R_DISC);
+    body.addColorStop(0, 'rgba(120,206,226,0.20)');
+    body.addColorStop(0.80, 'rgba(126,212,232,0.20)');
+    body.addColorStop((R_DISC - 4) / R_DISC, 'rgba(158,226,244,0.26)');   // glass rim highlight
+    body.addColorStop((R_DISC - 3) / R_DISC, 'rgba(150,222,242,0.22)');
+    body.addColorStop(1, 'rgba(120,206,226,0)');                          // fade over the last 3px only
+    ctx.beginPath(); ctx.arc(CX, CY, R_DISC, 0, TWO_PI); ctx.fillStyle = body; ctx.fill();
+    // faint light-catch through the top-left of the glass (specular)
     var g = ctx.createRadialGradient(CX - 46, CY - 60, 8, CX, CY, R_DISC);
-    g.addColorStop(0, 'rgba(226,248,255,0.13)');
-    g.addColorStop(0.55, 'rgba(150,215,240,0.035)');
+    g.addColorStop(0, 'rgba(226,248,255,0.10)');
+    g.addColorStop(0.55, 'rgba(150,215,240,0.03)');
     g.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.beginPath(); ctx.arc(CX, CY, R_DISC, 0, TWO_PI); ctx.fillStyle = g; ctx.fill();
     ctx.restore();
 
-    // 2) second-hand trail ring: 120 small radial tick-marks near the rim; the
-    // current second is full and the rest decay (x0.98/frame), so a fading fan
-    // of ticks trails behind the second hand (the comet the real clock shows).
+    // 2) second-hand trail: 120 radial dashes at the OUTER EDGE of the face
+    // (measured R130-141 in the capture - the dashes reach the rim, right under
+    // where the second hand tip sweeps). Current second full, the rest decay so a
+    // fading fan trails behind the second hand.
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round';
@@ -160,7 +173,7 @@
       var a = trail[i];
       if (a < 0.02) continue;
       var fr = i / 120;
-      var pa = polar(fr, R_RING + 3.5), pb = polar(fr, R_RING - 3.5);
+      var pa = polar(fr, R_DISC - 1), pb = polar(fr, R_DISC - 12);   // reach the disc edge
       ctx.globalAlpha = a * 0.9;
       ctx.lineWidth = 1.5 + a * 0.9;
       ctx.strokeStyle = 'rgb(' + C_TRAIL[0] + ',' + C_TRAIL[1] + ',' + C_TRAIL[2] + ')';
@@ -175,19 +188,19 @@
     ctx.globalCompositeOperation = 'lighter';
     ctx.strokeStyle = C_GLYPH; ctx.lineCap = 'round';
     ctx.shadowColor = C_GLOW; ctx.shadowBlur = 7;
-    ctx.lineWidth = 5.5;
+    ctx.lineWidth = 5;
     for (var k = 0; k < HOUR_TICKS.length; k++) {
       var fr = HOUR_TICKS[k] / 12;
-      var pa = polar(fr, R_HTICK + 5), pb = polar(fr, R_HTICK - 11);
+      var pa = polar(fr, R_HTICK + 9), pb = polar(fr, R_HTICK - 9);   // centre at R121, len 18
       ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke();
     }
     ctx.restore();
 
-    // 4) numerals 12/3/6/9 (procedural glyphs)
+    // 4) numerals 12/3/6/9 - the app's PS3 (Rodin) font, matching the XMB glyphs
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.fillStyle = C_GLYPH; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.font = '700 40px "Arial Narrow", "Helvetica Neue", Arial, sans-serif';
+    ctx.font = 'bold 46px PS3, "Arial Narrow", sans-serif';   // ~45px glyph height (capture)
     ctx.shadowColor = C_GLOW; ctx.shadowBlur = 8;
     for (var n = 0; n < NUMERALS.length; n++) {
       var nm = NUMERALS[n], pp = polar(nm.frac, nm.R);
@@ -214,10 +227,10 @@
     ctx.globalCompositeOperation = 'lighter';
     ctx.shadowColor = C_GLOW; ctx.shadowBlur = 6;
     ctx.fillStyle = C_GLYPH;
-    drawHand(ctx, hourFrac, HANDS.hour);
-    drawHand(ctx, minuteFrac, HANDS.minute);
+    drawHand(ctx, hourFrac, HANDS.hour, wobR * 0.7);
+    drawHand(ctx, minuteFrac, HANDS.minute, wobR * 0.8);
     ctx.shadowBlur = 4;
-    drawHand(ctx, secFrac, HANDS.second);
+    drawHand(ctx, secFrac, HANDS.second, wobR * 1.0);
     ctx.restore();
 
     // 7) centre hub
