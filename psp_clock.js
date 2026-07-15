@@ -27,14 +27,23 @@
   var PSP_W = 480, PSP_H = 272, CX = 240, CY = 136;
   var TWO_PI = Math.PI * 2, HALF_PI = Math.PI / 2;
 
-  // --- geometry: exact element-centre radii measured from the GE draw list ---
-  var R_RING = 126, R_HTICK = 121, R_DISC = 141;   // hour-tick CENTRE at R121 (bbox centre)
+  // The real PSP clock face is NOT a perfect circle: it is a horizontal ellipse.
+  // Measured numeral centroids (jpcsp, native 480x272) are exactly consistent with
+  // a CIRCLE squashed vertically about the centre by 0.945 (horizontal numerals at
+  // R118.2, vertical at R118.2*0.945=111.7). So everything below is authored on a
+  // circle and a single global y-squash (ASPECT) turns the whole face - disc, ticks,
+  // numerals, dashes, hands, glyphs - into the correct ellipse in one place.
+  var ASPECT = 0.945;
+
+  // --- geometry: element-centre radii on the un-squashed CIRCLE (px) ---
+  var R_RING = 126, R_HTICK = 121, R_DISC = 141;   // hour-tick centre R121, glass disc R141 (horizontal)
+  var R_NUM = 118.2;                                // all four numerals sit on one ring (measured)
   var HOUR_TICKS = [1, 2, 4, 5, 7, 8, 10, 11];
   var NUMERALS = [
-    { s: '12', frac: 0 / 12, R: 114.5 },
-    { s: '3',  frac: 3 / 12, R: 121.3 },
-    { s: '6',  frac: 6 / 12, R: 114.6 },
-    { s: '9',  frac: 9 / 12, R: 116.7 },
+    { s: '12', frac: 0 / 12, R: R_NUM },
+    { s: '3',  frac: 3 / 12, R: R_NUM },
+    { s: '6',  frac: 6 / 12, R: R_NUM },
+    { s: '9',  frac: 9 / 12, R: R_NUM },
   ];
   // hand lengths (px from centre) + tail overhang + half-widths. Proportional to
   // the decompiled dial; refined against sub_1D248 marker radii.
@@ -121,7 +130,7 @@
     ctx.fill();
   }
 
-  function draw(ctx, cw, ch, date, reveal, dt) {
+  function draw(ctx, cw, ch, date, reveal, dt, floatY) {
     reveal = reveal == null ? 1 : reveal;
     updateTrail(date, dt);
     var sc = Math.min(cw / PSP_W, ch / PSP_H);
@@ -137,6 +146,11 @@
       var eased = 1 - Math.pow(1 - reveal, 3);            // easeOutCubic
       ctx.translate(0, -(1 - eased) * (PSP_H + 50));      // descend from above
     }
+    // Idle float: the whole clock bobs gently up/down (measured ~6px peak-to-peak).
+    ctx.translate(0, floatY || 0);
+    // Horizontal-ellipse: squash the entire face vertically about the centre so a
+    // circle becomes the real clock's slightly-wide ellipse (see ASPECT above).
+    ctx.translate(CX, CY); ctx.scale(1, ASPECT); ctx.translate(-CX, -CY);
     var wobR = 0;
 
     // 1) glass disc: a very subtle light-blue body that FADES OUT at the edge -
@@ -173,7 +187,7 @@
       var a = trail[i];
       if (a < 0.02) continue;
       var fr = i / 120;
-      var pa = polar(fr, R_DISC + 5), pb = polar(fr, R_DISC - 17);   // radial dash R124..R146 - exact GE capture geometry (draws 22-57: 120 dots, Rmin124/Rmax146, alpha ramp = comet fade); matches binary anchor R126 + dash size 21
+      var pa = polar(fr, R_DISC - 1), pb = polar(fr, R_DISC - 17);   // radial dash reaching the disc EDGE from the inside (outer tip at R140, just inside R_DISC=141 - stays within the circle); centred on the R126 dot-ring, dash size ~16
       ctx.globalAlpha = a * 0.9;
       ctx.lineWidth = 1.5 + a * 0.9;
       ctx.strokeStyle = 'rgb(' + C_TRAIL[0] + ',' + C_TRAIL[1] + ',' + C_TRAIL[2] + ')';
