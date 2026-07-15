@@ -27,23 +27,22 @@
   var PSP_W = 480, PSP_H = 272, CX = 240, CY = 136;
   var TWO_PI = Math.PI * 2, HALF_PI = Math.PI / 2;
 
-  // The real PSP clock face is NOT a perfect circle: it is a horizontal ellipse.
-  // Measured numeral centroids (jpcsp, native 480x272) are exactly consistent with
-  // a CIRCLE squashed vertically about the centre by 0.945 (horizontal numerals at
-  // R118.2, vertical at R118.2*0.945=111.7). So everything below is authored on a
-  // circle and a single global y-squash (ASPECT) turns the whole face - disc, ticks,
-  // numerals, dashes, hands, glyphs - into the correct ellipse in one place.
-  var ASPECT = 0.945;
-
-  // --- geometry: element-centre radii on the un-squashed CIRCLE (px) ---
-  var R_RING = 126, R_HTICK = 121, R_DISC = 141;   // hour-tick centre R121, glass disc R141 (horizontal)
-  var R_NUM = 118.2;                                // all four numerals sit on one ring (measured)
+  // The clock face is a CIRCLE. The GE draw list (the plugin's actual draw commands)
+  // places the disc, second-dot ring and ticks at a UNIFORM radius in every
+  // direction - it is authored round. (The slight horizontal ellipse seen in jpcsp
+  // SCREENSHOTS is a viewport/projection artifact of the emulator, not the design;
+  // per the project rule we follow the GE/disassembly, not the screenshot.)
+  // --- geometry: element-centre radii (px), from the GE draw list + binary ---
+  var R_RING = 126, R_HTICK = 121, R_DISC = 141;   // hour-tick centre R121, glass disc R141
   var HOUR_TICKS = [1, 2, 4, 5, 7, 8, 10, 11];
+  // Per-numeral radius overrides straight from the binary (sub_1D248: 12=r116
+  // 0x42E8, 3=r120 0x42F0, 6=r113, 9=r118) - the four numerals have individual
+  // design radii, NOT a global squash.
   var NUMERALS = [
-    { s: '12', frac: 0 / 12, R: R_NUM },
-    { s: '3',  frac: 3 / 12, R: R_NUM },
-    { s: '6',  frac: 6 / 12, R: R_NUM },
-    { s: '9',  frac: 9 / 12, R: R_NUM },
+    { s: '12', frac: 0 / 12, R: 116 },
+    { s: '3',  frac: 3 / 12, R: 120 },
+    { s: '6',  frac: 6 / 12, R: 113 },
+    { s: '9',  frac: 9 / 12, R: 118 },
   ];
   // hand lengths (px from centre) + tail overhang + half-widths. Proportional to
   // the decompiled dial; refined against sub_1D248 marker radii.
@@ -146,11 +145,8 @@
       var eased = 1 - Math.pow(1 - reveal, 3);            // easeOutCubic
       ctx.translate(0, -(1 - eased) * (PSP_H + 50));      // descend from above
     }
-    // Idle float: the whole clock bobs gently up/down (measured ~6px peak-to-peak).
+    // Idle float: the whole clock bobs gently up/down (measured on the real PSP).
     ctx.translate(0, floatY || 0);
-    // Horizontal-ellipse: squash the entire face vertically about the centre so a
-    // circle becomes the real clock's slightly-wide ellipse (see ASPECT above).
-    ctx.translate(CX, CY); ctx.scale(1, ASPECT); ctx.translate(-CX, -CY);
     var wobR = 0;
 
     // 1) glass disc: a very subtle light-blue body that FADES OUT at the edge -
