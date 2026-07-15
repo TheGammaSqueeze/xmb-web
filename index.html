@@ -15866,15 +15866,37 @@ let _pspLens = null;
 function drawClockLens(ctx, W, H, cr) {
   if (cr <= 0 || !_pspLens || typeof waveCanvas === 'undefined' || !waveCanvas) return;
   ctx.save();
-  // ADDITIVE so only the magnified bright wave strands add through the glass
-  // (no dark background, no darkened disc / border). Present immediately, rides
-  // with the disc. Feathered so the magnification blends at the edge, no ring.
-  ctx.globalCompositeOperation = 'lighter';
-  ctx.globalAlpha = Math.min(1, cr * 6) * 0.5;
-  ctx.beginPath(); ctx.arc(_pspLens.cx, _pspLens.cy, _pspLens.r * 0.97, 0, Math.PI * 2); ctx.clip();
+  // OPAQUE glass-ball lens: fill the disc with a ZOOMED + subtly BLURRED copy of
+  // the SAME background that sits behind the clock (the bg gradient + the PS3
+  // wave). Drawing it opaquely (source-over) MASKS the un-zoomed original that
+  // would otherwise show through the transparent clock canvas, so only the
+  // magnified/refracted layer is visible inside the glass - no clashing double
+  // background. The cyan glass tint + rim are added on top in PSPClock.draw.
+  const op = Math.min(1, cr * 5);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = op;   // fully opaque once settled -> full mask
+  ctx.beginPath(); ctx.arc(_pspLens.cx, _pspLens.cy, _pspLens.r, 0, Math.PI * 2); ctx.clip();
+  // zoomed + subtly blurred copy of the background, filling the disc opaquely
+  ctx.save();
   const mag = 1.34;   // glass-ball magnification of the background
   ctx.translate(_pspLens.cx, _pspLens.cy); ctx.scale(mag, mag); ctx.translate(-_pspLens.cx, -_pspLens.cy);
-  try { ctx.drawImage(waveCanvas, 0, 0, W, H); } catch (e) {}
+  ctx.filter = 'blur(2.6px)';   // subtle frosted-glass softening of the zoomed view
+  try {
+    if (typeof bgCanvas !== 'undefined' && bgCanvas) ctx.drawImage(bgCanvas, 0, 0, W, H);
+    ctx.drawImage(waveCanvas, 0, 0, W, H);
+  } catch (e) {}
+  ctx.filter = 'none';
+  ctx.restore();
+  // frosted cyan glass: MULTIPLY a light cyan to cut the washed-out red so the
+  // interior reads as the real clock's saturated cyan, then a soft additive lift.
+  ctx.globalCompositeOperation = 'multiply';
+  ctx.globalAlpha = op * 0.8;
+  ctx.fillStyle = 'rgb(150,232,250)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.globalAlpha = op * 0.10;
+  ctx.fillStyle = 'rgb(70,150,175)';
+  ctx.fillRect(0, 0, W, H);
   ctx.restore();
 }
 function drawPspGlyphs(ctx, W, H, dt) {
