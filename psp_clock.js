@@ -173,7 +173,7 @@
       var a = trail[i];
       if (a < 0.02) continue;
       var fr = i / 120;
-      var pa = polar(fr, R_DISC - 1), pb = polar(fr, R_DISC - 18);   // radial dash: outer tip at the disc edge, centred near the R126 dot-ring (binary sub_1D720: 120 dots at r=f0*126, dash size 21)
+      var pa = polar(fr, R_DISC + 5), pb = polar(fr, R_DISC - 17);   // radial dash R124..R146 - exact GE capture geometry (draws 22-57: 120 dots, Rmin124/Rmax146, alpha ramp = comet fade); matches binary anchor R126 + dash size 21
       ctx.globalAlpha = a * 0.9;
       ctx.lineWidth = 1.5 + a * 0.9;
       ctx.strokeStyle = 'rgb(' + C_TRAIL[0] + ',' + C_TRAIL[1] + ',' + C_TRAIL[2] + ')';
