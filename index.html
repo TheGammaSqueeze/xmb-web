@@ -15890,15 +15890,13 @@ function drawClockLens(ctx, W, H, cr) {
   } catch (e) {}
   ctx.filter = 'none';
   ctx.restore();
-  // frosted cyan glass: MULTIPLY a light cyan to cut the washed-out red so the
-  // interior reads as the real clock's saturated cyan, then a soft additive lift.
-  ctx.globalCompositeOperation = 'multiply';
-  ctx.globalAlpha = op * 0.8;
-  ctx.fillStyle = 'rgb(150,232,250)';
-  ctx.fillRect(0, 0, W, H);
+  // NEUTRAL frost: a faint WHITE lift only (no colour), so the glass frosts/brightens
+  // the magnified view slightly but imposes no hue - the real XMB wallpaper colour
+  // behind the clock comes through the glass. (Previously multiplied cyan, which
+  // baked a blue tint over any wallpaper.)
   ctx.globalCompositeOperation = 'lighter';
-  ctx.globalAlpha = op * 0.10;
-  ctx.fillStyle = 'rgb(70,150,175)';
+  ctx.globalAlpha = op * 0.08;
+  ctx.fillStyle = 'rgb(210,222,232)';
   ctx.fillRect(0, 0, W, H);
   ctx.restore();
 }
@@ -15949,16 +15947,17 @@ function drawPspClock(dt) {
   // by real dt so it animates even when the hands are frozen for validation.
   _pspFloatT += (dt || 16);
   const floatY = 3.0 * Math.sin(_pspFloatT / 1000 * 2 * Math.PI / 3.6);   // amp 3px, period 3.6s
-  // glass-ball lens params: disc centre + radii (with descent + float) in canvas px.
-  // The disc is a horizontal ellipse, so ry = r * CLOCK_ASPECT.
+  // glass-ball lens params: disc centre + radius (with descent + float) in canvas px.
+  // Scale MUST match PSPClock.draw: circle-fills the display (height-driven wide,
+  // width-capped square) so the lens stays aligned to the disc. 288 = 2*R_DISC + 6.
   {
     const W = pspClockCanvas.width, H = pspClockCanvas.height;
-    const sc2 = Math.min(W / 480, H / 272);
+    const sc2 = Math.min(H / 272, W / 288);
     const ox = (W - 480 * sc2) / 2, oy = (H - 272 * sc2) / 2;
     // follow the clock's drop-from-top descent + idle float so the lens stays on the disc
     const eased = 1 - Math.pow(1 - clockReveal, 3);
     const descent = -(1 - eased) * (272 + 50) * sc2;
-    _pspLens = clockReveal > 0 ? { cx: ox + 240 * sc2, cy: oy + (136 + floatY) * sc2 + descent, r: 141 * sc2, ry: 141 * sc2 * CLOCK_ASPECT } : null;
+    _pspLens = clockReveal > 0 ? { cx: ox + 240 * sc2, cy: oy + (136 + floatY) * sc2 + descent, r: 141 * sc2 } : null;
   }
   // magnified wave through the glass ball (zoom into the background), then the
   // drifting PS-glyph particles behind the clock (magnified within the lens).

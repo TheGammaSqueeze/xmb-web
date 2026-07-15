@@ -132,7 +132,12 @@
   function draw(ctx, cw, ch, date, reveal, dt, floatY) {
     reveal = reveal == null ? 1 : reveal;
     updateTrail(date, dt);
-    var sc = Math.min(cw / PSP_W, ch / PSP_H);
+    // Scale so the clock CIRCLE fills the display like the PSP: on wide screens it
+    // is height-driven (disc a touch taller than the screen -> top/bottom run off,
+    // as on the real 480x272 PSP); on square/narrow screens it is width-capped so
+    // the disc fills to just before the left/right would crop. (2*R_DISC+6 leaves a
+    // ~3px rim margin.) The clock stays centred at (cw/2, ch/2) either way.
+    var sc = Math.min(ch / PSP_H, cw / (2 * R_DISC + 6));
     var ox = (cw - PSP_W * sc) / 2, oy = (ch - PSP_H * sc) / 2;
     ctx.save();
     ctx.setTransform(sc, 0, 0, sc, ox, oy);
@@ -157,17 +162,20 @@
     // clearly defined circle ALL the way around (the real XMB clock's glass has
     // real presence, not a faint tint). A gentle glass rim catches light at the
     // very edge, then a 3px fade -> crisp circle, no hard border stroke.
+    // NEUTRAL frosted-glass body (near-white, low alpha) so the disc reads as a
+    // clearly defined circle but does NOT tint the scene - whatever XMB wallpaper
+    // colour is behind shows THROUGH like real glass (no baked-in blue).
     var body = ctx.createRadialGradient(CX, CY, R_DISC * 0.15, CX, CY, R_DISC);
-    body.addColorStop(0, 'rgba(120,206,226,0.20)');
-    body.addColorStop(0.80, 'rgba(126,212,232,0.20)');
-    body.addColorStop((R_DISC - 4) / R_DISC, 'rgba(158,226,244,0.26)');   // glass rim highlight
-    body.addColorStop((R_DISC - 3) / R_DISC, 'rgba(150,222,242,0.22)');
-    body.addColorStop(1, 'rgba(120,206,226,0)');                          // fade over the last 3px only
+    body.addColorStop(0, 'rgba(238,244,250,0.13)');
+    body.addColorStop(0.80, 'rgba(240,246,251,0.13)');
+    body.addColorStop((R_DISC - 4) / R_DISC, 'rgba(255,255,255,0.20)');   // glass rim highlight (white)
+    body.addColorStop((R_DISC - 3) / R_DISC, 'rgba(250,252,255,0.16)');
+    body.addColorStop(1, 'rgba(240,246,251,0)');                          // fade over the last 3px only
     ctx.beginPath(); ctx.arc(CX, CY, R_DISC, 0, TWO_PI); ctx.fillStyle = body; ctx.fill();
-    // faint light-catch through the top-left of the glass (specular)
+    // faint light-catch through the top-left of the glass (specular, white)
     var g = ctx.createRadialGradient(CX - 46, CY - 60, 8, CX, CY, R_DISC);
-    g.addColorStop(0, 'rgba(226,248,255,0.10)');
-    g.addColorStop(0.55, 'rgba(150,215,240,0.03)');
+    g.addColorStop(0, 'rgba(255,255,255,0.10)');
+    g.addColorStop(0.55, 'rgba(235,242,248,0.03)');
     g.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.beginPath(); ctx.arc(CX, CY, R_DISC, 0, TWO_PI); ctx.fillStyle = g; ctx.fill();
     ctx.restore();
@@ -214,7 +222,10 @@
     ctx.shadowColor = C_GLOW; ctx.shadowBlur = 8;
     for (var n = 0; n < NUMERALS.length; n++) {
       var nm = NUMERALS[n], pp = polar(nm.frac, nm.R);
-      ctx.fillText(nm.s, pp[0], pp[1] + 1);
+      // +3: canvas textBaseline='middle' renders digits ~2px above their true
+      // centre, which made 12 look too high / 6 gain bottom padding. Nudge down so
+      // top and bottom padding match.
+      ctx.fillText(nm.s, pp[0], pp[1] + 3);
     }
     ctx.restore();
 
