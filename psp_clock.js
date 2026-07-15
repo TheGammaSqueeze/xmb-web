@@ -129,8 +129,9 @@
     ctx.fill();
   }
 
-  function draw(ctx, cw, ch, date, reveal, dt, floatY) {
+  function draw(ctx, cw, ch, date, reveal, dt, floatY, detailFade) {
     reveal = reveal == null ? 1 : reveal;
+    detailFade = detailFade == null ? 1 : detailFade;   // ticks fade in only once settled
     updateTrail(date, dt);
     // Scale so the clock CIRCLE fills the display like the PSP: on wide screens it
     // is height-driven (disc a touch taller than the screen -> top/bottom run off,
@@ -202,17 +203,21 @@
 
     // 3) hour ticks (8 non-cardinal hours): chunky rounded white bars (the PSP
     // tick sprite is 32x44 -> a stubby rounded rectangle) with a cyan glow.
-    ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.strokeStyle = C_GLYPH; ctx.lineCap = 'round';
-    ctx.shadowColor = C_GLOW; ctx.shadowBlur = 7;
-    ctx.lineWidth = 5;
-    for (var k = 0; k < HOUR_TICKS.length; k++) {
-      var fr = HOUR_TICKS[k] / 12;
-      var pa = polar(fr, R_HTICK + 9), pb = polar(fr, R_HTICK - 9);   // centre at R121, len 18
-      ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke();
+    // Gated by detailFade: fade in only once the clock has settled, out fast on close.
+    if (detailFade > 0.002) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = detailFade;
+      ctx.strokeStyle = C_GLYPH; ctx.lineCap = 'round';
+      ctx.shadowColor = C_GLOW; ctx.shadowBlur = 7;
+      ctx.lineWidth = 5;
+      for (var k = 0; k < HOUR_TICKS.length; k++) {
+        var fr = HOUR_TICKS[k] / 12;
+        var pa = polar(fr, R_HTICK + 9), pb = polar(fr, R_HTICK - 9);   // centre at R121, len 18
+        ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke();
+      }
+      ctx.restore();
     }
-    ctx.restore();
 
     // 4) numerals 12/3/6/9 - the app's PS3 (Rodin) font, matching the XMB glyphs
     ctx.save();

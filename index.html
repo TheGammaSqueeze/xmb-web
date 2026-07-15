@@ -15866,6 +15866,7 @@ function drawPsGlyph(ctx, x, y, s, type, a) {
 const CLOCK_ASPECT = 0.945;
 let _pspLens = null;
 let _pspFloatT = 0;   // idle-float phase accumulator (ms)
+let _pspDetailFade = 0;   // ticks + background glyphs: fade in only once the clock has SETTLED, fade out fast on close
 function drawClockLens(ctx, W, H, cr) {
   if (cr <= 0 || !_pspLens || typeof waveCanvas === 'undefined' || !waveCanvas) return;
   ctx.save();
@@ -15900,8 +15901,10 @@ function drawClockLens(ctx, W, H, cr) {
   ctx.fillRect(0, 0, W, H);
   ctx.restore();
 }
-function drawPspGlyphs(ctx, W, H, dt) {
+function drawPspGlyphs(ctx, W, H, dt, detailFade) {
   pspGlyphBurst *= 0.992;
+  if (detailFade == null) detailFade = 1;
+  if (detailFade <= 0.002) return;   // hidden until the clock settles
   const s = Math.min(W / 480, H / 272);
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
@@ -15919,7 +15922,7 @@ function drawPspGlyphs(ctx, W, H, dt) {
         px = _pspLens.cx + dx * m; py = _pspLens.cy + dy * m; gs *= m;
       }
     }
-    const a = (0.05 + pspGlyphBurst * 0.14) * Math.sin(Math.max(0, Math.min(1, g.x)) * Math.PI);
+    const a = (0.05 + pspGlyphBurst * 0.14) * Math.sin(Math.max(0, Math.min(1, g.x)) * Math.PI) * detailFade;
     if (a <= 0.008) continue;
     drawPsGlyph(ctx, px, py, gs, g.type, a);
   }
@@ -15959,10 +15962,18 @@ function drawPspClock(dt) {
     const descent = -(1 - eased) * (272 + 50) * sc2;
     _pspLens = clockReveal > 0 ? { cx: ox + 240 * sc2, cy: oy + (136 + floatY) * sc2 + descent, r: 141 * sc2 } : null;
   }
+  // Ticks + background glyphs fade IN only once the clock has SETTLED (drop-in
+  // almost complete), and fade OUT fast on close - so they don't show prematurely
+  // while the clock is still flying in.
+  {
+    const settled = pspClockOn && clockReveal > 0.9;
+    const rate = (dt || 16) / (settled ? 320 : 140);   // in ~320ms once settled; out ~140ms (immediate)
+    _pspDetailFade = Math.max(0, Math.min(1, _pspDetailFade + (settled ? rate : -rate)));
+  }
   // magnified wave through the glass ball (zoom into the background), then the
   // drifting PS-glyph particles behind the clock (magnified within the lens).
   drawClockLens(pspClockCtx, pspClockCanvas.width, pspClockCanvas.height, clockReveal);
-  drawPspGlyphs(pspClockCtx, pspClockCanvas.width, pspClockCanvas.height, dt || 16);
+  drawPspGlyphs(pspClockCtx, pspClockCanvas.width, pspClockCanvas.height, dt || 16, _pspDetailFade);
   if (window.PSPClock && PSPClock.isReady()) {
     let now = new Date();
     // validation hook: ?clocktime=H:M:S freezes the hands to a known time so a
@@ -15972,7 +15983,7 @@ function drawPspClock(dt) {
       if (ct) { const p = ct.split(':').map(Number); now = new Date(2026, 0, 15, p[0] || 0, p[1] || 0, p[2] || 0); }
     } catch (e) {}
     if (window._pspRevealFreeze && !window._pspWarmed && PSPClock.warm) { PSPClock.warm(now); window._pspWarmed = true; }
-    PSPClock.draw(pspClockCtx, pspClockCanvas.width, pspClockCanvas.height, now, clockReveal, dt || 16, floatY);
+    PSPClock.draw(pspClockCtx, pspClockCanvas.width, pspClockCanvas.height, now, clockReveal, dt || 16, floatY, _pspDetailFade);
   }
 }
 function togglePspClock() {
