@@ -16113,38 +16113,127 @@ let _pspDetailFade = 0;   // ticks + background glyphs: fade in only once the cl
 let _pspDescent = -1;         // smoothed clock vertical position fraction (-1 = off top, 0 = rest)
 let _pspTextFadeSmooth = 1;   // smoothed text alpha multiplier (1 = fully visible)
 let _pspIconSeedBase = 0;     // random base for entrance-icon per-run positioning (re-rolled each open)
+// --- Glass-lens REFRACTION buffers. Real bevel-glass: the background behind the disc
+// is warped radially through it (a mild lens magnification in the flat centre, then a
+// strong bevel band near the rim where the sampled radius sweeps PAST the disc edge,
+// pulling the surrounding background inward = it "warps around" the edge). The radial
+// displacement map only depends on the disc RADIUS, so it is precomputed once per size;
+// per frame we just re-composite the background and sample through the map. Computed at
+// a capped resolution and upscaled (the glass blur hides it) so it stays cheap. ---
+const _glassBuf = document.createElement('canvas');
+const _glassBufCtx = _glassBuf.getContext('2d', { willReadFrequently: true });
+let _glassMapX = null;    // Float32Array: source x per dest px in the compute buffer (<0 = outside disc)
+let _glassMapY = null;    // Float32Array: source y per dest px
+let _glassOut = null;     // reused dest ImageData (alpha 0 outside the disc)
+let _glassCS = 0;         // compute-buffer size the map was built for
+function buildGlassMap(CS) {
+  const R = CS / 2;
+  const mx = new Float32Array(CS * CS), my = new Float32Array(CS * CS);
+  // The FLAT face: the centre is uniformly magnified (M) like a flat magnifying lens.
+  // ONLY the thin outer BEVEL band (the last ~4% of the radius) bends: past BEVEL the
+  // sampled radius sweeps out past the disc edge (EDGE>1) so the surrounding background
+  // warps inward around the rim = a bevelled edge. Continuous value at BEVEL (the sharp
+  // slope change there IS the bevel facet).
+  const M = 1.58, BEVEL = 0.98, EDGE = 1.10, P = 1.8;   // M = centre magnification; BEVEL -> outer ~2% bevel at the very edge
+  const baseSrc = BEVEL / M;
+  for (let j = 0; j < CS; j++) {
+    for (let i = 0; i < CS; i++) {
+      const idx = j * CS + i;
+      const dx = i - R + 0.5, dy = j - R + 0.5;
+      const rr = Math.sqrt(dx * dx + dy * dy), t = rr / R;
+      if (t > 1) { mx[idx] = -1; continue; }
+      let srcT;
+      if (t <= BEVEL) srcT = t / M;   // flat uniform magnification
+      else { const u = (t - BEVEL) / (1 - BEVEL); srcT = baseSrc + Math.pow(u, P) * (EDGE - baseSrc); }
+      if (rr < 1e-3) { mx[idx] = R; my[idx] = R; }
+      else { const k = srcT / t; mx[idx] = R + dx * k; my[idx] = R + dy * k; }
+    }
+  }
+  _glassMapX = mx; _glassMapY = my; _glassCS = CS;
+  _glassOut = _glassBufCtx.createImageData(CS, CS);   // alpha 0 everywhere by default
+}
 function drawClockLens(ctx, W, H, cr) {
   if (cr <= 0 || !_pspLens || typeof waveCanvas === 'undefined' || !waveCanvas) return;
-  ctx.save();
-  // OPAQUE glass-ball lens: fill the disc with a ZOOMED + subtly BLURRED copy of
-  // the SAME background that sits behind the clock (the bg gradient + the PS3
-  // wave). Drawing it opaquely (source-over) MASKS the un-zoomed original that
-  // would otherwise show through the transparent clock canvas, so only the
-  // magnified/refracted layer is visible inside the glass - no clashing double
-  // background. The cyan glass tint + rim are added on top in PSPClock.draw.
-  const op = Math.min(1, cr * 5);
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.globalAlpha = op;   // fully opaque once settled -> full mask
-  ctx.beginPath(); ctx.arc(_pspLens.cx, _pspLens.cy, _pspLens.r, 0, Math.PI * 2); ctx.clip();
-  // zoomed + subtly blurred copy of the background, filling the disc opaquely
-  ctx.save();
-  const mag = 1.34;   // glass-ball magnification of the background
-  ctx.translate(_pspLens.cx, _pspLens.cy); ctx.scale(mag, mag); ctx.translate(-_pspLens.cx, -_pspLens.cy);
-  ctx.filter = 'blur(2.6px)';   // subtle frosted-glass softening of the zoomed view
+  const R = _pspLens.r, cx = _pspLens.cx, cy = _pspLens.cy;
+  if (R < 6) return;
+  const CS = Math.min(Math.ceil(2 * R), 420) | 0;
+  if (_glassCS !== CS) buildGlassMap(CS);
+  if (_glassBuf.width !== CS) { _glassBuf.width = CS; _glassBuf.height = CS; }
+  const bx = cx - R, by = cy - R, s = CS / (2 * R);
+  // 1) composite the SAME background (bg gradient + PS3 wave) into the compute buffer.
+  _glassBufCtx.setTransform(1, 0, 0, 1, 0, 0);
+  _glassBufCtx.clearRect(0, 0, CS, CS);
+  _glassBufCtx.save();
+  _glassBufCtx.scale(s, s);
+  _glassBufCtx.translate(-bx, -by);
   try {
-    if (typeof bgCanvas !== 'undefined' && bgCanvas) ctx.drawImage(bgCanvas, 0, 0, W, H);
-    ctx.drawImage(waveCanvas, 0, 0, W, H);
-  } catch (e) {}
+    if (typeof bgCanvas !== 'undefined' && bgCanvas) _glassBufCtx.drawImage(bgCanvas, 0, 0, W, H);
+    _glassBufCtx.drawImage(waveCanvas, 0, 0, W, H);
+  } catch (e) { _glassBufCtx.restore(); return; }
+  _glassBufCtx.restore();
+  // 2) refract: BILINEAR-sample the background through the precomputed radial
+  //    displacement (bilinear avoids the blocky pixelation the magnification would
+  //    otherwise produce).
+  const src = _glassBufCtx.getImageData(0, 0, CS, CS).data;
+  const od = _glassOut.data, mx = _glassMapX, my = _glassMapY, cs1 = CS - 1;
+  // On-canvas sub-rect of the compute buffer. The bevel samples PAST the disc edge, and
+  // the disc bbox often extends OFF the source canvas (top/bottom - the disc is nearly
+  // screen-height, and it is fully above the screen mid-drop-in). Sampling there would
+  // read the transparent/black area, showing black in the bevel. Clamp every sample to
+  // this valid rect so the rim instead captures the nearest real background pixel.
+  const ix0 = Math.max(0, Math.ceil(-s * bx)), ix1 = Math.min(cs1, Math.floor(s * (W - bx) - 1));
+  const iy0 = Math.max(0, Math.ceil(-s * by)), iy1 = Math.min(cs1, Math.floor(s * (H - by) - 1));
+  for (let idx = 0, n = mx.length; idx < n; idx++) {
+    let sx = mx[idx];
+    if (sx < 0) continue;   // outside disc: alpha stays 0
+    let sy = my[idx];
+    if (sx < ix0) sx = ix0; else if (sx > ix1) sx = ix1;
+    if (sy < iy0) sy = iy0; else if (sy > iy1) sy = iy1;
+    const x0 = sx | 0, y0 = sy | 0;
+    const fx = sx - x0, fy = sy - y0;
+    let x1 = x0 + 1; if (x1 > ix1) x1 = ix1;
+    let y1 = y0 + 1; if (y1 > iy1) y1 = iy1;
+    const w00 = (1 - fx) * (1 - fy), w10 = fx * (1 - fy), w01 = (1 - fx) * fy, w11 = fx * fy;
+    const p00 = (y0 * CS + x0) << 2, p10 = (y0 * CS + x1) << 2, p01 = (y1 * CS + x0) << 2, p11 = (y1 * CS + x1) << 2;
+    const d4 = idx << 2;
+    od[d4]     = src[p00]     * w00 + src[p10]     * w10 + src[p01]     * w01 + src[p11]     * w11;
+    od[d4 + 1] = src[p00 + 1] * w00 + src[p10 + 1] * w10 + src[p01 + 1] * w01 + src[p11 + 1] * w11;
+    od[d4 + 2] = src[p00 + 2] * w00 + src[p10 + 2] * w10 + src[p01 + 2] * w01 + src[p11 + 2] * w11;
+    od[d4 + 3] = 255;
+  }
+  _glassBufCtx.putImageData(_glassOut, 0, 0);
+  // 3) blit the warped disc onto the clock canvas (upscaled, soft glass blur), faded in.
+  const op = Math.min(1, cr * 5);
+  ctx.save();
+  ctx.globalAlpha = op;
+  ctx.filter = 'blur(3.2px)';   // frosted-glass softening of the magnified face (more blur -> no pixelation)
+  ctx.drawImage(_glassBuf, 0, 0, CS, CS, bx, by, 2 * R, 2 * R);
   ctx.filter = 'none';
-  ctx.restore();
-  // NEUTRAL frost: a faint WHITE lift only (no colour), so the glass frosts/brightens
-  // the magnified view slightly but imposes no hue - the real XMB wallpaper colour
-  // behind the clock comes through the glass. (Previously multiplied cyan, which
-  // baked a blue tint over any wallpaper.)
+  // 4) BEVEL - confined to the outer ~4% only: a thin specular on the bevel facet + a
+  //    bright glint at the very edge, so the rim reads as a bevelled edge while the flat
+  //    face stays clean. Additive, clipped to the disc.
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.clip();
   ctx.globalCompositeOperation = 'lighter';
+  ctx.globalAlpha = op;
+  const bev = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
+  bev.addColorStop(0, 'rgba(255,255,255,0)');
+  bev.addColorStop(0.975, 'rgba(255,255,255,0)');      // flat face: no highlight
+  bev.addColorStop(0.988, 'rgba(255,255,255,0.16)');   // thin bevel specular
+  bev.addColorStop(0.997, 'rgba(255,255,255,0.20)');   // bright glint at the very edge
+  bev.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = bev;
+  ctx.fillRect(bx, by, 2 * R, 2 * R);
+  // a thin darker line at the bevel start defines the glass thickness (bevel facet edge).
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = op * 0.4;
+  ctx.strokeStyle = 'rgba(20,40,60,0.35)';
+  ctx.lineWidth = Math.max(1, R * 0.005);
+  ctx.beginPath(); ctx.arc(cx, cy, R * 0.98, 0, Math.PI * 2); ctx.stroke();
+  ctx.globalCompositeOperation = 'lighter';
+  // faint neutral frost lift over the flat face (the "before" style: no hue).
   ctx.globalAlpha = op * 0.08;
   ctx.fillStyle = 'rgb(210,222,232)';
-  ctx.fillRect(0, 0, W, H);
+  ctx.fillRect(bx, by, 2 * R, 2 * R);
   ctx.restore();
 }
 function drawPspGlyphs(ctx, W, H, dt, detailFade) {
