@@ -52,10 +52,13 @@
   // Width ORDER (from the capture, Shot-560): hour thickest bar, minute a medium
   // bar, second a FINE line - hour > minute > second. (Was mis-ordered: second was
   // set thicker than minute.) Half-widths at hub/tip.
+  // Widths from perpendicular measurement of the capture (Shot-560, glow-inclusive):
+  // hour ~8px hub tapering to ~6px, minute ~5px, second a ~1.6px fine line. Half-
+  // widths below; the modest cyan glow (shadowBlur) makes up the rest of the width.
   var HANDS = {
-    hour:   { len: 86,  back: 11, wHub: 3.0, wTip: 2.6 },   // thickest, shortest
-    minute: { len: 112, back: 13, wHub: 1.7, wTip: 1.4 },   // medium bar
-    second: { len: 139, back: 20, wHub: 1.0, wTip: 0.75 },  // fine line, reaches the disc edge (R_DISC-2)
+    hour:   { len: 86,  back: 11, wHub: 3.0, wTip: 2.0 },   // thickest, tapers to a point
+    minute: { len: 112, back: 13, wHub: 1.3, wTip: 1.0 },   // medium bar
+    second: { len: 139, back: 20, wHub: 0.7, wTip: 0.55 },  // fine line, reaches the disc edge (R_DISC-2)
   };
   var DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
@@ -259,11 +262,11 @@
     var secFrac = secondFrac(date);
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    ctx.shadowColor = C_GLOW; ctx.shadowBlur = 6;
+    ctx.shadowColor = C_GLOW; ctx.shadowBlur = 4;   // modest glow (was 6, inflated the width)
     ctx.fillStyle = C_GLYPH;
     drawHand(ctx, hourFrac, HANDS.hour, wobR * 0.7);
     drawHand(ctx, minuteFrac, HANDS.minute, wobR * 0.8);
-    ctx.shadowBlur = 4;
+    ctx.shadowBlur = 2.5;
     drawHand(ctx, secFrac, HANDS.second, wobR * 1.0);
     ctx.restore();
 
