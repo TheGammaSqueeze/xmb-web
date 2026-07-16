@@ -33,7 +33,7 @@
   // SCREENSHOTS is a viewport/projection artifact of the emulator, not the design;
   // per the project rule we follow the GE/disassembly, not the screenshot.)
   // --- geometry: element-centre radii (px), from the GE draw list + binary ---
-  var R_RING = 126, R_HTICK = 121, R_DISC = 141;   // hour-tick centre R121, glass disc R141
+  var R_RING = 126, R_HTICK = 131, R_DISC = 141;   // hour-tick centre R131 (disasm f22=131.0 @0x1D8FC), glass disc R141 -> dashes span R122..R140, reaching the disc edge
   var HOUR_TICKS = [1, 2, 4, 5, 7, 8, 10, 11];
   // Per-numeral radius overrides straight from the binary (sub_1D248: 12=r116
   // 0x42E8, 3=r120 0x42F0, 6=r113, 9=r118) - the four numerals have individual
@@ -224,7 +224,10 @@
       ctx.lineWidth = 5;
       for (var k = 0; k < HOUR_TICKS.length; k++) {
         var fr = HOUR_TICKS[k] / 12;
-        var pa = polar(fr, R_HTICK + 9), pb = polar(fr, R_HTICK - 9);   // centre at R121, len 18
+        // Sprite anchored at R131 (disasm), but the visible bar sits mostly INWARD of
+        // it: outer tip R137 so the round cap + cyan glow stay just inside the rim
+        // (R_DISC 141) instead of poking over; inner R115 -> a longer 22px dash.
+        var pa = polar(fr, R_HTICK + 6), pb = polar(fr, R_HTICK - 16);
         ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke();
       }
       ctx.restore();

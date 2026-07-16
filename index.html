@@ -15971,8 +15971,16 @@ const ENTRANCE_GLYPHS = (function () {
   }
   return arr;
 })();
-function drawClockEntrance(ctx, sc, ox, oy, reveal) {
+function drawClockEntrance(ctx, sc, ox, oy, reveal, angOffset, alphaMul) {
   if (reveal <= 0 || reveal >= 0.995) return;
+  // angOffset rotates the whole glyph field (used by the overlapping copies so their
+  // glyphs occupy interleaved rays rather than exactly doubling each other). alphaMul
+  // scales the whole burst's opacity (the envelope that fades the continuous loop out
+  // as the clock reaches its settled float). The tumbling XMB-icon sprites are drawn
+  // separately (drawEntranceIcons) on their own slower, continuously-spammed timeline.
+  angOffset = angOffset || 0;
+  if (alphaMul === undefined) alphaMul = 1;
+  if (alphaMul <= 0.002) return;
   const e3 = t => 1 - Math.pow(1 - t, 3);
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
@@ -15982,10 +15990,11 @@ function drawClockEntrance(ctx, sc, ox, oy, reveal) {
     if (lt <= 0) continue;
     const t = Math.min(1, lt);
     const dist = g.Rmax * e3(t);   // gentler expansion -> the cluster stays dense longer
-    const gx = ENTRANCE_SPAWN[0] + Math.cos(g.ang)*dist + Math.sin(g.wob + t*6.28)*g.wobA*t;
-    const gy = ENTRANCE_SPAWN[1] + Math.sin(g.ang)*dist;
+    const ang = g.ang + angOffset;
+    const gx = ENTRANCE_SPAWN[0] + Math.cos(ang)*dist + Math.sin(g.wob + t*6.28)*g.wobA*t;
+    const gy = ENTRANCE_SPAWN[1] + Math.sin(ang)*dist;
     const fade = Math.min(1, t/0.14) * (t < 0.55 ? 1 : Math.max(0, 1-(t-0.55)/0.45));
-    const a = g.peak * fade;
+    const a = g.peak * fade * alphaMul;
     if (a <= 0.01) continue;
     let sz = (7 + (g.size1-7)*Math.min(1, t*3)) * sc;
     // Position in canvas px, then BOW + MAGNIFY through the glass-ball lens whenever
@@ -16000,23 +16009,57 @@ function drawClockEntrance(ctx, sc, ox, oy, reveal) {
     drawPsGlyph(ctx, 0, 0, sz, g.type, a);
     ctx.restore();
   }
-  // scripted category-icon sprites: the XMB category icons ALSO appear tumbling
-  // among the PS button glyphs in the burst field (as on the real firmware), in
-  // addition to the main XMB icons blowing off their menu positions. Each cascades
-  // in, drifts its captured path, tumbles, and clears by ~reveal 0.54.
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+// Tumbling XMB-icon sprites for the entrance, on their OWN timeline (decoupled from
+// the glyph burst so they run at the original, slower speed and can be spammed
+// continuously). Same per-icon animation as before: cascade in along a captured path,
+// grow s0->s1, tumble (spin), fade, and bow/magnify through the glass-ball lens when
+// behind the disc. `reveal` is THIS stream's fed value; alphaMul is the settle envelope.
+// Deterministic per-(run, icon) pseudo-random: same seed+index always yields the same
+// {rotation, reach}, so within a run the values are constant (no per-frame jitter), but
+// they differ every run (cycle) and every open (via _pspIconSeedBase). Integer hash.
+function hashIconRnd(seed, i) {
+  let n = (Math.imul(seed | 0, 73856093) ^ Math.imul((i | 0) + 1, 19349663)) >>> 0;
+  n = Math.imul(n ^ (n >>> 13), 0x85ebca6b) >>> 0;
+  const a = n / 4294967296;
+  n = Math.imul(n ^ (n >>> 16), 0xc2b2ae35) >>> 0;
+  const b = n / 4294967296;
+  const ang = a * Math.PI * 2;                         // any outward direction
+  return { ct: Math.cos(ang), st: Math.sin(ang), dist: 0.78 + b * 0.55 };   // reach 0.78..1.33
+}
+function drawEntranceIcons(ctx, sc, ox, oy, reveal, alphaMul, seed) {
+  if (reveal <= 0) return;
+  if (alphaMul === undefined) alphaMul = 1;
+  if (alphaMul <= 0.002) return;
+  seed = seed | 0;
+  const e3 = t => 1 - Math.pow(1 - t, 3);
   const ICON_LIFE = 0.26;
-  for (const ic of ENTRANCE_ICONS) {
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for (let ii = 0; ii < ENTRANCE_ICONS.length; ii++) {
+    const ic = ENTRANCE_ICONS[ii];
     const lt = (reveal - ic.emit) / ICON_LIFE;
     if (lt <= 0 || lt >= 1) continue;
     const ico = (typeof getIcon === 'function') ? getIcon(ic.id) : null;
     if (!ico || !ico.img || !ico.loaded) continue;
     const e = e3(lt), seg = e * (ic.path.length - 1);
     const si = Math.min(ic.path.length - 2, seg|0), sf = seg - si;
-    const px = ic.path[si][0] + (ic.path[si+1][0]-ic.path[si][0])*sf;
-    const py = ic.path[si][1] + (ic.path[si+1][1]-ic.path[si][1])*sf;
+    let px = ic.path[si][0] + (ic.path[si+1][0]-ic.path[si][0])*sf;
+    let py = ic.path[si][1] + (ic.path[si+1][1]-ic.path[si][1])*sf;
+    // Per-RUN randomized positioning: rotate this icon's trajectory around its spawn
+    // point (path[0]) by a pseudo-random angle and scale its reach, so each spam of
+    // the icons flies out in a different arrangement instead of the same fixed paths.
+    const rnd = hashIconRnd(seed, ii);
+    const cx0 = ic.path[0][0], cy0 = ic.path[0][1];
+    const rx = (px - cx0) * rnd.dist, ry = (py - cy0) * rnd.dist;
+    px = cx0 + rx * rnd.ct - ry * rnd.st;
+    py = cy0 + rx * rnd.st + ry * rnd.ct;
     const sz = (ic.s0 + (ic.s1-ic.s0)*e) * sc;
     const fade = Math.min(1, lt / 0.18) * (lt < 0.6 ? 1 : Math.max(0, 1 - (lt - 0.6) / 0.4));
-    const a = ic.peak * fade;
+    const a = ic.peak * fade * alphaMul;
     if (a <= 0.01) continue;
     ctx.globalAlpha = a;
     // Tumble: the icons TURN as they blow away (wind physics), like the real
@@ -16069,6 +16112,7 @@ let _pspDetailFade = 0;   // ticks + background glyphs: fade in only once the cl
 // absorb the branch discontinuity at a mid-transition flip.
 let _pspDescent = -1;         // smoothed clock vertical position fraction (-1 = off top, 0 = rest)
 let _pspTextFadeSmooth = 1;   // smoothed text alpha multiplier (1 = fully visible)
+let _pspIconSeedBase = 0;     // random base for entrance-icon per-run positioning (re-rolled each open)
 function drawClockLens(ctx, W, H, cr) {
   if (cr <= 0 || !_pspLens || typeof waveCanvas === 'undefined' || !waveCanvas) return;
   ctx.save();
@@ -16199,12 +16243,36 @@ function drawPspClock(dt) {
   // magnified wave through the glass ball (zoom into the background), then the
   // drifting PS-glyph particles behind the clock (magnified within the lens).
   drawClockLens(pspClockCtx, pspClockCanvas.width, pspClockCanvas.height, clockReveal);
-  // Entrance glyph/icon EXPLOSION. Timing: it STARTS as the main XMB icons start
-  // moving off (reveal ~0 - the original timing), but is SLOWED ~50% (feed x0.87 vs
-  // the old x1.74) so it is still bursting as the clock drops in. Drawn AFTER the
-  // opaque lens (and applying the same per-glyph lens bow), so the glyphs are seen
-  // MAGNIFIED behind the clock face as the disc passes over them, then clear at settle.
-  drawClockEntrance(pspClockCtx, sc2, ox, oy, Math.min(1, pspClockReveal * 0.87));
+  // Entrance glyph EXPLOSION - CONTINUOUS overlapping loop that KEEPS PLAYING until
+  // the clock is fully settled + floating (per user). THREE looping copies of the
+  // glyph burst, each staggered by a THIRD of a period (and on interleaved rays via
+  // angOffset). A single burst is only bright over ~0.4 of its phase, so two copies
+  // (half-period apart) leave a visible gap; three copies (third-period apart) keep
+  // their bright windows overlapping, so a fresh burst is always spinning up as
+  // another fades = a sustained stream with NO gaps. A burstEnv envelope fades the
+  // whole loop out as the clock reaches its settled float (reveal ~1.0). Drawn AFTER
+  // the opaque lens (per-glyph lens bow) so the glyphs are MAGNIFIED behind the disc.
+  const BURST_P = 0.7;                                                         // reveal length of one burst cycle (~3500ms)
+  const burstEnv = Math.max(0, Math.min(1, (1.0 - pspClockReveal) / 0.12));    // clear as it settles + floats
+  const burstFed = (delay) => { const r = pspClockReveal - delay; return r > 0 ? (r / BURST_P % 1) * 0.87 : 0; };
+  drawClockEntrance(pspClockCtx, sc2, ox, oy, Math.min(1, burstFed(0)),               0,    burstEnv);
+  drawClockEntrance(pspClockCtx, sc2, ox, oy, Math.min(1, burstFed(BURST_P / 3)),     0.42, burstEnv);
+  drawClockEntrance(pspClockCtx, sc2, ox, oy, Math.min(1, burstFed(2 * BURST_P / 3)), 0.84, burstEnv);
+  // XMB-icon sprites keep SPAMMING continuously (no gaps) at the ORIGINAL slower speed
+  // until the clock settles (per user). Two copies of the icon stream on a slow loop
+  // (feed rate 0.87 = the original per-icon speed, vs the faster glyph loop), the 2nd
+  // offset half a period so the 6 icons keep flying out with overlap = no gaps. Each
+  // RUN (loop cycle) is randomized: its integer cycle index feeds the seed, so the
+  // icons fly out in a different arrangement every spam (and the two copies use
+  // distinct seeds so they don't overlay identically). Same settle envelope + lens bow.
+  const ICON_P = 0.62;                                          // reveal per icon cycle (all icons cleared by fed 0.54)
+  const iconFedA = (pspClockReveal % ICON_P) * 0.87;
+  const rIB = pspClockReveal - ICON_P / 2;                      // 2nd copy offset half a period
+  const iconFedB = rIB > 0 ? (rIB % ICON_P) * 0.87 : 0;
+  const iconCycleA = Math.floor(pspClockReveal / ICON_P);
+  const iconCycleB = rIB > 0 ? Math.floor(rIB / ICON_P) : 0;
+  drawEntranceIcons(pspClockCtx, sc2, ox, oy, iconFedA, burstEnv, _pspIconSeedBase + iconCycleA * 2);
+  drawEntranceIcons(pspClockCtx, sc2, ox, oy, iconFedB, burstEnv, _pspIconSeedBase + iconCycleB * 2 + 1);
   drawPspGlyphs(pspClockCtx, pspClockCanvas.width, pspClockCanvas.height, dt || 16, _pspDetailFade);
   if (window.PSPClock && PSPClock.isReady()) {
     let now = new Date();
@@ -16220,6 +16288,9 @@ function drawPspClock(dt) {
 }
 function togglePspClock() {
   pspClockOn = !pspClockOn;
+  // Re-roll the entrance-icon positioning seed on each OPEN so a fresh invocation of
+  // the clock also lays the icons out differently (not just each loop cycle within one).
+  if (pspClockOn) _pspIconSeedBase = (Math.random() * 1e9) | 0;
   // Small immediate wave jolt on toggle; the main transition surge is now driven by
   // the clock reveal in the wave draw (builds to a crest ~30% in, then recedes -
   // matches the capture), so this is just a tiny initial pop.
