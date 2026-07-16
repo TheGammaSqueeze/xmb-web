@@ -15863,10 +15863,11 @@ function pspClockResize() {
 function applyClockTransition(r) {
   if (r <= 0) { xmbCanvas.style.opacity = ''; return; }
   // The XMB icons/items MOVE off screen (they don't fade - see drawXMB blowX /
-  // drawItemList xShift, no opacity fade). The whole-canvas opacity only drops as a
-  // LATE BACKSTOP (0.60..0.74), after the icons have exited the frame, to clear the
-  // non-moving chrome (top status bar, description text) before the clock settles.
-  const f = Math.max(0, Math.min(1, (r - 0.60) / 0.14));
+  // drawItemList xShift, no opacity fade). All icons have exited the frame by
+  // reveal ~0.55, so the whole-canvas opacity drops as a backstop over 0.55..0.66
+  // (clearing the non-moving chrome - top status bar, description text - as the
+  // clock comes in, without fading any still-visible icon).
+  const f = Math.max(0, Math.min(1, (r - 0.55) / 0.11));
   xmbCanvas.style.opacity = String(1 - f * f * (3 - 2 * f));
 }
 // Drifting PlayStation-glyph particles that ride across the wave in the
