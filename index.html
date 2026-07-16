@@ -6960,8 +6960,19 @@ function drawBGWebGL(dt) {
     // open/close (sub_7FFC/sub_89E4 tweens). Here we drive the PS3 wave the same
     // way - a swell added to the ribbon amplitude on toggle, decaying over the
     // transition - so the wave animates/reorients alongside the clock drop-in.
-    gl.uniform1f(gl.getUniformLocation(waveShaderProgram, 'uWaveVelX'), waveVelX + clockWaveImpulseX);
-    gl.uniform1f(gl.getUniformLocation(waveShaderProgram, 'uWaveVelY'), waveVelY + clockWaveImpulse);
+    // Transition wave surge, driven by the clock reveal (NOT a decaying kick): the
+    // real PSP wave crest brightness rises to a PEAK ~30% into the open then recedes
+    // behind the clock (measured: crest brightness peaks at frames 200-230, reveal
+    // ~0.3, then falls off by ~0.65). A half-sine over reveal 0..0.65 reproduces that
+    // build-then-settle, and works in reverse for the close. Added on top of the
+    // live cat-nav velocity swell.
+    let cwSwellY = clockWaveImpulse, cwSwellX = clockWaveImpulseX;
+    if (typeof pspClockReveal !== 'undefined' && pspClockReveal > 0.001 && pspClockReveal < 0.66) {
+      const s = Math.sin(Math.PI * Math.min(1, pspClockReveal / 0.65));   // peak at reveal ~0.325
+      cwSwellY += 0.26 * s; cwSwellX += 0.12 * s;
+    }
+    gl.uniform1f(gl.getUniformLocation(waveShaderProgram, 'uWaveVelX'), waveVelX + cwSwellX);
+    gl.uniform1f(gl.getUniformLocation(waveShaderProgram, 'uWaveVelY'), waveVelY + cwSwellY);
     clockWaveImpulse *= 0.985;
     clockWaveImpulseX *= 0.985;
 
@@ -16083,11 +16094,11 @@ function drawPspClock(dt) {
 }
 function togglePspClock() {
   pspClockOn = !pspClockOn;
-  // Deform the wave RIBBON itself (not the whole canvas): a strong swell into the
-  // ribbon amplitude that flies the ribbon out then settles behind the clock, as
-  // in the real slide-open capture. Decays over the transition in the wave draw.
-  clockWaveImpulse = pspClockOn ? 0.24 : -0.14;
-  clockWaveImpulseX = pspClockOn ? 0.12 : -0.07;
+  // Small immediate wave jolt on toggle; the main transition surge is now driven by
+  // the clock reveal in the wave draw (builds to a crest ~30% in, then recedes -
+  // matches the capture), so this is just a tiny initial pop.
+  clockWaveImpulse = pspClockOn ? 0.06 : -0.05;
+  clockWaveImpulseX = pspClockOn ? 0.03 : -0.03;
   pspGlyphBurst = pspClockOn ? 1 : 0.6;   // kick the drifting PS-glyph particles
 }
 
