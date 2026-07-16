@@ -16073,10 +16073,12 @@ function drawPspClock(dt) {
   const floatY = 3.0 * Math.sin(_pspFloatT / 1000 * 2 * Math.PI / 3.6);   // amp 3px, period 3.6s
   const W = pspClockCanvas.width, H = pspClockCanvas.height;
   const sc2 = Math.min(H / 272, W / 288), ox = (W - 480 * sc2) / 2, oy = (H - 272 * sc2) / 2;
-  // Buoyant drop-in (plugin sub_7FFC scePaf position tween, overshoot easing type
-  // 4): descend from above, OVERSHOOT below the rest (sink low), bob back up and
-  // settle - like a buoyant boat. easeOutBack overshoots the target once.
-  const descentPx = pspClockBuoyant(clockReveal) * (272 + 50) * sc2;
+  // Clock vertical position. OPEN: buoyant drop-in (sub_7FFC property 0x13, easing
+  // type 4 - descend, overshoot below the rest, bob up, settle). CLOSE: the plugin
+  // uses easing type 0 = LINEAR on the SAME property 0x13 (sub_89E4, move a2,zero),
+  // over 750ms, so the clock just lifts straight up and off with no overshoot.
+  const descentFrac = pspClockOn ? pspClockBuoyant(clockReveal) : -(1 - clockReveal);
+  const descentPx = descentFrac * (272 + 50) * sc2;
   // glass-ball lens: disc centre + radius (with buoyant descent + idle float) in px.
   _pspLens = clockReveal > 0 ? { cx: ox + 240 * sc2, cy: oy + (136 + floatY) * sc2 + descentPx, r: 141 * sc2 } : null;
   // the entrance glyph/icon burst rides the FULL reveal, behind the clock
@@ -16105,7 +16107,7 @@ function drawPspClock(dt) {
       if (ct) { const p = ct.split(':').map(Number); now = new Date(2026, 0, 15, p[0] || 0, p[1] || 0, p[2] || 0); }
     } catch (e) {}
     if (window._pspRevealFreeze && !window._pspWarmed && PSPClock.warm) { PSPClock.warm(now); window._pspWarmed = true; }
-    PSPClock.draw(pspClockCtx, pspClockCanvas.width, pspClockCanvas.height, now, clockReveal, dt || 16, floatY, _pspDetailFade);
+    PSPClock.draw(pspClockCtx, pspClockCanvas.width, pspClockCanvas.height, now, clockReveal, dt || 16, floatY, _pspDetailFade, descentFrac);
   }
 }
 function togglePspClock() {

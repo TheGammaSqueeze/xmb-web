@@ -129,7 +129,7 @@
     ctx.fill();
   }
 
-  function draw(ctx, cw, ch, date, reveal, dt, floatY, detailFade) {
+  function draw(ctx, cw, ch, date, reveal, dt, floatY, detailFade, descentFrac) {
     reveal = reveal == null ? 1 : reveal;
     detailFade = detailFade == null ? 1 : detailFade;   // ticks fade in only once settled
     updateTrail(date, dt);
@@ -143,15 +143,15 @@
     ctx.save();
     ctx.setTransform(sc, 0, 0, sc, ox, oy);
     ctx.globalAlpha = Math.max(0, Math.min(1, reveal * 1.6));
-    // Buoyant drop-in (plugin sub_7FFC scePaf position tween, overshoot easing
-    // type 4): the clock descends from above, OVERSHOOTS below its resting place
-    // (sinks low like a buoyant boat), then bobs back up and settles. easeOutBack.
-    // Must match index.html pspClockBuoyant so the lens rides with the disc.
-    if (reveal < 1) {
-      var u = reveal - 1, c = 1.4;   // ~23px sink (validated vs capture Shot-450)
-      var buoy = (c + 1) * u * u * u + c * u * u;          // easeOutBack(reveal)-1
-      ctx.translate(0, buoy * (PSP_H + 50));               // <=0 above, >0 below rest
+    // Clock vertical position, computed by the caller (index.html) so the disc and
+    // its glass lens ride together: OPEN = buoyant easeOutBack (overshoot), CLOSE =
+    // linear lift (plugin easing type 4 vs 0 on property 0x13). descentFrac is the
+    // offset as a fraction of (PSP_H+50): <=0 above the top, 0 at rest, >0 below.
+    if (descentFrac == null) {   // fallback: buoyant open (validation renders pass reveal only)
+      var u = reveal - 1, c = 1.4;
+      descentFrac = (c + 1) * u * u * u + c * u * u;
     }
+    if (descentFrac !== 0) ctx.translate(0, descentFrac * (PSP_H + 50));
     // Idle float: the whole clock bobs gently up/down (measured on the real PSP).
     ctx.translate(0, floatY || 0);
     var wobR = 0;
