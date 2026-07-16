@@ -16074,11 +16074,11 @@ function drawPspClock(dt) {
   // reveal timings from slide_plugin.prx transition tweens: open ~2500ms,
   // close ~1500ms (sub_7FFC / sub_89E4 durations), ease-in-out.
   if (!window._pspRevealFreeze) {
-    // Durations straight from the plugin transition tweens: OPEN 2500ms (sub_7FFC:
-    // the main/alpha/plane tweens are all 0x451C4000 = 2500.0), CLOSE 1500ms
-    // (sub_89E4: 750/750/1500/1500). (Were inflated to 3400/1700; corrected to the
-    // disassembled values - the burst + drop-in still fit within reveal 0..1.)
-    const dur = pspClockOn ? 2500 : 1500;
+    // Plugin tween durations are OPEN 2500ms / CLOSE 1500ms (sub_7FFC / sub_89E4),
+    // but on the web they read too fast, so per the user we play them at HALF speed:
+    // OPEN 5000ms / CLOSE 3000ms. dt-based advance -> smooth + frame-rate independent
+    // (more frames per transition = smoother at high refresh rates).
+    const dur = pspClockOn ? 5000 : 3000;
     const step = (dt || 16) / dur;
     pspClockReveal += pspClockOn ? step : -step;
     pspClockReveal = Math.max(0, Math.min(1, pspClockReveal));
