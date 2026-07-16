@@ -16206,7 +16206,7 @@ function drawClockLens(ctx, W, H, cr) {
   const op = Math.min(1, cr * 5);
   ctx.save();
   ctx.globalAlpha = op;
-  ctx.filter = 'blur(3.2px)';   // frosted-glass softening of the magnified face (more blur -> no pixelation)
+  ctx.filter = 'blur(1.8px)';   // light glass softening (reduced haze; bilinear already avoids pixelation)
   ctx.drawImage(_glassBuf, 0, 0, CS, CS, bx, by, 2 * R, 2 * R);
   ctx.filter = 'none';
   // 4) BEVEL - confined to the outer ~4% only: a thin specular on the bevel facet + a
@@ -16230,8 +16230,8 @@ function drawClockLens(ctx, W, H, cr) {
   ctx.lineWidth = Math.max(1, R * 0.005);
   ctx.beginPath(); ctx.arc(cx, cy, R * 0.98, 0, Math.PI * 2); ctx.stroke();
   ctx.globalCompositeOperation = 'lighter';
-  // faint neutral frost lift over the flat face (the "before" style: no hue).
-  ctx.globalAlpha = op * 0.08;
+  // very faint neutral frost lift over the flat face (reduced haze; no hue).
+  ctx.globalAlpha = op * 0.03;
   ctx.fillStyle = 'rgb(210,222,232)';
   ctx.fillRect(bx, by, 2 * R, 2 * R);
   ctx.restore();

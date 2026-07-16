@@ -90,6 +90,57 @@
   var trail = new Float32Array(120);
   var DECAY = 0.98;
 
+  // --- date label pre-render buffer ---------------------------------------
+  // The date ("THU 16") is UI text. Drawing it with fillText each frame under the
+  // clock's slowly-changing fractional float translate makes it SNAP to the pixel
+  // grid (canvas text is not repositioned sub-pixel-smoothly at small sizes), so it
+  // visibly lags/steps while the vector numerals (Path2D fills) glide - it looked
+  // like the date was not moving in tandem with the floating disc. Fix: render the
+  // text ONCE to an offscreen buffer (only when the string or size bucket changes)
+  // and blit it with drawImage, which DOES interpolate at fractional destination
+  // coordinates, so the label floats smoothly locked to the face. Kept frosted by
+  // baking fill+stroke into the buffer and compositing it with 'lighter'.
+  var _dateBuf = null, _dateBufCtx = null, _dateKey = '', _dateSizePx = 0;
+  var DATE_FONT = 'PS3, "Arial Narrow", sans-serif';
+  function fontsReady(sizePx) {
+    try {
+      if (typeof document !== 'undefined' && document.fonts && document.fonts.check)
+        return document.fonts.check(sizePx + 'px PS3') ? 1 : 0;
+    } catch (e) {}
+    return 1;
+  }
+  // Render the date to _dateBuf at ~on-screen device resolution (crisp), returning
+  // true on success. The buffer keeps the text CENTRED in it so the blit can centre
+  // on (CX, dateY) exactly. Rebuilt only when the cache key (text|size|fontReady)
+  // changes, so it is essentially free per frame.
+  function renderDateBuf(dtxt, sizePx) {
+    if (!_dateBuf) {
+      if (typeof document === 'undefined') return false;
+      _dateBuf = document.createElement('canvas');
+      _dateBufCtx = _dateBuf.getContext('2d');
+    }
+    if (!_dateBufCtx) return false;
+    var key = dtxt + '|' + sizePx + '|' + fontsReady(sizePx);
+    if (key === _dateKey && _dateBuf.width) return true;
+    var c = _dateBufCtx;
+    var pad = Math.ceil(sizePx * 0.5);                 // room for the stroke + antialias
+    c.font = sizePx + 'px ' + DATE_FONT;
+    var w = Math.ceil(c.measureText(dtxt).width);
+    var bw = w + pad * 2, bh = Math.ceil(sizePx * 1.7) + pad * 2;
+    _dateBuf.width = bw; _dateBuf.height = bh;          // (resize also clears + resets ctx state)
+    c.clearRect(0, 0, bw, bh);
+    c.font = sizePx + 'px ' + DATE_FONT;
+    c.textAlign = 'center'; c.textBaseline = 'middle';
+    var cxp = bw / 2, cyp = bh / 2;
+    c.fillStyle = 'rgba(224,237,248,0.32)';            // frosted-glass fill (bg colour reads through)
+    c.fillText(dtxt, cxp, cyp);
+    c.lineWidth = Math.max(0.7, sizePx * 0.064);       // 0.7px at the 11px logical size
+    c.strokeStyle = 'rgba(255,255,255,0.28)';          // faint edge stroke (no glow)
+    c.strokeText(dtxt, cxp, cyp);
+    _dateKey = key; _dateSizePx = sizePx;
+    return true;
+  }
+
   function load() { /* procedural - no external assets */ }
 
   // The decompiled decay is 0.98 per PLUGIN frame; the plugin updates at the XMB
@@ -191,8 +242,8 @@
     // clearly defined circle but does NOT tint the scene - whatever XMB wallpaper
     // colour is behind shows THROUGH like real glass (no baked-in blue).
     var body = ctx.createRadialGradient(CX, CY, R_DISC * 0.15, CX, CY, R_DISC);
-    body.addColorStop(0, 'rgba(238,244,250,0.13)');
-    body.addColorStop(0.80, 'rgba(240,246,251,0.13)');
+    body.addColorStop(0, 'rgba(238,244,250,0.06)');
+    body.addColorStop(0.80, 'rgba(240,246,251,0.06)');
     body.addColorStop((R_DISC - 4) / R_DISC, 'rgba(255,255,255,0.20)');   // glass rim highlight (white)
     body.addColorStop((R_DISC - 3) / R_DISC, 'rgba(250,252,255,0.16)');
     body.addColorStop(1, 'rgba(240,246,251,0)');                          // fade over the last 3px only
@@ -219,7 +270,7 @@
         var a = trail[i];
         if (a < 0.02) continue;
         var fr = i / 120;
-        var pa = polar(fr, R_DISC - 1), pb = polar(fr, R_DISC - 17);   // radial dash reaching the disc EDGE from the inside (outer tip at R140, just inside R_DISC=141 - stays within the circle); centred on the R126 dot-ring, dash size ~16
+        var pa = polar(fr, R_DISC - 1), pb = polar(fr, R_DISC - 11);   // SHORT radial trail dash (outer tip R140 at the rim, ~10px long) to match the PSP's short second-hand trail ticks
         ctx.globalAlpha = a * 0.9 * detailFade;
         ctx.lineWidth = 1.5 + a * 0.9;
         ctx.strokeStyle = 'rgb(' + C_TRAIL[0] + ',' + C_TRAIL[1] + ',' + C_TRAIL[2] + ')';
@@ -237,14 +288,14 @@
       ctx.globalCompositeOperation = 'lighter';
       ctx.globalAlpha = detailFade;
       ctx.strokeStyle = C_GLYPH; ctx.lineCap = 'round';
-      ctx.shadowColor = C_GLOW; ctx.shadowBlur = 7;
-      ctx.lineWidth = 5;
+      ctx.shadowColor = C_GLOW; ctx.shadowBlur = 6;
+      ctx.lineWidth = 6;
       for (var k = 0; k < HOUR_TICKS.length; k++) {
         var fr = HOUR_TICKS[k] / 12;
-        // Sprite anchored at R131 (disasm), but the visible bar sits mostly INWARD of
-        // it: outer tip R137 so the round cap + cyan glow stay just inside the rim
-        // (R_DISC 141) instead of poking over; inner R115 -> a longer 22px dash.
-        var pa = polar(fr, R_HTICK + 6), pb = polar(fr, R_HTICK - 16);
+        // Bigger hour ticks to match the PSP (its tick sprite is a tall 32x44 bar).
+        // Outer tip R137 so the round cap + glow stay just inside the rim (R_DISC 141);
+        // inner extended to R107 -> a long ~30px chunky bar.
+        var pa = polar(fr, R_HTICK + 6), pb = polar(fr, R_HTICK - 24);
         ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke();
       }
       ctx.restore();
@@ -272,14 +323,40 @@
     }
     ctx.restore();
 
-    // 5) date "WED 15" below centre
+    // 5) date "THU 16" below centre - FROSTED FLAT GLASS text (per user): the letters are
+    // the same frosted glass as the face, a soft neutral lift that frosts the magnified
+    // background in the letter shapes so the background/wallpaper COLOUR pulls THROUGH
+    // them - NOT a solid bright glyph. The old cyan glow is replaced by a faint
+    // semi-transparent stroke that just defines the letter edges.
     ctx.save();
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.fillStyle = '#dff2ff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.font = '700 13px Arial, sans-serif';
-    ctx.shadowColor = C_GLOW; ctx.shadowBlur = 4;
-    var dow = DAYS[date.getDay()], dd = date.getDate();
-    ctx.fillText(dow + ' ' + dd, CX, CY + 28);
+    // date is regular UI text -> the PSP system font (New Rodin), NOT the clock's
+    // display numerals. Uses the app's 'PS3' Rodin (matches the extracted weekday
+    // sprites SUN/THU/WED). Blitted from a pre-rendered buffer (see renderDateBuf)
+    // so it floats SMOOTHLY sub-pixel in tandem with the disc instead of snapping to
+    // the pixel grid as fillText does under the slow float translate.
+    var dtxt = DAYS[date.getDay()] + ' ' + date.getDate();
+    var dateY = CY + 33;                                      // slightly further down, per the PSP layout
+    var _dpr = (typeof window !== 'undefined' && window.devicePixelRatio) ? window.devicePixelRatio : 1;
+    // buffer resolution ~ on-screen device size (11px logical * clock scale * dpr),
+    // bucketed to 2px so a stable size does not thrash the cache.
+    var sizePx = Math.max(11, Math.round(11 * sc * _dpr / 2) * 2);
+    if (renderDateBuf(dtxt, sizePx)) {
+      var dw = _dateBuf.width * 11 / sizePx;                  // buffer px -> logical (11px) units
+      var dh = _dateBuf.height * 11 / sizePx;
+      ctx.globalCompositeOperation = 'lighter';              // frosted-glass lift; bg colour reads through
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(_dateBuf, CX - dw / 2, dateY - dh / 2, dw, dh);
+    } else {                                                  // no DOM canvas: draw text directly
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = '11px ' + DATE_FONT;
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.fillStyle = 'rgba(224,237,248,0.32)';
+      ctx.fillText(dtxt, CX, dateY);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.lineWidth = 0.7;
+      ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+      ctx.strokeText(dtxt, CX, dateY);
+    }
     ctx.restore();
 
     // 6) hands (hour, minute, second) rotated to the decompiled angles
