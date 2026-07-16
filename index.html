@@ -7573,7 +7573,7 @@ function drawXMB(now) {
     // PSP slide-clock open: each category icon blows AWAY TO THE RIGHT as its own
     // particle (wind), dispersing at different speeds + drifting up, then fading -
     // matching the frame-by-frame jpcsp capture of the real transition.
-    let blowX = 0, blowY = 0, blowA = 1;
+    let blowX = 0, blowY = 0, blowA = 1, blowRot = 0;
     if (typeof pspClockReveal !== 'undefined' && pspClockReveal > 0) {
       // Icons blow away EARLY in the transition (done by reveal ~0.55), so the
       // clock then drops in after - matching the captured sequence (icons fly
@@ -7583,6 +7583,7 @@ function drawXMB(now) {
       blowX = bl * (420 + i * 190 + seed * 380);       // right + disperse (virtual px)
       blowY = -bl * (30 + seed * 70) - bl * bl * 40;   // drift up, accelerating
       blowA = Math.max(0, 1 - bl * (1.1 + seed * 0.5));
+      blowRot = bl * (seed - 0.5) * 2.4;               // TUMBLE as they blow away (wind physics), varied per icon
     }
     ctx.globalAlpha = alpha * revealA * blowA;
 
@@ -7596,7 +7597,15 @@ function drawXMB(now) {
       ctx.shadowBlur = 4;
       ctx.shadowOffsetX = 0;
       ctx.shadowOffsetY = 2;
-      drawIconAt(ctx, ic, DATA[i].icon, XCL(x, csz / 2) + blowX, y - csz / 2 + revealRise + blowY, csz, csz);
+      const _ix = XCL(x, csz / 2) + blowX, _iy = y - csz / 2 + revealRise + blowY;
+      if (blowRot) {   // tumble about the icon centre as it blows away
+        ctx.save();
+        ctx.translate(_ix + csz / 2, _iy + csz / 2); ctx.rotate(blowRot); ctx.translate(-(_ix + csz / 2), -(_iy + csz / 2));
+        drawIconAt(ctx, ic, DATA[i].icon, _ix, _iy, csz, csz);
+        ctx.restore();
+      } else {
+        drawIconAt(ctx, ic, DATA[i].icon, _ix, _iy, csz, csz);
+      }
       ctx.shadowColor = 'transparent';
       ctx.shadowBlur = 0;
       ctx.shadowOffsetY = 0;
