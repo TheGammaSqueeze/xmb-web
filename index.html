@@ -6967,8 +6967,8 @@ function drawBGWebGL(dt) {
     // build-then-settle, and works in reverse for the close. Added on top of the
     // live cat-nav velocity swell.
     let cwSwellY = clockWaveImpulse, cwSwellX = clockWaveImpulseX;
-    if (typeof pspClockReveal !== 'undefined' && pspClockReveal > 0.001 && pspClockReveal < 0.66) {
-      const s = Math.sin(Math.PI * Math.min(1, pspClockReveal / 0.65));   // peak at reveal ~0.325
+    if (typeof pspClockReveal !== 'undefined' && pspClockReveal > 0.001 && pspClockReveal < 0.40) {
+      const s = Math.sin(Math.PI * Math.min(1, pspClockReveal / 0.40));   // peak at reveal ~0.20 (capture: wave crest brightest at frames 200-230 = 13-20% of the transition)
       cwSwellY += 0.26 * s; cwSwellX += 0.12 * s;
     }
     gl.uniform1f(gl.getUniformLocation(waveShaderProgram, 'uWaveVelX'), waveVelX + cwSwellX);
@@ -16060,7 +16060,11 @@ function drawPspClock(dt) {
   // Sequence (from the capture): XMB icons blow off + glyph BURST during reveal
   // 0..0.87, then the CLOCK drops in during 0.68..1.0 (once the glyphs have mostly
   // cleared). Remap the clock's own reveal to that late window.
-  const clockReveal = Math.max(0, Math.min(1, (pspClockReveal - 0.68) / 0.32));
+  // Clock drop-in is the SECOND HALF of the open (reveal 0.5..1.0 = ~1250ms of the
+  // 2500ms open): validated both ways - capture frame 360 (clock starts descending)
+  // sits at 51% of the transition (frames 148..560), and the plugin's buoyant
+  // position tween (sub_7FFC property 0x13, easing type 4) is 1250ms = half the open.
+  const clockReveal = Math.max(0, Math.min(1, (pspClockReveal - 0.5) / 0.5));
   layoutPspGlass(clockReveal);
   pspClockCtx.clearRect(0, 0, pspClockCanvas.width, pspClockCanvas.height);
   // Idle vertical float (measured ~6px peak-to-peak, slow sine). Advance a phase
@@ -16076,7 +16080,10 @@ function drawPspClock(dt) {
   // glass-ball lens: disc centre + radius (with buoyant descent + idle float) in px.
   _pspLens = clockReveal > 0 ? { cx: ox + 240 * sc2, cy: oy + (136 + floatY) * sc2 + descentPx, r: 141 * sc2 } : null;
   // the entrance glyph/icon burst rides the FULL reveal, behind the clock
-  drawClockEntrance(pspClockCtx, sc2, ox, oy, pspClockReveal);
+  // The glyph/icon burst plays out in the FIRST HALF of the open (it clears by
+  // reveal ~0.5, as the clock arrives). Feed it a reveal scaled x1.74 so its
+  // internal 0..0.87 timeline (icons cascade, glyphs clear) completes by reveal 0.5.
+  drawClockEntrance(pspClockCtx, sc2, ox, oy, Math.min(1, pspClockReveal * 1.74));
   // Ticks + background glyphs fade IN only once the clock has SETTLED (drop-in
   // almost complete), and fade OUT fast on close - so they don't show prematurely
   // while the clock is still flying in.
