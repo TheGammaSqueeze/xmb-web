@@ -16135,7 +16135,7 @@ function buildGlassMap(CS) {
   // sampled radius sweeps out past the disc edge (EDGE>1) so the surrounding background
   // warps inward around the rim = a bevelled edge. Continuous value at BEVEL (the sharp
   // slope change there IS the bevel facet).
-  const M = 1.0, BEVEL = 0.98, EDGE = 1.10, P = 1.8;   // EXPERIMENT: face identity (M=1); the zoom-OUT is applied in the composite (drawClockLens FACE_ZOOM). BEVEL -> outer ~2% bevel
+  const M = 1.0, BEVEL = 0.98, EDGE = 1.10, P = 1.8;   // face identity (M=1); the zoom (FACE_ZOOM) is applied in the composite in drawClockLens. BEVEL -> outer ~2% bevel
   const baseSrc = BEVEL / M;
   for (let j = 0; j < CS; j++) {
     for (let i = 0; i < CS; i++) {
@@ -16200,15 +16200,16 @@ function drawClockLens(ctx, W, H, cr) {
   if (cr <= 0 || !_pspLens || typeof waveCanvas === 'undefined' || !waveCanvas) return;
   const R = _pspLens.r, cx = _pspLens.cx, cy = _pspLens.cy;
   if (R < 6) return;
-  const CS = Math.min(Math.ceil(2 * R), 640) | 0;   // compute resolution (raised from 420 to cut the upscale to the display disc)
+  const CS = Math.min(Math.ceil(2 * R), 960) | 0;   // compute resolution: track the display disc closely so the bilinear refraction stays SHARP (no downsample-then-upscale softening)
   if (_glassCS !== CS) buildGlassMap(CS);
   if (_glassBuf.width !== CS) { _glassBuf.width = CS; _glassBuf.height = CS; }
   const bx = cx - R, by = cy - R, s = CS / (2 * R);
-  // EXPERIMENT: FACE_ZOOM < 1 zooms the face OUT - it samples a WIDER area of the
-  // background and shrinks it into the disc (pulls in more background, less
-  // pixelation). The glyphs/icons keep their own zoom-IN lens bow (drawPspGlyphs),
-  // unchanged. Set FACE_ZOOM = 1.58-ish (and M back to 1.58) to restore zoom-in.
-  const FACE_ZOOM = 0.62;
+  // FACE_ZOOM > 1 zooms the face IN (magnifies the background through the glass): it
+  // samples a NARROWER area of the background and enlarges it into the disc. The map
+  // is identity (M = 1), so all the zoom is done here in the composite. (FACE_ZOOM < 1
+  // would zoom OUT instead - sample a wider area and shrink it in.) The glyphs/icons
+  // keep their own zoom-IN lens bow (drawPspGlyphs), unchanged.
+  const FACE_ZOOM = 1.1;   // magnify the background through the glass (very gentle zoom in)
   // 1) composite the background (bg gradient + PS3 wave) into the compute buffer,
   //    scaled DOWN about the disc centre by FACE_ZOOM (the zoom-out).
   _glassBufCtx.setTransform(1, 0, 0, 1, 0, 0);
@@ -16285,14 +16286,15 @@ function drawClockLens(ctx, W, H, cr) {
     }
   }
   _glassBufCtx.putImageData(_glassOut, 0, 0);
-  // 3) blit the warped disc onto the clock canvas (upscaled, soft glass blur), faded in.
+  // 3) blit the warped disc onto the clock canvas (upscaled), faded in. The face is
+  //    a CRISP, fully OPAQUE stamp (no softening blur) drawn over the disc hole that
+  //    drawClockBackdropBlur already punched, so the outside background-blur cannot
+  //    bleed into the face. HQ upscale + the bilinear refraction keep it clean.
   const op = Math.min(1, cr * 5);
   ctx.save();
   ctx.globalAlpha = op;
   ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';   // HQ upscale to the display disc
-  ctx.filter = 'blur(1.8px)';   // light glass softening (reduced haze; bilinear already avoids pixelation)
   ctx.drawImage(_glassBuf, 0, 0, CS, CS, bx, by, 2 * R, 2 * R);
-  ctx.filter = 'none';
   // 4) BEVEL - confined to the outer ~4% only: a thin specular on the bevel facet + a
   //    bright glint at the very edge, so the rim reads as a bevelled edge while the flat
   //    face stays clean. Additive, clipped to the disc.

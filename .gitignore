@@ -17,3 +17,4 @@ _*.txt
 _uvtest_*.html
 video/test/
 server_range.py
+PSP_CLOCK_SPEC.md
