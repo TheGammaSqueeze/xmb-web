@@ -49,10 +49,13 @@
   // Measured from the GE capture hand textures (32x256): near-UNIFORM width (not
   // tapered). Widths hour 8 / second 4 / minute 2 (texture px); lengths in the
   // ratio 108:175:229 (hour:minute:second) -> hour shortest, second longest.
+  // Width ORDER (from the capture, Shot-560): hour thickest bar, minute a medium
+  // bar, second a FINE line - hour > minute > second. (Was mis-ordered: second was
+  // set thicker than minute.) Half-widths at hub/tip.
   var HANDS = {
-    hour:   { len: 86,  back: 11, wHub: 3.0, wTip: 2.7 },   // thickest, shortest
-    minute: { len: 112, back: 13, wHub: 1.15, wTip: 1.0 },  // thinnest
-    second: { len: 139, back: 20, wHub: 1.7, wTip: 1.2 },   // thin, reaches the disc edge (R_DISC-2)
+    hour:   { len: 86,  back: 11, wHub: 3.0, wTip: 2.6 },   // thickest, shortest
+    minute: { len: 112, back: 13, wHub: 1.7, wTip: 1.4 },   // medium bar
+    second: { len: 139, back: 20, wHub: 1.0, wTip: 0.75 },  // fine line, reaches the disc edge (R_DISC-2)
   };
   var DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
