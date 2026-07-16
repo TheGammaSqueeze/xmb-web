@@ -15835,8 +15835,11 @@ function pspClockResize() {
 // / sub-icons) out. The wave RIBBON is deformed via the shader, not moved here.
 function applyClockTransition(r) {
   if (r <= 0) { xmbCanvas.style.opacity = ''; return; }
-  const fly = r * r * (3 - 2 * r);
-  xmbCanvas.style.opacity = String(Math.max(0, 1 - fly * 1.1));
+  // The XMB blows/fades away FAST at the very start (gone by r~0.14) so the glyph
+  // burst plays over an empty wave, as in the real capture (no XMB behind the
+  // burst - avoids the menu/category bar showing under the flying icons).
+  const f = Math.min(1, r / 0.14), fly = f * f * (3 - 2 * f);
+  xmbCanvas.style.opacity = String(Math.max(0, 1 - fly));
 }
 // Drifting PlayStation-glyph particles that ride across the wave in the
 // background (the "PS icons in the background" seen in the real slide capture:
@@ -15860,6 +15863,91 @@ function drawPsGlyph(ctx, x, y, s, type, a) {
   else { ctx.moveTo(x, y - s * 0.5); ctx.lineTo(x + s * 0.46, y + s * 0.4); ctx.lineTo(x - s * 0.46, y + s * 0.4); ctx.closePath(); }
   ctx.stroke();
 }
+// ===== Clock ENTRANCE glyph/icon burst =====================================
+// Reconstructed 1:1 from the jpcsp open-transition capture (frames 148-360, see
+// psp_clock/glyph_anim_spec.json). Driven by the FULL open reveal (0..1): XMB
+// category icons peel out of a central spawn one-by-one and drift to rest points
+// (growing + fading by r~0.45); a radial field of PS button glyphs bursts upward-
+// and-outward, clearing by r~0.87; then the clock disc drops in. Close = reverse.
+const ENTRANCE_SPAWN = [240, 122];
+const ENTRANCE_ICONS = [   // {id, emit reveal, path in PSP px, size0->1, peak opacity}
+  { id:'xmb_icon_001', emit:0.03, path:[[240,122],[172,137],[130,190],[95,196]], s0:24, s1:55, peak:1.00 }, // System briefcase -> down-left
+  { id:'xmb_icon_002', emit:0.04, path:[[240,122],[300,124],[360,150],[432,168]], s0:22, s1:32, peak:0.95 }, // Photo camera -> right
+  { id:'xmb_icon_003', emit:0.11, path:[[244,124],[290,145],[360,170],[430,176]], s0:22, s1:30, peak:0.85 }, // Music note -> right-down
+  { id:'xmb_icon_004', emit:0.17, path:[[240,124],[224,155],[204,190],[198,206]], s0:24, s1:34, peak:0.90 }, // Video film -> down-left
+  { id:'xmb_icon_006', emit:0.23, path:[[250,122],[272,140],[330,170],[400,190]], s0:24, s1:40, peak:0.62 }, // Network globe -> right-down
+  { id:'xmb_icon_005', emit:0.28, path:[[254,122],[268,110],[300,96],[316,90]],   s0:28, s1:46, peak:0.68 }, // Game pad -> up-right
+];
+const ENTRANCE_ICON_LIFE = 0.42;
+const ENTRANCE_GLYPHS = (function () {
+  const arr = [], N = 22, R = () => Math.random();
+  const typeW = [0,0,0,0,1,1,1,3,3,2,4];   // circle>cross>triangle>square~diamond
+  for (let i = 0; i < N; i++) {
+    const hero = i < 3;
+    arr.push({
+      ang: (-Math.PI/2) + (R()-0.5)*Math.PI*1.9,   // outward, upper-arc upward bias
+      Rmax: 150 + R()*60, type: typeW[(R()*typeW.length)|0],
+      size1: hero ? (26+R()*10) : (12+R()*7),
+      peak: hero ? (0.6+R()*0.25) : (0.3+R()*0.25),
+      start: 0.02 + R()*0.12, rot: (R()-0.5)*1.2, wob: R()*6.28, wobA: 3+R()*6,
+    });
+  }
+  return arr;
+})();
+function drawClockEntrance(ctx, sc, ox, oy, reveal) {
+  if (reveal <= 0 || reveal >= 0.995) return;
+  const e3 = t => 1 - Math.pow(1 - t, 3);
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  // radial PS-glyph burst
+  for (const g of ENTRANCE_GLYPHS) {
+    const lt = (reveal - g.start) / (0.87 - g.start);
+    if (lt <= 0) continue;
+    const t = Math.min(1, lt);
+    const dist = g.Rmax * e3(Math.min(1, t * 1.35));
+    const gx = ENTRANCE_SPAWN[0] + Math.cos(g.ang)*dist + Math.sin(g.wob + t*6.28)*g.wobA*t;
+    const gy = ENTRANCE_SPAWN[1] + Math.sin(g.ang)*dist;
+    const fade = Math.min(1, t/0.14) * (t < 0.55 ? 1 : Math.max(0, 1-(t-0.55)/0.45));
+    const a = g.peak * fade;
+    if (a <= 0.01) continue;
+    const sz = (7 + (g.size1-7)*Math.min(1, t*3)) * sc;
+    ctx.save(); ctx.translate(ox + gx*sc, oy + gy*sc); ctx.rotate(g.rot*t);
+    drawPsGlyph(ctx, 0, 0, sz, g.type, a);
+    ctx.restore();
+  }
+  // scripted category-icon sprites (reuse the XMB icon assets)
+  for (const ic of ENTRANCE_ICONS) {
+    const lt = (reveal - ic.emit) / ENTRANCE_ICON_LIFE;
+    if (lt <= 0 || lt >= 1) continue;
+    const ico = (typeof getIcon === 'function') ? getIcon(ic.id) : null;
+    if (!ico || !ico.img || !ico.loaded) continue;
+    const e = e3(lt), seg = e * (ic.path.length - 1);
+    const si = Math.min(ic.path.length - 2, seg|0), sf = seg - si;
+    const px = ic.path[si][0] + (ic.path[si+1][0]-ic.path[si][0])*sf;
+    const py = ic.path[si][1] + (ic.path[si+1][1]-ic.path[si][1])*sf;
+    const sz = (ic.s0 + (ic.s1-ic.s0)*e) * sc;
+    const fade = Math.min(1, lt/0.12) * (lt < 0.6 ? 1 : Math.max(0, 1-(lt-0.6)/0.4));
+    const a = ic.peak * fade;
+    if (a <= 0.01) continue;
+    ctx.globalAlpha = a;
+    ctx.drawImage(ico.img, ox + px*sc - sz/2, oy + py*sc - sz/2, sz, sz);
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+// Buoyant clock drop-in easing (plugin sub_7FFC scePaf position tween, overshoot
+// easing type 4). Returns the vertical offset as a FRACTION of (screenH+50):
+//   -1 = fully above the top edge (start), 0 = at rest, >0 = overshot BELOW the
+//   rest (the buoyant "sink" before it bobs back up). This is easeOutBack(r)-1, so
+//   the clock descends, dips past its resting place, then rises and settles.
+function pspClockBuoyant(r) {
+  if (r <= 0) return -1;
+  if (r >= 1) return 0;
+  const c = 2.4, u = r - 1;          // c = overshoot strength -> depth of the sink
+  return (c + 1) * u * u * u + c * u * u;   // = easeOutBack(r) - 1
+}
+
 // Glass-ball lens (disc centre + radius in canvas px). Set each frame while the
 // clock is up; the wave + glyphs behind the disc are magnified through it.
 // The disc is a horizontal ELLIPSE (PSPClock.CLOCK_ASPECT), so the lens is too.
@@ -15935,33 +16023,33 @@ function drawPspClock(dt) {
   // reveal timings from slide_plugin.prx transition tweens: open ~2500ms,
   // close ~1500ms (sub_7FFC / sub_89E4 durations), ease-in-out.
   if (!window._pspRevealFreeze) {
-    const dur = pspClockOn ? 2500 : 1500;
+    // open ~3400ms (glyph burst then clock drop-in), close ~1700ms (sub_7FFC/sub_89E4).
+    const dur = pspClockOn ? 3400 : 1700;
     const step = (dt || 16) / dur;
     pspClockReveal += pspClockOn ? step : -step;
     pspClockReveal = Math.max(0, Math.min(1, pspClockReveal));
   }
   applyClockTransition(pspClockReveal);
-  // Staggered sequence (from the capture): icons blow off during reveal 0..0.55,
-  // then the CLOCK drops in during reveal 0.4..1.0. Remap the clock's own reveal.
-  const clockReveal = Math.max(0, Math.min(1, (pspClockReveal - 0.4) / 0.6));
+  // Sequence (from the capture): XMB icons blow off + glyph BURST during reveal
+  // 0..0.87, then the CLOCK drops in during 0.68..1.0 (once the glyphs have mostly
+  // cleared). Remap the clock's own reveal to that late window.
+  const clockReveal = Math.max(0, Math.min(1, (pspClockReveal - 0.68) / 0.32));
   layoutPspGlass(clockReveal);
   pspClockCtx.clearRect(0, 0, pspClockCanvas.width, pspClockCanvas.height);
   // Idle vertical float (measured ~6px peak-to-peak, slow sine). Advance a phase
   // by real dt so it animates even when the hands are frozen for validation.
   _pspFloatT += (dt || 16);
   const floatY = 3.0 * Math.sin(_pspFloatT / 1000 * 2 * Math.PI / 3.6);   // amp 3px, period 3.6s
-  // glass-ball lens params: disc centre + radius (with descent + float) in canvas px.
-  // Scale MUST match PSPClock.draw: circle-fills the display (height-driven wide,
-  // width-capped square) so the lens stays aligned to the disc. 288 = 2*R_DISC + 6.
-  {
-    const W = pspClockCanvas.width, H = pspClockCanvas.height;
-    const sc2 = Math.min(H / 272, W / 288);
-    const ox = (W - 480 * sc2) / 2, oy = (H - 272 * sc2) / 2;
-    // follow the clock's drop-from-top descent + idle float so the lens stays on the disc
-    const eased = 1 - Math.pow(1 - clockReveal, 3);
-    const descent = -(1 - eased) * (272 + 50) * sc2;
-    _pspLens = clockReveal > 0 ? { cx: ox + 240 * sc2, cy: oy + (136 + floatY) * sc2 + descent, r: 141 * sc2 } : null;
-  }
+  const W = pspClockCanvas.width, H = pspClockCanvas.height;
+  const sc2 = Math.min(H / 272, W / 288), ox = (W - 480 * sc2) / 2, oy = (H - 272 * sc2) / 2;
+  // Buoyant drop-in (plugin sub_7FFC scePaf position tween, overshoot easing type
+  // 4): descend from above, OVERSHOOT below the rest (sink low), bob back up and
+  // settle - like a buoyant boat. easeOutBack overshoots the target once.
+  const descentPx = pspClockBuoyant(clockReveal) * (272 + 50) * sc2;
+  // glass-ball lens: disc centre + radius (with buoyant descent + idle float) in px.
+  _pspLens = clockReveal > 0 ? { cx: ox + 240 * sc2, cy: oy + (136 + floatY) * sc2 + descentPx, r: 141 * sc2 } : null;
+  // the entrance glyph/icon burst rides the FULL reveal, behind the clock
+  drawClockEntrance(pspClockCtx, sc2, ox, oy, pspClockReveal);
   // Ticks + background glyphs fade IN only once the clock has SETTLED (drop-in
   // almost complete), and fade OUT fast on close - so they don't show prematurely
   // while the clock is still flying in.

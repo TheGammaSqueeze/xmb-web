@@ -143,13 +143,14 @@
     ctx.save();
     ctx.setTransform(sc, 0, 0, sc, ox, oy);
     ctx.globalAlpha = Math.max(0, Math.min(1, reveal * 1.6));
-    // Real drop-in (jpcsp capture, frame ~408): the clock is at its NORMAL size
-    // but positioned high (centre near the top, 12 off-screen above) and DESCENDS
-    // straight down into place. No zoom, no hand wobble (couldn't verify either
-    // from the frozen-time capture; not inventing them).
+    // Buoyant drop-in (plugin sub_7FFC scePaf position tween, overshoot easing
+    // type 4): the clock descends from above, OVERSHOOTS below its resting place
+    // (sinks low like a buoyant boat), then bobs back up and settles. easeOutBack.
+    // Must match index.html pspClockBuoyant so the lens rides with the disc.
     if (reveal < 1) {
-      var eased = 1 - Math.pow(1 - reveal, 3);            // easeOutCubic
-      ctx.translate(0, -(1 - eased) * (PSP_H + 50));      // descend from above
+      var u = reveal - 1, c = 2.4;
+      var buoy = (c + 1) * u * u * u + c * u * u;          // easeOutBack(reveal)-1
+      ctx.translate(0, buoy * (PSP_H + 50));               // <=0 above, >0 below rest
     }
     // Idle float: the whole clock bobs gently up/down (measured on the real PSP).
     ctx.translate(0, floatY || 0);
