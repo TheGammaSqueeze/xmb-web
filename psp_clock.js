@@ -305,9 +305,8 @@
     // height-100, centred at the origin; scale by NUM_H/100 and place at polar(frac,R).
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    ctx.fillStyle = C_GLYPH;
-    ctx.shadowColor = glowColor(); ctx.shadowBlur = 3;   // reduced cyan glow halo
     var NUM_H = 41;   // on-screen numeral height (px); tuned to the real dial proportion
+    var _ng = glowColor();
     for (var n = 0; n < NUMERALS.length; n++) {
       var nm = NUMERALS[n], pp = polar(nm.frac, nm.R), gp = NUM_PATHS[nm.s];
       if (!gp) continue;
@@ -315,6 +314,18 @@
       ctx.save();
       ctx.translate(pp[0], pp[1]);   // path is centred at its bbox, so this centres the glyph
       ctx.scale(s, s);
+      // The atlas TRACE has bumpy edges/corners. Mask them with a soft FILLED glow
+      // HALO (not a stroke - a stroke reads as a hard outline): fill the glyph in the
+      // glow colour with a WIDE blur so a diffuse halo surrounds it and the blur softens
+      // the jagged silhouette. Two passes (wide + mid) give a smooth falloff.
+      ctx.fillStyle = _ng; ctx.shadowColor = _ng;
+      ctx.globalAlpha = 0.5;
+      ctx.shadowBlur = 12; ctx.fill(gp);   // wide soft outer glow
+      ctx.shadowBlur = 7;  ctx.fill(gp);   // mid glow, denser near the edge
+      ctx.globalAlpha = 1;
+      // crisp white core on top, with a small feather so its edge melts into the glow.
+      ctx.shadowColor = _ng; ctx.shadowBlur = 3;
+      ctx.fillStyle = C_GLYPH;
       ctx.fill(gp);
       ctx.restore();
     }

@@ -16135,7 +16135,7 @@ function buildGlassMap(CS) {
   // sampled radius sweeps out past the disc edge (EDGE>1) so the surrounding background
   // warps inward around the rim = a bevelled edge. Continuous value at BEVEL (the sharp
   // slope change there IS the bevel facet).
-  const M = 1.58, BEVEL = 0.98, EDGE = 1.10, P = 1.8;   // M = centre magnification; BEVEL -> outer ~2% bevel at the very edge
+  const M = 1.0, BEVEL = 0.98, EDGE = 1.10, P = 1.8;   // EXPERIMENT: face identity (M=1); the zoom-OUT is applied in the composite (drawClockLens FACE_ZOOM). BEVEL -> outer ~2% bevel
   const baseSrc = BEVEL / M;
   for (let j = 0; j < CS; j++) {
     for (let i = 0; i < CS; i++) {
@@ -16153,20 +16153,73 @@ function buildGlassMap(CS) {
   _glassMapX = mx; _glassMapY = my; _glassCS = CS;
   _glassOut = _glassBufCtx.createImageData(CS, CS);   // alpha 0 everywhere by default
 }
+// Blur the background BEHIND/AROUND the clock the same way a submenu (Settings >
+// Themes) defocuses the XMB: downsample the composited background (bg gradient +
+// wave) into the small shared blur canvas, draw it back upscaled with a big CSS
+// blur + a mild darken, then PUNCH OUT the disc so the clock FACE is excluded from
+// the blur (it keeps its own crisp zoomed-out refraction). Ramped by `amt`.
+function drawClockBackdropBlur(ctx, W, H, amt, lens) {
+  if (amt <= 0 || typeof waveCanvas === 'undefined' || !waveCanvas) return;
+  const BW = DIALOG_BLUR_W, BH = DIALOG_BLUR_H, b = dialogBlurCtx;
+  // 1) composite bg + wave into the small blur buffer (cheap downsample).
+  b.setTransform(1, 0, 0, 1, 0, 0);
+  b.globalAlpha = 1;
+  b.imageSmoothingEnabled = true; b.imageSmoothingQuality = 'low';
+  try {
+    b.globalCompositeOperation = 'copy';
+    if (typeof bgCanvas !== 'undefined' && bgCanvas) b.drawImage(bgCanvas, 0, 0, BW, BH);
+    else { b.fillStyle = '#101018'; b.fillRect(0, 0, BW, BH); }
+    b.globalCompositeOperation = 'source-over';
+    b.drawImage(waveCanvas, 0, 0, BW, BH);
+  } catch (e) { b.globalCompositeOperation = 'source-over'; return; }
+  b.globalCompositeOperation = 'source-over';
+  // 2) draw it back over the whole clock canvas, blurred + slightly darkened, ramped.
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = amt;
+  ctx.filter = 'blur(18px)';
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
+  // OVERFLOW the blurred draw beyond the screen edges so the blur kernel's faded
+  // margin (~3x the 18px radius) falls OFF-screen; otherwise the backdrop goes
+  // semi-transparent within a blur-radius of each edge and the crisp bg shows there.
+  const M = 60;
+  ctx.drawImage(dialogBlurCanvas, 0, 0, BW, BH, -M, -M, W + 2 * M, H + 2 * M);
+  ctx.filter = 'none';
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = 'rgba(0,0,0,' + (0.30 * amt).toFixed(3) + ')';   // mild defocus darken
+  ctx.fillRect(0, 0, W, H);
+  // 3) punch the disc out so the face is NOT blurred (crisp refraction shows there).
+  if (lens) {
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.beginPath(); ctx.arc(lens.cx, lens.cy, lens.r, 0, Math.PI * 2);
+    ctx.fillStyle = '#000'; ctx.fill();
+  }
+  ctx.restore();
+}
 function drawClockLens(ctx, W, H, cr) {
   if (cr <= 0 || !_pspLens || typeof waveCanvas === 'undefined' || !waveCanvas) return;
   const R = _pspLens.r, cx = _pspLens.cx, cy = _pspLens.cy;
   if (R < 6) return;
-  const CS = Math.min(Math.ceil(2 * R), 420) | 0;
+  const CS = Math.min(Math.ceil(2 * R), 640) | 0;   // compute resolution (raised from 420 to cut the upscale to the display disc)
   if (_glassCS !== CS) buildGlassMap(CS);
   if (_glassBuf.width !== CS) { _glassBuf.width = CS; _glassBuf.height = CS; }
   const bx = cx - R, by = cy - R, s = CS / (2 * R);
-  // 1) composite the SAME background (bg gradient + PS3 wave) into the compute buffer.
+  // EXPERIMENT: FACE_ZOOM < 1 zooms the face OUT - it samples a WIDER area of the
+  // background and shrinks it into the disc (pulls in more background, less
+  // pixelation). The glyphs/icons keep their own zoom-IN lens bow (drawPspGlyphs),
+  // unchanged. Set FACE_ZOOM = 1.58-ish (and M back to 1.58) to restore zoom-in.
+  const FACE_ZOOM = 0.62;
+  // 1) composite the background (bg gradient + PS3 wave) into the compute buffer,
+  //    scaled DOWN about the disc centre by FACE_ZOOM (the zoom-out).
   _glassBufCtx.setTransform(1, 0, 0, 1, 0, 0);
   _glassBufCtx.clearRect(0, 0, CS, CS);
+  _glassBufCtx.imageSmoothingEnabled = true; _glassBufCtx.imageSmoothingQuality = 'high';   // HQ downsample of the background
   _glassBufCtx.save();
   _glassBufCtx.scale(s, s);
   _glassBufCtx.translate(-bx, -by);
+  _glassBufCtx.translate(cx, cy);
+  _glassBufCtx.scale(FACE_ZOOM, FACE_ZOOM);
+  _glassBufCtx.translate(-cx, -cy);
   try {
     if (typeof bgCanvas !== 'undefined' && bgCanvas) _glassBufCtx.drawImage(bgCanvas, 0, 0, W, H);
     _glassBufCtx.drawImage(waveCanvas, 0, 0, W, H);
@@ -16182,8 +16235,9 @@ function drawClockLens(ctx, W, H, cr) {
   // screen-height, and it is fully above the screen mid-drop-in). Sampling there would
   // read the transparent/black area, showing black in the bevel. Clamp every sample to
   // this valid rect so the rim instead captures the nearest real background pixel.
-  const ix0 = Math.max(0, Math.ceil(-s * bx)), ix1 = Math.min(cs1, Math.floor(s * (W - bx) - 1));
-  const iy0 = Math.max(0, Math.ceil(-s * by)), iy1 = Math.min(cs1, Math.floor(s * (H - by) - 1));
+  const Rb = CS / 2, sz = s * FACE_ZOOM;   // on-canvas rect accounts for the FACE_ZOOM composite scale about centre
+  const ix0 = Math.max(0, Math.ceil(Rb - sz * cx)), ix1 = Math.min(cs1, Math.floor(Rb + sz * (W - cx) - 1));
+  const iy0 = Math.max(0, Math.ceil(Rb - sz * cy)), iy1 = Math.min(cs1, Math.floor(Rb + sz * (H - cy) - 1));
   for (let idx = 0, n = mx.length; idx < n; idx++) {
     let sx = mx[idx];
     if (sx < 0) continue;   // outside disc: alpha stays 0
@@ -16235,6 +16289,7 @@ function drawClockLens(ctx, W, H, cr) {
   const op = Math.min(1, cr * 5);
   ctx.save();
   ctx.globalAlpha = op;
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';   // HQ upscale to the display disc
   ctx.filter = 'blur(1.8px)';   // light glass softening (reduced haze; bilinear already avoids pixelation)
   ctx.drawImage(_glassBuf, 0, 0, CS, CS, bx, by, 2 * R, 2 * R);
   ctx.filter = 'none';
@@ -16355,6 +16410,9 @@ function drawPspClock(dt) {
     const rate = (dt || 16) / (settled ? 320 : 140);   // in ~320ms once settled; out ~140ms (immediate)
     _pspDetailFade = Math.max(0, Math.min(1, _pspDetailFade + (settled ? rate : -rate)));
   }
+  // Blur the background OUTSIDE the clock (same submenu/dialog defocus), then punch
+  // the disc so the FACE keeps its crisp zoomed-out refraction. Ramped with the disc.
+  drawClockBackdropBlur(pspClockCtx, W, H, clockReveal, _pspLens);
   // magnified wave through the glass ball (zoom into the background), then the
   // drifting PS-glyph particles behind the clock (magnified within the lens).
   drawClockLens(pspClockCtx, pspClockCanvas.width, pspClockCanvas.height, clockReveal);
@@ -16368,7 +16426,9 @@ function drawPspClock(dt) {
   // whole loop out as the clock reaches its settled float (reveal ~1.0). Drawn AFTER
   // the opaque lens (per-glyph lens bow) so the glyphs are MAGNIFIED behind the disc.
   const BURST_P = 0.7;                                                         // reveal length of one burst cycle (~3500ms)
-  const burstEnv = Math.max(0, Math.min(1, (1.0 - pspClockReveal) / 0.12));    // clear as it settles + floats
+  // Finish the explosion ~MIDWAY through the clock drop (drop = pspClockReveal
+  // 0.3..1.0, so midway = 0.65), not near the end - it was repeating too long.
+  const burstEnv = Math.max(0, Math.min(1, (0.65 - pspClockReveal) / 0.16));
   const burstFed = (delay) => { const r = pspClockReveal - delay; return r > 0 ? (r / BURST_P % 1) * 0.87 : 0; };
   drawClockEntrance(pspClockCtx, sc2, ox, oy, Math.min(1, burstFed(0)),               0,    burstEnv);
   drawClockEntrance(pspClockCtx, sc2, ox, oy, Math.min(1, burstFed(BURST_P / 3)),     0.42, burstEnv);
