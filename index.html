@@ -7575,15 +7575,14 @@ function drawXMB(now) {
     // matching the frame-by-frame jpcsp capture of the real transition.
     let blowX = 0, blowY = 0, blowA = 1, blowRot = 0;
     if (typeof pspClockReveal !== 'undefined' && pspClockReveal > 0) {
-      // Icons blow away EARLY in the transition (done by reveal ~0.55), so the
-      // clock then drops in after - matching the captured sequence (icons fly
-      // off first, wave settles, clock arrives).
-      const bl = Math.pow(Math.min(1, pspClockReveal / 0.55), 1.5);
+      // Icons MOVE fully off the right edge (they do NOT fade - they physically
+      // slide/tumble off screen as the clock comes in), over reveal 0..0.6.
+      const bl = Math.pow(Math.min(1, pspClockReveal / 0.6), 1.5);
       const seed = ((i * 53 + 7) % 17) / 17;          // deterministic per-icon variation
-      blowX = bl * (420 + i * 190 + seed * 380);       // right + disperse (virtual px)
-      blowY = -bl * (30 + seed * 70) - bl * bl * 40;   // drift up, accelerating
-      blowA = Math.max(0, 1 - bl * (1.1 + seed * 0.5));
-      blowRot = bl * (seed - 0.5) * 2.4;               // TUMBLE as they blow away (wind physics), varied per icon
+      blowX = bl * (2200 + i * 320 + seed * 500);      // travel far enough to exit the frame (virtual px)
+      blowY = -bl * (60 + seed * 150);                 // drift up as they go
+      blowA = 1;                                       // no fade - icons leave by moving off-screen
+      blowRot = bl * (seed - 0.5) * 2.6;               // tumble as they blow away (wind physics)
     }
     ctx.globalAlpha = alpha * revealA * blowA;
 
@@ -7747,20 +7746,21 @@ function drawXMB(now) {
       // own direction (varied horizontal drift + up), its own start time and
       // rate - then fades, during the early part of the transition (before the
       // clock drops in). Not the list moving as a unit.
-      let itemFloatA = 1;
+      let itemFloatA = 1, itemFloatRot = 0;
       xShift = _xShiftBase;
       if (typeof pspClockReveal !== 'undefined' && pspClockReveal > 0) {
         // Progress over the SAME early window as the category icons (reveal
         // 0..0.55) so the whole XMB clears together, not the items racing ahead.
-        const fr = Math.min(1, pspClockReveal / 0.55);
+        const fr = Math.min(1, pspClockReveal / 0.6);
         const seed = ((i * 61 + 13) % 23) / 23;                 // per-item variation
         const st = Math.max(0, Math.min(1, fr - i * 0.02 - seed * 0.03));
         const e = Math.pow(st, 1.5);
-        // fly off the right edge (varied speed per item) with its own upward
-        // arc; stay visible while flying, fade only at the very end.
-        xShift = _xShiftBase + e * (1250 + seed * 1050);
-        y -= e * (45 + seed * 190);
-        itemFloatA = Math.max(0, 1 - e * e);
+        // Items MOVE fully off the right edge (varied speed) with an upward arc -
+        // they do NOT fade in place; they slide/tumble off screen as the clock enters.
+        xShift = _xShiftBase + e * (2000 + seed * 1300);
+        y -= e * (60 + seed * 220);
+        itemFloatA = 1;                            // no fade - the item leaves by exiting the frame
+        itemFloatRot = e * (seed - 0.5) * 2.2;     // tumble the item's icon as it flies away
       }
 
       // Cull and edge-fade against the FULL visible frame (portrait extends well
@@ -7827,7 +7827,14 @@ function drawXMB(now) {
         const ciz = isz * iconScale(items[i].i);
         const iconX = XCL(V.ITEM_ICON_X + xShift, ciz / 2);
         const iconY = y - ciz / 2;
-        drawIconAt(ctx, ic, items[i].i, iconX, iconY, ciz, ciz);
+        if (itemFloatRot) {   // tumble about the icon centre as the item flies away
+          ctx.save();
+          ctx.translate(iconX + ciz / 2, iconY + ciz / 2); ctx.rotate(itemFloatRot); ctx.translate(-(iconX + ciz / 2), -(iconY + ciz / 2));
+          drawIconAt(ctx, ic, items[i].i, iconX, iconY, ciz, ciz);
+          ctx.restore();
+        } else {
+          drawIconAt(ctx, ic, items[i].i, iconX, iconY, ciz, ciz);
+        }
       }
 
       ctx.fillStyle = 'rgb(235,235,235)';
@@ -15855,11 +15862,12 @@ function pspClockResize() {
 // / sub-icons) out. The wave RIBBON is deformed via the shader, not moved here.
 function applyClockTransition(r) {
   if (r <= 0) { xmbCanvas.style.opacity = ''; return; }
-  // The XMB blows/fades away FAST at the very start (gone by r~0.14) so the glyph
-  // burst plays over an empty wave, as in the real capture (no XMB behind the
-  // burst - avoids the menu/category bar showing under the flying icons).
-  const f = Math.min(1, r / 0.14), fly = f * f * (3 - 2 * f);
-  xmbCanvas.style.opacity = String(Math.max(0, 1 - fly));
+  // The XMB icons/items MOVE off screen (they don't fade - see drawXMB blowX /
+  // drawItemList xShift, no opacity fade). The whole-canvas opacity only drops as a
+  // LATE BACKSTOP (0.60..0.74), after the icons have exited the frame, to clear the
+  // non-moving chrome (top status bar, description text) before the clock settles.
+  const f = Math.max(0, Math.min(1, (r - 0.60) / 0.14));
+  xmbCanvas.style.opacity = String(1 - f * f * (3 - 2 * f));
 }
 // Drifting PlayStation-glyph particles that ride across the wave in the
 // background (the "PS icons in the background" seen in the real slide capture:
@@ -15939,14 +15947,12 @@ function drawClockEntrance(ctx, sc, ox, oy, reveal) {
     drawPsGlyph(ctx, 0, 0, sz, g.type, a);
     ctx.restore();
   }
-  // scripted category-icon sprites (reuse the XMB icon assets). The icons CASCADE:
-  // each appears at its emit reveal, drifts its path, and has its own ~0.26-reveal
-  // bright-then-fade life. With the staggered emits (0.03..0.28) that puts the last
-  // one (game) gone by ~0.54, matching the capture (all six gone by frame ~288 /
-  // reveal ~0.5) while still giving each icon its bright moment. (0.42 was too long
-  // -> late icons lingered to 0.70; a global fade was too short -> they flashed.)
+  // scripted category-icon sprites: DISABLED. The real XMB category-bar + menu-list
+  // icons now visibly slide/tumble off screen (drawXMB blowX / drawItemList xShift),
+  // so a second synthetic set bursting from the centre would be a double-image. Keep
+  // only the PS button-glyph burst here. (Data kept above for reference.)
   const ICON_LIFE = 0.26;
-  for (const ic of ENTRANCE_ICONS) {
+  for (const ic of (false ? ENTRANCE_ICONS : [])) {
     const lt = (reveal - ic.emit) / ICON_LIFE;
     if (lt <= 0 || lt >= 1) continue;
     const ico = (typeof getIcon === 'function') ? getIcon(ic.id) : null;
