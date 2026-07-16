@@ -73,16 +73,22 @@
   // hour ~8px hub tapering to ~6px, minute ~5px, second a ~1.6px fine line. Half-
   // widths below; the modest cyan glow (shadowBlur) makes up the rest of the width.
   var HANDS = {
-    hour:   { len: 86,  back: 11, wHub: 3.0, wTip: 2.0 },   // thickest, tapers to a point
-    minute: { len: 112, back: 13, wHub: 1.3, wTip: 1.0 },   // medium bar
-    second: { len: 139, back: 20, wHub: 0.7, wTip: 0.55 },  // fine line, reaches the disc edge (R_DISC-2)
+    hour:   { len: 86,           back: 11, wHub: 3.6, wTip: 2.4 },   // thickest, tapers to a point
+    minute: { len: R_DISC - 2,   back: 13, wHub: 1.3, wTip: 1.0 },   // medium bar, reaches the disc edge
+    second: { len: R_DISC + 2,   back: 20, wHub: 0.7, wTip: 0.55 },  // fine line, tip BARELY past the face edge (like the real PSP)
   };
   var DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
   // --- colours (palette tables) ---
   var C_GLYPH = '#ffffff';
-  var C_GLOW = 'rgba(150,232,255,0.9)';
+  var C_GLOW = 'rgba(150,232,255,0.9)';   // fallback glow (used until a bg colour is sampled)
   var C_TRAIL = [200, 236, 250];
+  // The glow colour follows the DOMINANT BACKGROUND colour (computed each frame in
+  // index.html drawClockLens and published as window._pspGlowColor), so the glyph/
+  // tick/hand halos harmonize with the wallpaper instead of a fixed cyan.
+  function glowColor() {
+    return (typeof window !== 'undefined' && window._pspGlowColor) ? window._pspGlowColor : C_GLOW;
+  }
   var C_DISC = 'rgba(124,217,232,0.16)';
   var C_HUB = '#eaf7ff';
 
@@ -230,30 +236,21 @@
     ctx.translate(0, floatY || 0);
     var wobR = 0;
 
-    // 1) glass disc: a very subtle light-blue body that FADES OUT at the edge -
-    // NO rim/border (the real XMB clock has no outline). Just a soft glass tint +
-    // a faint top-left lens highlight; the wave shows through.
+    // 1) glass disc: the flat CENTRE stays clear (background shows through undimmed);
+    // a LIGHT haze fades in only toward the EDGE (gradients kept close to the rim per
+    // user), then the thin rim highlight catches light at the very edge, fading to a
+    // crisp circle with no hard border stroke.
     ctx.save();
-    // Substantial, near-UNIFORM translucent glass body so the disc reads as a
-    // clearly defined circle ALL the way around (the real XMB clock's glass has
-    // real presence, not a faint tint). A gentle glass rim catches light at the
-    // very edge, then a 3px fade -> crisp circle, no hard border stroke.
-    // NEUTRAL frosted-glass body (near-white, low alpha) so the disc reads as a
-    // clearly defined circle but does NOT tint the scene - whatever XMB wallpaper
-    // colour is behind shows THROUGH like real glass (no baked-in blue).
     var body = ctx.createRadialGradient(CX, CY, R_DISC * 0.15, CX, CY, R_DISC);
-    body.addColorStop(0, 'rgba(238,244,250,0.06)');
-    body.addColorStop(0.80, 'rgba(240,246,251,0.06)');
-    body.addColorStop((R_DISC - 4) / R_DISC, 'rgba(255,255,255,0.20)');   // glass rim highlight (white)
-    body.addColorStop((R_DISC - 3) / R_DISC, 'rgba(250,252,255,0.16)');
-    body.addColorStop(1, 'rgba(240,246,251,0)');                          // fade over the last 3px only
+    body.addColorStop(0, 'rgba(240,246,251,0)');                          // clear centre (no haze)
+    body.addColorStop(0.60, 'rgba(240,246,251,0)');                       // still clear through the middle
+    body.addColorStop(0.80, 'rgba(240,246,251,0.014)');                   // light haze begins near the edge
+    body.addColorStop(0.92, 'rgba(242,247,252,0.032)');
+    body.addColorStop((R_DISC - 6) / R_DISC, 'rgba(244,248,253,0.05)');   // peak (still light) just inside the rim
+    body.addColorStop((R_DISC - 3) / R_DISC, 'rgba(255,255,255,0.20)');   // glass rim highlight (white), edge only
+    body.addColorStop((R_DISC - 2) / R_DISC, 'rgba(250,252,255,0.16)');
+    body.addColorStop(1, 'rgba(240,246,251,0)');                          // fade over the last few px only
     ctx.beginPath(); ctx.arc(CX, CY, R_DISC, 0, TWO_PI); ctx.fillStyle = body; ctx.fill();
-    // faint light-catch through the top-left of the glass (specular, white)
-    var g = ctx.createRadialGradient(CX - 46, CY - 60, 8, CX, CY, R_DISC);
-    g.addColorStop(0, 'rgba(255,255,255,0.10)');
-    g.addColorStop(0.55, 'rgba(235,242,248,0.03)');
-    g.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.beginPath(); ctx.arc(CX, CY, R_DISC, 0, TWO_PI); ctx.fillStyle = g; ctx.fill();
     ctx.restore();
 
     // 2) second-hand trail: 120 radial dashes at the OUTER EDGE of the face
@@ -271,7 +268,7 @@
         if (a < 0.02) continue;
         var fr = i / 120;
         var pa = polar(fr, R_DISC - 1), pb = polar(fr, R_DISC - 11);   // SHORT radial trail dash (outer tip R140 at the rim, ~10px long) to match the PSP's short second-hand trail ticks
-        ctx.globalAlpha = a * 0.9 * detailFade;
+        ctx.globalAlpha = a * 0.6 * detailFade;   // reduced additive glow on the trail dashes
         ctx.lineWidth = 1.5 + a * 0.9;
         ctx.strokeStyle = 'rgb(' + C_TRAIL[0] + ',' + C_TRAIL[1] + ',' + C_TRAIL[2] + ')';
         ctx.beginPath(); ctx.moveTo(pa[0], pa[1]); ctx.lineTo(pb[0], pb[1]); ctx.stroke();
@@ -288,7 +285,7 @@
       ctx.globalCompositeOperation = 'lighter';
       ctx.globalAlpha = detailFade;
       ctx.strokeStyle = C_GLYPH; ctx.lineCap = 'round';
-      ctx.shadowColor = C_GLOW; ctx.shadowBlur = 6;
+      ctx.shadowColor = glowColor(); ctx.shadowBlur = 3;   // reduced cyan glow halo
       ctx.lineWidth = 6;
       for (var k = 0; k < HOUR_TICKS.length; k++) {
         var fr = HOUR_TICKS[k] / 12;
@@ -309,7 +306,7 @@
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.fillStyle = C_GLYPH;
-    ctx.shadowColor = C_GLOW; ctx.shadowBlur = 8;
+    ctx.shadowColor = glowColor(); ctx.shadowBlur = 3;   // reduced cyan glow halo
     var NUM_H = 41;   // on-screen numeral height (px); tuned to the real dial proportion
     for (var n = 0; n < NUMERALS.length; n++) {
       var nm = NUMERALS[n], pp = polar(nm.frac, nm.R), gp = NUM_PATHS[nm.s];
@@ -366,7 +363,7 @@
     var secFrac = secondFrac(date);
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    ctx.shadowColor = C_GLOW; ctx.shadowBlur = 4;   // modest glow (was 6, inflated the width)
+    ctx.shadowColor = glowColor(); ctx.shadowBlur = 4;   // modest glow (was 6, inflated the width)
     ctx.fillStyle = C_GLYPH;
     drawHand(ctx, hourFrac, HANDS.hour, wobR * 0.7);
     drawHand(ctx, minuteFrac, HANDS.minute, wobR * 0.8);
@@ -377,7 +374,7 @@
     // 7) centre hub
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-    ctx.shadowColor = C_GLOW; ctx.shadowBlur = 6;
+    ctx.shadowColor = glowColor(); ctx.shadowBlur = 6;
     ctx.beginPath(); ctx.arc(CX, CY, 5.5, 0, TWO_PI); ctx.fillStyle = C_HUB; ctx.fill();
     ctx.beginPath(); ctx.arc(CX, CY, 2.5, 0, TWO_PI); ctx.fillStyle = '#ffffff'; ctx.fill();
     ctx.restore();

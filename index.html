@@ -16103,6 +16103,7 @@ function pspClockBuoyant(r) {
 // The disc is a horizontal ELLIPSE (PSPClock.CLOCK_ASPECT), so the lens is too.
 const CLOCK_ASPECT = 0.945;
 let _pspLens = null;
+let _pspGlow = null;   // smoothed [r,g,b] glow colour derived from the dominant background hue
 let _pspFloatT = 0;   // idle-float phase accumulator (ms)
 let _pspDetailFade = 0;   // ticks + background glyphs: fade in only once the clock has SETTLED, fade out fast on close
 // Smoothed transition state, so pressing H MIDWAY through an open/close (which flips
@@ -16201,6 +16202,34 @@ function drawClockLens(ctx, W, H, cr) {
     od[d4 + 2] = src[p00 + 2] * w00 + src[p10 + 2] * w10 + src[p01 + 2] * w01 + src[p11 + 2] * w11;
     od[d4 + 3] = 255;
   }
+  // Dominant BACKGROUND colour behind the disc, for the glyph/tick glow (replaces the
+  // fixed cyan). Coarse-average the composited background (src = bg+wave, unwarped),
+  // skipping empty/near-black samples, then make a subdued but clearly-hued glow:
+  // scale the brightest channel up to a mid brightness (so the hue reads) with only a
+  // slight lift toward white (so it still looks like a glow, not the flat bg colour).
+  // Smoothed across frames so the animating wave does not make the glow flicker.
+  {
+    let rS = 0, gS = 0, bS = 0, cnt = 0;
+    const step = Math.max(1, (CS / 24) | 0);
+    for (let y = 0; y < CS; y += step) {
+      for (let x = 0; x < CS; x += step) {
+        const p = (y * CS + x) << 2;
+        const r = src[p], g = src[p + 1], b = src[p + 2];
+        if (src[p + 3] < 8 || r + g + b < 24) continue;   // skip empty/off-canvas/near-black
+        rS += r; gS += g; bS += b; cnt++;
+      }
+    }
+    if (cnt > 0) {
+      let ar = rS / cnt, ag = gS / cnt, ab = bS / cnt;
+      const mxc = Math.max(ar, ag, ab, 1), k = 185 / mxc;   // brighten to mid, keep hue
+      ar *= k; ag *= k; ab *= k;
+      const lift = 0.12;                                    // slight toward-white so it reads as a glow
+      ar += (255 - ar) * lift; ag += (255 - ag) * lift; ab += (255 - ab) * lift;
+      if (!_pspGlow) _pspGlow = [ar, ag, ab];
+      else { const s = 0.06; _pspGlow[0] += (ar - _pspGlow[0]) * s; _pspGlow[1] += (ag - _pspGlow[1]) * s; _pspGlow[2] += (ab - _pspGlow[2]) * s; }
+      window._pspGlowColor = 'rgba(' + (_pspGlow[0] | 0) + ',' + (_pspGlow[1] | 0) + ',' + (_pspGlow[2] | 0) + ',0.9)';
+    }
+  }
   _glassBufCtx.putImageData(_glassOut, 0, 0);
   // 3) blit the warped disc onto the clock canvas (upscaled, soft glass blur), faded in.
   const op = Math.min(1, cr * 5);
@@ -16229,11 +16258,8 @@ function drawClockLens(ctx, W, H, cr) {
   ctx.strokeStyle = 'rgba(20,40,60,0.35)';
   ctx.lineWidth = Math.max(1, R * 0.005);
   ctx.beginPath(); ctx.arc(cx, cy, R * 0.98, 0, Math.PI * 2); ctx.stroke();
-  ctx.globalCompositeOperation = 'lighter';
-  // very faint neutral frost lift over the flat face (reduced haze; no hue).
-  ctx.globalAlpha = op * 0.03;
-  ctx.fillStyle = 'rgb(210,222,232)';
-  ctx.fillRect(bx, by, 2 * R, 2 * R);
+  // (no frost lift over the flat face - the glass reads clear; only the rim bevel
+  // catches light. The magnified background shows through undimmed.)
   ctx.restore();
 }
 function drawPspGlyphs(ctx, W, H, dt, detailFade) {
