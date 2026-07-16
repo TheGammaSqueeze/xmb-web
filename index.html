@@ -7575,16 +7575,17 @@ function drawXMB(now) {
     // matching the frame-by-frame jpcsp capture of the real transition.
     let blowX = 0, blowY = 0, blowA = 1, blowRot = 0;
     if (typeof pspClockReveal !== 'undefined' && pspClockReveal > 0) {
-      // Icons MOVE fully off the right edge (no fade) - and they blow off ASAP and
-      // HARD: ease-OUT so they SHOOT off immediately at the start of the transition
-      // and are gone by reveal ~0.3 (pronounced, wind-gust feel), not a slow drift.
-      const p = Math.min(1, pspClockReveal / 0.3);
-      const bl = 1 - (1 - p) * (1 - p) * (1 - p);      // easeOutCubic: fast start
+      // The category bar icons MOVE fully off the right edge (no fade) at the SAME
+      // slower pace as the menu items: a steady (near-linear) slide over the WIDE
+      // window (0.65) so the whole XMB drifts off together, visibly travelling off
+      // the right edge through the transition rather than shooting off instantly.
       const seed = ((i * 53 + 7) % 17) / 17;           // deterministic per-icon variation
-      blowX = bl * (2400 + i * 340 + seed * 600);      // far off the right edge (virtual px)
+      const st = Math.max(0, Math.min(1, (pspClockReveal - seed * 0.03) / 0.65));
+      const bl = st * (1.15 - 0.15 * st);              // gentle - matches the menu items
+      blowX = bl * (1500 + i * 240 + seed * 500);      // off the right edge at the item pace (virtual px)
       blowY = -bl * (90 + seed * 220);                 // strong upward gust as they go
       blowA = 1;                                       // no fade - icons leave by moving off-screen
-      blowRot = bl * (seed - 0.5) * 3.4;               // stronger tumble as they blow away
+      blowRot = bl * (seed - 0.5) * 3.4;               // tumble as they blow away
     }
     ctx.globalAlpha = alpha * revealA * blowA;
 
@@ -7617,12 +7618,13 @@ function drawXMB(now) {
     // reduced opacity (verified sub_system_real_top.png), so fade it toward a
     // faint level rather than to zero.
     if (isActive) {
-      // PSP slide-clock open: the category label (e.g. "Users"/"Game") floats up
-      // and fades IMMEDIATELY (fast, at the very start of the transition).
+      // PSP slide-clock open: the category label (e.g. "Users"/"Game") is TEXT, so it
+      // stays put and fades out FAST and IN PLACE before the icon transition is
+      // really visible. On exit it fades back in after the icons have slid home. Same
+      // pspClockTextFade curve as every other text element.
       let lblA = 1, lblY = 0, lblX = 0;
       if (typeof pspClockReveal !== 'undefined' && pspClockReveal > 0) {
-        const e = Math.pow(Math.min(1, pspClockReveal / 0.3), 1.3);
-        lblY = -e * 90; lblX = e * 520; lblA = Math.max(0, 1 - e * 1.35);
+        lblA = pspClockTextFade();            // fast fade-out in place (enter) / back in (exit)
       }
       // 0.9 in the full XMB, easing down to ~0.4 once settled in the submenu.
       ctx.globalAlpha = 0.9 * bootLabelReveal * (1 - 0.55 * subT) * lblA;
@@ -7748,22 +7750,27 @@ function drawXMB(now) {
       // own direction (varied horizontal drift + up), its own start time and
       // rate - then fades, during the early part of the transition (before the
       // clock drops in). Not the list moving as a unit.
-      let itemFloatA = 1, itemFloatRot = 0;
+      let itemFloatA = 1, itemFloatRot = 0, textAlphaMul = 1;
       xShift = _xShiftBase;
+      let textShift = _xShiftBase;                 // TEXT stays put and fades before the transition
       if (typeof pspClockReveal !== 'undefined' && pspClockReveal > 0) {
-        // Progress over the SAME early window as the category icons (reveal
-        // 0..0.55) so the whole XMB clears together, not the items racing ahead.
+        // Sequence on enter: the TEXT fades out FAST and IN PLACE first
+        // (pspClockTextFade, gone by reveal ~0.07) - before the icon blow-away is
+        // really visible. The ICON then slides off over the wide window; on exit the
+        // icon slides home first, then the text fades back in.
         const seed = ((i * 61 + 13) % 23) / 23;                 // per-item variation
-        // Blow off ASAP + HARD (ease-out, gone by ~reveal 0.33, small per-item
-        // stagger) - the items SHOOT off the right edge, they do not slow-drift.
-        const st = Math.max(0, Math.min(1, (pspClockReveal - i * 0.012 - seed * 0.02) / 0.33));
-        const e = 1 - (1 - st) * (1 - st) * (1 - st);           // easeOutCubic: fast start
-        // Items MOVE fully off the right edge (varied speed) with an upward arc -
-        // they do NOT fade in place; they slide/tumble off screen as the clock enters.
-        xShift = _xShiftBase + e * (2200 + seed * 1400);
-        y -= e * (80 + seed * 260);
-        itemFloatA = 1;                            // no fade - the item leaves by exiting the frame
-        itemFloatRot = e * (seed - 0.5) * 2.8;     // tumble the item's icon as it flies away
+        // The MENU LIST icons slide off ~50% SLOWER than the fast category-bar blow:
+        // a steady (near-linear) slide over a WIDE window (0.65) so they are visibly
+        // travelling off the right edge through the transition, not shooting off.
+        const st = Math.max(0, Math.min(1, (pspClockReveal - i * 0.02 - seed * 0.03) / 0.65));
+        const e = st * (1.15 - 0.15 * st);         // gentle - near-linear steady slide
+        // The ICON MOVES fully off the right edge (varied speed) with an upward arc -
+        // it does NOT fade in place; it slides/tumbles off screen as the clock enters.
+        xShift = _xShiftBase + e * (1950 + seed * 1200);
+        y -= e * (70 + seed * 240);
+        itemFloatA = 1;                            // icon: no fade - leaves by exiting the frame
+        itemFloatRot = e * (seed - 0.5) * 2.6;     // tumble the item's icon as it flies away
+        textAlphaMul = pspClockTextFade();         // TEXT: fade out fast in place (enter) / back in (exit)
       }
 
       // Cull and edge-fade against the FULL visible frame (portrait extends well
@@ -7865,7 +7872,7 @@ function drawXMB(now) {
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
 
-        ctx.globalAlpha = alpha;
+        ctx.globalAlpha = alpha * textAlphaMul;
         // Pass 1: WIDE white glow halo. fillText draws both shadow and fill;
         // shadow alpha derives from the fill alpha so we use opaque white
         // text. The fill itself lands on top of any prior pass, then the
@@ -7876,7 +7883,7 @@ function drawXMB(now) {
         ctx.shadowBlur = V.TEXT_GLOW_RADIUS;
         ctx.shadowOffsetX = 0;
         ctx.shadowOffsetY = 0;
-        ctx.fillText(items[i].n, XCP(textXv + xShift), y - 1);
+        ctx.fillText(items[i].n, XCP(textXv + textShift), y - 1);
         // Pass 2: tighter inner halo (the steep near-text falloff: 89 -> 25
         // over 5 pixels). Same fill, smaller blur radius accumulates close
         // to the strokes without widening the existing outer halo. Both
@@ -7884,7 +7891,7 @@ function drawXMB(now) {
         // computed once per drawItemList call above.
         ctx.shadowColor = glowInnerColor;
         ctx.shadowBlur = V.TEXT_GLOW_INNER_RADIUS;
-        ctx.fillText(items[i].n, XCP(textXv + xShift), y - 1);
+        ctx.fillText(items[i].n, XCP(textXv + textShift), y - 1);
         // Pass 3: final crisp text on top. By day there is no dark shadow (the
         // white halo provides ample contrast against the dark background and an
         // extra drop shadow would erode it). At night, the bright bloomed wave
@@ -7895,18 +7902,18 @@ function drawXMB(now) {
         ctx.shadowBlur = 4 * nightShadow;
         ctx.shadowOffsetY = nightShadow;
         ctx.fillStyle = 'rgb(255,255,255)';
-        ctx.fillText(items[i].n, XCP(textXv + xShift), y - 1);
+        ctx.fillText(items[i].n, XCP(textXv + textShift), y - 1);
         }   // end !cinfoTitleActive (name suppressed while content-info title shows)
 
         // Music tracks: artist/source line ABOVE the bold title (PS3 layout).
         if (items[i].mtype === 'track' && items[i].a) {
           ctx.save();
           ctx.font = '300 ' + (V.ITEM_DESC_SIZE * DESC_BOOST) + 'px PS3';
-          ctx.globalAlpha = 0.78 * alphaMul * descNewAlpha;
+          ctx.globalAlpha = 0.78 * alphaMul * descNewAlpha * textAlphaMul;
           ctx.fillStyle = 'rgb(235,235,235)';
           ctx.shadowColor = 'rgba(0,0,0,' + (0.45 + 0.4 * nightShadow).toFixed(3) + ')';
           ctx.shadowBlur = 3; ctx.shadowOffsetY = 1;
-          ctx.fillText(items[i].a, XCP(V.ITEM_TEXT_X + xShift), y - V.ITEM_TEXT_ACTIVE_SIZE + 2);
+          ctx.fillText(items[i].a, XCP(V.ITEM_TEXT_X + textShift), y - V.ITEM_TEXT_ACTIVE_SIZE + 2);
           ctx.restore();
         }
 
@@ -7920,17 +7927,17 @@ function drawXMB(now) {
         if (_desc) {
           // Fade in over ITEM_DESC_FADE_MS so the new active description
           // doesn't snap-in mid-slide.
-          ctx.globalAlpha = 0.7 * alphaMul * descNewAlpha;
+          ctx.globalAlpha = 0.7 * alphaMul * descNewAlpha * textAlphaMul;
           const descSize = V.ITEM_DESC_SIZE * DESC_BOOST;
           ctx.font = '300 ' + descSize + 'px PS3';
           // Wrap the subtitle to the FULL available width -- from its start to the
           // frame's right edge (minus a small margin) -- so on narrow frames it
           // makes proper use of the space instead of scrunching into a tiny
           // column. The old 0.60-of-frame cap left only ~130px at 1:1.
-          const descStartX = XCP(textXv + xShift);
+          const descStartX = XCP(textXv + textShift);
           const maxWidth = (LAYOUT_FIT < 0.999)
             ? Math.max(180, XCF(V.W) - descStartX - 50)
-            : (V.W - (textXv + xShift) - 200);
+            : (V.W - (textXv + textShift) - 200);
           drawWrappedText(ctx, _desc, descStartX,
                           y + V.ITEM_DESC_OFFSET + 4, maxWidth, descSize + 4, 3);
         }
@@ -7950,7 +7957,7 @@ function drawXMB(now) {
         // same so the wash doesn't have to be over-opaque to mask it.
         const vActive = resolveItemValue(items[i]);
         if (inSubmenu && vActive && !sidePanelActive) {
-          ctx.globalAlpha = alpha;
+          ctx.globalAlpha = alpha * textAlphaMul;
           ctx.fillStyle = 'rgb(245,240,250)';
           ctx.font = V.ITEM_TEXT_SIZE + 'px PS3';
           ctx.textAlign = 'right';
@@ -7961,7 +7968,8 @@ function drawXMB(now) {
         ctx.font = V.ITEM_TEXT_SIZE + 'px PS3';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
-        ctx.fillText(items[i].n, XCP(textXv + xShift), y);
+        ctx.globalAlpha = alpha * textAlphaMul;
+        ctx.fillText(items[i].n, XCP(textXv + textShift), y);
         // PS3 shows short status descriptions on inactive items (e.g. "8 Images",
         // "*User"), but NOT long help text (e.g. "Adjusts settings for games.").
         // Heuristic: only short status strings (< 20 chars). Individual photos show
@@ -7970,9 +7978,9 @@ function drawXMB(now) {
         const _idesc = (items[i].mtype === 'photo') ? fmtPhotoDate(items[i].date) : items[i].d;
         if (_idesc && _idesc.length < 20) {
           const prevAlpha = ctx.globalAlpha;
-          ctx.globalAlpha = 0.6 * alpha;
+          ctx.globalAlpha = 0.6 * alpha * textAlphaMul;
           ctx.font = '300 ' + (V.ITEM_TEXT_SIZE - 8) + 'px PS3';
-          ctx.fillText(_idesc, XCP(textXv + xShift), y + 22);
+          ctx.fillText(_idesc, XCP(textXv + textShift), y + 22);
           ctx.globalAlpha = prevAlpha;
         }
         // Inactive submenu items also show their value (suppressed while a
@@ -7980,7 +7988,7 @@ function drawXMB(now) {
         const vInactive = resolveItemValue(items[i]);
         if (inSubmenu && vInactive && !sidePanelActive) {
           const prevAlpha = ctx.globalAlpha;
-          ctx.globalAlpha = alpha;
+          ctx.globalAlpha = alpha * textAlphaMul;
           ctx.font = V.ITEM_TEXT_SIZE + 'px PS3';
           ctx.textAlign = 'right';
           ctx.fillText(vInactive, V.W - V.ITEM_VALUE_RIGHT_PAD, y);
@@ -8196,8 +8204,10 @@ function drawXMB(now) {
   }
 
   // === CLOCK ===
-  // The clock fades in with the icon cascade during the boot reveal.
-  drawClock(inBootReveal ? bootIconReveal : 1);
+  // The clock fades in with the icon cascade during the boot reveal. During the
+  // slide-clock transition it is TEXT chrome, so it fades on the same immediate-out
+  // / late-in curve as the rest of the text (pspClockTextFade).
+  drawClock((inBootReveal ? bootIconReveal : 1) * (typeof pspClockTextFade === 'function' ? pspClockTextFade() : 1));
 }
 
 // One-shot clock-hand spin. The real XMB spins the analog hands a full
@@ -8344,7 +8354,12 @@ function drawClock(fadeMul) {
   }
   ctx.restore();
 
-  // Main border line (the bright outline at the very edge)
+  // Main border line (the bright outline at the very edge). Gate on fadeMul so the
+  // whole clock frame + face + time fade together (e.g. the slide-clock transition
+  // fades this "clock area" out with the rest of the text). The glow loop above and
+  // the time text below already apply fadeMul; the border and the clock face did
+  // not, so they used to linger as a faint frame when the rest had faded.
+  ctx.globalAlpha = fadeMul;
   ctx.strokeStyle = 'rgba(255,255,255,0.35)'; // ~90/255 measured
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -15863,13 +15878,40 @@ function pspClockResize() {
 // The category ICONS blow away individually (per-icon, in the drawXMB category
 // loop via pspClockReveal); here we only fade the rest of the XMB UI (menu text
 // / sub-icons) out. The wave RIBBON is deformed via the shader, not moved here.
+//
+// Text-vs-icon split during the slide-clock transition (per user):
+//   ENTER (pspClockOn, reveal 0->1): ALL text (category labels, item names,
+//     descriptions, values, the status-bar clock) fades out FAST and IN PLACE (gone
+//     by reveal ~0.07) - it clears BEFORE the icon blow-away is really visible. The
+//     ICONS then keep their positional slide off-screen (they do not fade).
+//   EXIT (!pspClockOn, reveal 1->0): the icons slide back into place FIRST (their
+//     positional blow reverses as reveal falls), and only over the tail (reveal
+//     ~0.16 -> 0) does the text fade back in - so nothing pops in while an icon is
+//     still travelling home.
+// Raw per-frame TARGET for the text alpha multiplier [0..1] (the direction-dependent
+// enter/exit curve). This is the value the smoothing chases each frame.
+function pspClockTextFadeTarget() {
+  if (typeof pspClockReveal === 'undefined' || pspClockReveal <= 0) return 1;
+  if (typeof pspClockOn !== 'undefined' && pspClockOn) {
+    return Math.max(0, 1 - pspClockReveal / 0.07);        // enter: fast fade-out, before the transition
+  }
+  // exit: the icons slide home first; the text then fades back in over the tail
+  // (reveal 0.16 -> 0) so nothing pops in while an icon is still travelling home.
+  return Math.max(0, Math.min(1, (0.16 - pspClockReveal) / 0.16));
+}
+// Text alpha multiplier consumed by drawXMB / the status-bar clock. Returns the
+// SMOOTHED value (updated once per frame in drawPspClock) so that flipping direction
+// mid-transition - which switches the enter/exit branch above - eases the text alpha
+// across the discontinuity instead of snapping. Icons never use it.
+function pspClockTextFade() { return _pspTextFadeSmooth; }
 function applyClockTransition(r) {
   if (r <= 0) { xmbCanvas.style.opacity = ''; return; }
-  // The XMB icons/items SHOOT off screen fast (they don't fade - see drawXMB blowX /
-  // drawItemList xShift, no opacity fade), gone by reveal ~0.33. The whole-canvas
-  // opacity then drops as a backstop over 0.33..0.45 (clearing the non-moving chrome
-  // - top status bar, description text - without fading any still-visible icon).
-  const f = Math.max(0, Math.min(1, (r - 0.33) / 0.12));
+  // The category ICONS shoot off fast; the menu ITEMS + category LABEL now slide off
+  // more slowly (drawItemList xShift / category-label lblX, no opacity fade), fully
+  // gone by reveal ~0.6. The whole-canvas opacity then drops as a backstop over
+  // 0.58..0.72 (clearing the non-moving chrome - top status bar, description text -
+  // AFTER the items/label have left, so nothing still-visible is faded in place).
+  const f = Math.max(0, Math.min(1, (r - 0.58) / 0.14));
   xmbCanvas.style.opacity = String(1 - f * f * (3 - 2 * f));
 }
 // Drifting PlayStation-glyph particles that ride across the wave in the
@@ -15945,8 +15987,16 @@ function drawClockEntrance(ctx, sc, ox, oy, reveal) {
     const fade = Math.min(1, t/0.14) * (t < 0.55 ? 1 : Math.max(0, 1-(t-0.55)/0.45));
     const a = g.peak * fade;
     if (a <= 0.01) continue;
-    const sz = (7 + (g.size1-7)*Math.min(1, t*3)) * sc;
-    ctx.save(); ctx.translate(ox + gx*sc, oy + gy*sc); ctx.rotate(g.rot*t);
+    let sz = (7 + (g.size1-7)*Math.min(1, t*3)) * sc;
+    // Position in canvas px, then BOW + MAGNIFY through the glass-ball lens whenever
+    // the glyph passes behind the disc (same lens the ambient PS glyphs use), so the
+    // explosion is seen magnified behind the clock face as the disc drops over it.
+    let cx = ox + gx*sc, cy = oy + gy*sc;
+    if (_pspLens) {
+      const dx = cx - _pspLens.cx, dy = cy - _pspLens.cy, dist = Math.hypot(dx, dy);
+      if (dist < _pspLens.r) { const lt2 = dist/_pspLens.r, m = 1 + 0.42*(1-lt2*lt2); cx = _pspLens.cx + dx*m; cy = _pspLens.cy + dy*m; sz *= m; }
+    }
+    ctx.save(); ctx.translate(cx, cy); ctx.rotate(g.rot*t);
     drawPsGlyph(ctx, 0, 0, sz, g.type, a);
     ctx.restore();
   }
@@ -15971,13 +16021,19 @@ function drawClockEntrance(ctx, sc, ox, oy, reveal) {
     ctx.globalAlpha = a;
     // Tumble: the icons TURN as they blow away (wind physics), like the real
     // firmware. Rotate about the icon centre, angle growing with drift progress e.
-    const cx = ox + px * sc, cy = oy + py * sc, rot = (ic.spin || 0) * e;
+    // Also bow + magnify through the glass-ball lens when behind the disc.
+    let cx = ox + px * sc, cy = oy + py * sc, isz = sz;
+    if (_pspLens) {
+      const dx = cx - _pspLens.cx, dy = cy - _pspLens.cy, dist = Math.hypot(dx, dy);
+      if (dist < _pspLens.r) { const lt2 = dist/_pspLens.r, m = 1 + 0.42*(1-lt2*lt2); cx = _pspLens.cx + dx*m; cy = _pspLens.cy + dy*m; isz *= m; }
+    }
+    const rot = (ic.spin || 0) * e;
     if (rot) {
       ctx.save(); ctx.translate(cx, cy); ctx.rotate(rot);
-      ctx.drawImage(ico.img, -sz/2, -sz/2, sz, sz);
+      ctx.drawImage(ico.img, -isz/2, -isz/2, isz, isz);
       ctx.restore();
     } else {
-      ctx.drawImage(ico.img, cx - sz/2, cy - sz/2, sz, sz);
+      ctx.drawImage(ico.img, cx - isz/2, cy - isz/2, isz, isz);
     }
   }
   ctx.globalAlpha = 1;
@@ -16006,6 +16062,13 @@ const CLOCK_ASPECT = 0.945;
 let _pspLens = null;
 let _pspFloatT = 0;   // idle-float phase accumulator (ms)
 let _pspDetailFade = 0;   // ticks + background glyphs: fade in only once the clock has SETTLED, fade out fast on close
+// Smoothed transition state, so pressing H MIDWAY through an open/close (which flips
+// the direction-dependent easing branches) eases from the current point into the
+// reversed trajectory instead of teleporting. Both track their per-frame target with
+// a short time constant - tight enough to be invisible in normal play, but enough to
+// absorb the branch discontinuity at a mid-transition flip.
+let _pspDescent = -1;         // smoothed clock vertical position fraction (-1 = off top, 0 = rest)
+let _pspTextFadeSmooth = 1;   // smoothed text alpha multiplier (1 = fully visible)
 function drawClockLens(ctx, W, H, cr) {
   if (cr <= 0 || !_pspLens || typeof waveCanvas === 'undefined' || !waveCanvas) return;
   ctx.save();
@@ -16068,17 +16131,23 @@ function drawPspGlyphs(ctx, W, H, dt, detailFade) {
   ctx.restore();
 }
 function drawPspClock(dt) {
-  if (!pspClockOn && pspClockReveal <= 0) { pspClockCanvas.style.display = 'none'; applyClockTransition(0); layoutPspGlass(0); return; }
+  if (!pspClockOn && pspClockReveal <= 0) {
+    // Fully closed: park the smoothed state at its rest values so the NEXT open
+    // starts cleanly from off-top / full text (no residual to ease from).
+    _pspDescent = -1; _pspTextFadeSmooth = 1;
+    pspClockCanvas.style.display = 'none'; applyClockTransition(0); layoutPspGlass(0); return;
+  }
   pspClockCanvas.style.display = 'block';
   pspClockResize();
   // reveal timings from slide_plugin.prx transition tweens: open ~2500ms,
   // close ~1500ms (sub_7FFC / sub_89E4 durations), ease-in-out.
   if (!window._pspRevealFreeze) {
     // Plugin tween durations are OPEN 2500ms / CLOSE 1500ms (sub_7FFC / sub_89E4),
-    // but on the web they read too fast, so per the user we play them at HALF speed:
-    // OPEN 5000ms / CLOSE 3000ms. dt-based advance -> smooth + frame-rate independent
-    // (more frames per transition = smoother at high refresh rates).
-    const dur = pspClockOn ? 5000 : 3000;
+    // but on the web they read too fast, so per the user we play the OPEN at HALF
+    // speed (5000ms). The CLOSE back to the XMB is sped up 10% from that (3000ms ->
+    // 2700ms) per the user, so leaving the clock is a touch quicker than entering it.
+    // dt-based advance -> smooth + frame-rate independent (smoother at high refresh).
+    const dur = pspClockOn ? 5000 : 2700;
     const step = (dt || 16) / dur;
     pspClockReveal += pspClockOn ? step : -step;
     pspClockReveal = Math.max(0, Math.min(1, pspClockReveal));
@@ -16087,11 +16156,12 @@ function drawPspClock(dt) {
   // Sequence (from the capture): XMB icons blow off + glyph BURST during reveal
   // 0..0.87, then the CLOCK drops in during 0.68..1.0 (once the glyphs have mostly
   // cleared). Remap the clock's own reveal to that late window.
-  // Clock drop-in is the SECOND HALF of the open (reveal 0.5..1.0 = ~1250ms of the
-  // 2500ms open): validated both ways - capture frame 360 (clock starts descending)
-  // sits at 51% of the transition (frames 148..560), and the plugin's buoyant
-  // position tween (sub_7FFC property 0x13, easing type 4) is 1250ms = half the open.
-  const clockReveal = Math.max(0, Math.min(1, (pspClockReveal - 0.5) / 0.5));
+  // Clock drop-in window. The capture has it start at ~51% of the transition, but on
+  // the web (already stretched to HALF speed) that reads as a long dead wait before
+  // the clock even appears, so per the user we bring it in SOONER: start the descent
+  // at reveal 0.3 and let it run to 1.0 (a slightly longer, earlier-starting drop). It
+  // still overlaps the icon blow-off + glyph burst, which sit behind the disc anyway.
+  const clockReveal = Math.max(0, Math.min(1, (pspClockReveal - 0.3) / 0.7));
   layoutPspGlass(clockReveal);
   pspClockCtx.clearRect(0, 0, pspClockCanvas.width, pspClockCanvas.height);
   // Idle vertical float (measured ~6px peak-to-peak, slow sine). Advance a phase
@@ -16104,15 +16174,20 @@ function drawPspClock(dt) {
   // type 4 - descend, overshoot below the rest, bob up, settle). CLOSE: the plugin
   // uses easing type 0 = LINEAR on the SAME property 0x13 (sub_89E4, move a2,zero),
   // over 750ms, so the clock just lifts straight up and off with no overshoot.
-  const descentFrac = pspClockOn ? pspClockBuoyant(clockReveal) : -(1 - clockReveal);
+  // Smooth toward the target so a mid-transition H flip (which switches the branch,
+  // e.g. buoyant->linear at the same clockReveal) does not teleport the disc - it
+  // eases from wherever it currently is into the reversed trajectory. ~45ms tracking
+  // keeps the buoyant overshoot essentially intact during normal play.
+  const descentTarget = pspClockOn ? pspClockBuoyant(clockReveal) : -(1 - clockReveal);
+  const kSmooth = 1 - Math.exp(-(dt || 16) / 45);
+  _pspDescent += (descentTarget - _pspDescent) * kSmooth;
+  const descentFrac = _pspDescent;
+  // Smooth the text alpha toward its per-frame target too (same reasoning: a
+  // mid-transition H flip switches the enter/exit branch, so ease across it).
+  _pspTextFadeSmooth += (pspClockTextFadeTarget() - _pspTextFadeSmooth) * kSmooth;
   const descentPx = descentFrac * (272 + 50) * sc2;
   // glass-ball lens: disc centre + radius (with buoyant descent + idle float) in px.
   _pspLens = clockReveal > 0 ? { cx: ox + 240 * sc2, cy: oy + (136 + floatY) * sc2 + descentPx, r: 141 * sc2 } : null;
-  // the entrance glyph/icon burst rides the FULL reveal, behind the clock
-  // The glyph/icon burst plays out in the FIRST HALF of the open (it clears by
-  // reveal ~0.5, as the clock arrives). Feed it a reveal scaled x1.74 so its
-  // internal 0..0.87 timeline (icons cascade, glyphs clear) completes by reveal 0.5.
-  drawClockEntrance(pspClockCtx, sc2, ox, oy, Math.min(1, pspClockReveal * 1.74));
   // Ticks + background glyphs fade IN only once the clock has SETTLED (drop-in
   // almost complete), and fade OUT fast on close - so they don't show prematurely
   // while the clock is still flying in.
@@ -16124,6 +16199,12 @@ function drawPspClock(dt) {
   // magnified wave through the glass ball (zoom into the background), then the
   // drifting PS-glyph particles behind the clock (magnified within the lens).
   drawClockLens(pspClockCtx, pspClockCanvas.width, pspClockCanvas.height, clockReveal);
+  // Entrance glyph/icon EXPLOSION. Timing: it STARTS as the main XMB icons start
+  // moving off (reveal ~0 - the original timing), but is SLOWED ~50% (feed x0.87 vs
+  // the old x1.74) so it is still bursting as the clock drops in. Drawn AFTER the
+  // opaque lens (and applying the same per-glyph lens bow), so the glyphs are seen
+  // MAGNIFIED behind the clock face as the disc passes over them, then clear at settle.
+  drawClockEntrance(pspClockCtx, sc2, ox, oy, Math.min(1, pspClockReveal * 0.87));
   drawPspGlyphs(pspClockCtx, pspClockCanvas.width, pspClockCanvas.height, dt || 16, _pspDetailFade);
   if (window.PSPClock && PSPClock.isReady()) {
     let now = new Date();
