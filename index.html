@@ -15881,13 +15881,13 @@ function drawPsGlyph(ctx, x, y, s, type, a) {
 // (growing + fading by r~0.45); a radial field of PS button glyphs bursts upward-
 // and-outward, clearing by r~0.87; then the clock disc drops in. Close = reverse.
 const ENTRANCE_SPAWN = [240, 122];
-const ENTRANCE_ICONS = [   // {id, emit reveal, path in PSP px, size0->1, peak opacity}
-  { id:'xmb_icon_001', emit:0.03, path:[[240,122],[172,137],[130,190],[95,196]], s0:24, s1:55, peak:1.00 }, // System briefcase -> down-left
-  { id:'xmb_icon_002', emit:0.04, path:[[240,122],[300,124],[360,150],[432,168]], s0:22, s1:32, peak:0.95 }, // Photo camera -> right
-  { id:'xmb_icon_003', emit:0.11, path:[[244,124],[290,145],[360,170],[430,176]], s0:22, s1:30, peak:0.85 }, // Music note -> right-down
-  { id:'xmb_icon_004', emit:0.17, path:[[240,124],[224,155],[204,190],[198,206]], s0:24, s1:34, peak:0.90 }, // Video film -> down-left
-  { id:'xmb_icon_006', emit:0.23, path:[[250,122],[272,140],[330,170],[400,190]], s0:24, s1:40, peak:0.62 }, // Network globe -> right-down
-  { id:'xmb_icon_005', emit:0.28, path:[[254,122],[268,110],[300,96],[316,90]],   s0:28, s1:46, peak:0.68 }, // Game pad -> up-right
+const ENTRANCE_ICONS = [   // {id, emit reveal, path in PSP px, size0->1, peak opacity, spin=total tumble rotation (rad) over its life}
+  { id:'xmb_icon_001', emit:0.03, path:[[240,122],[172,137],[130,190],[95,196]], s0:24, s1:55, peak:1.00, spin:-0.85 }, // System briefcase -> down-left
+  { id:'xmb_icon_002', emit:0.04, path:[[240,122],[300,124],[360,150],[432,168]], s0:22, s1:32, peak:0.95, spin: 0.70 }, // Photo camera -> right
+  { id:'xmb_icon_003', emit:0.11, path:[[244,124],[290,145],[360,170],[430,176]], s0:22, s1:30, peak:0.85, spin: 0.55 }, // Music note -> right-down
+  { id:'xmb_icon_004', emit:0.17, path:[[240,124],[224,155],[204,190],[198,206]], s0:24, s1:34, peak:0.90, spin:-0.60 }, // Video film -> down-left
+  { id:'xmb_icon_006', emit:0.23, path:[[250,122],[272,140],[330,170],[400,190]], s0:24, s1:40, peak:0.62, spin: 0.95 }, // Network globe -> right-down
+  { id:'xmb_icon_005', emit:0.28, path:[[254,122],[268,110],[300,96],[316,90]],   s0:28, s1:46, peak:0.68, spin:-0.45 }, // Game pad -> up-right
 ];
 const ENTRANCE_ICON_LIFE = 0.42;
 const ENTRANCE_GLYPHS = (function () {
@@ -15951,7 +15951,16 @@ function drawClockEntrance(ctx, sc, ox, oy, reveal) {
     const a = ic.peak * fade;
     if (a <= 0.01) continue;
     ctx.globalAlpha = a;
-    ctx.drawImage(ico.img, ox + px*sc - sz/2, oy + py*sc - sz/2, sz, sz);
+    // Tumble: the icons TURN as they blow away (wind physics), like the real
+    // firmware. Rotate about the icon centre, angle growing with drift progress e.
+    const cx = ox + px * sc, cy = oy + py * sc, rot = (ic.spin || 0) * e;
+    if (rot) {
+      ctx.save(); ctx.translate(cx, cy); ctx.rotate(rot);
+      ctx.drawImage(ico.img, -sz/2, -sz/2, sz, sz);
+      ctx.restore();
+    } else {
+      ctx.drawImage(ico.img, cx - sz/2, cy - sz/2, sz, sz);
+    }
   }
   ctx.globalAlpha = 1;
   ctx.restore();
