@@ -148,7 +148,7 @@
     // (sinks low like a buoyant boat), then bobs back up and settles. easeOutBack.
     // Must match index.html pspClockBuoyant so the lens rides with the disc.
     if (reveal < 1) {
-      var u = reveal - 1, c = 2.4;
+      var u = reveal - 1, c = 1.4;   // ~23px sink (validated vs capture Shot-450)
       var buoy = (c + 1) * u * u * u + c * u * u;          // easeOutBack(reveal)-1
       ctx.translate(0, buoy * (PSP_H + 50));               // <=0 above, >0 below rest
     }
